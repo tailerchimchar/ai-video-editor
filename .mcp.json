@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "ai-video-editor": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "C:\\Users\\taile\\source\\repos\\ai-video-editor\\mcp",
+        "ai-video-editor-mcp"
+      ],
+      "env": {
+        "AI_VIDEO_EDITOR_URL": "http://localhost:8000"
+      }
+    }
+  }
+}

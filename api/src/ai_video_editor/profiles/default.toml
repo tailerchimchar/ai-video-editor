@@ -1,0 +1,15 @@
+# Default profile — fallback when asset.game is unknown or None.
+#
+# Empty regions / sounds: game-specific tools (zoom_region, add_sfx)
+# warn-and-skip; generic primitives (zoom_clip with explicit ROI,
+# add_card with no SFX) keep working. This is what lets us add a new
+# game without crashing for assets that don't have a profile yet.
+
+[meta]
+game = "default"
+aliases = []
+default_aspect = "16:9"
+
+[regions]
+
+[sounds]

@@ -1,0 +1,179 @@
+# League of Legends profile.
+#
+# Region coordinates are FRACTIONS of the source frame [0,1] and are
+# resolution-independent. The values below are reasonable starting
+# guesses for a 1920x1080 capture at default HUD scale — calibrate
+# them against a real recording before relying on auto-zoom (HUD scale,
+# windowed mode, and OBS resolution all shift the layout).
+#
+# Sounds list the BASENAME of the audio file expected under
+#   WORKSPACE/media_library/league/sfx/<file>
+# Drop your own .wav files there (or use POST /sfx/extract to cut them
+# from a clean reference recording). Missing files warn-and-skip; the
+# system never crashes for a missing sound.
+
+[meta]
+game = "league"
+aliases = ["League of Legends", "League_of_Legends", "League", "lol"]
+default_aspect = "16:9"
+
+# ----- Regions -----
+
+[regions.minimap]
+x = 0.85
+y = 0.72
+w = 0.15
+h = 0.28
+description = "Bottom-right rotation map — ganks, vision, objectives."
+
+[regions.scoreboard]
+x = 0.42
+y = 0.00
+w = 0.16
+h = 0.04
+description = "Top-center score/timer bar (kills, gold, game clock)."
+
+[regions.tab_overlay]
+x = 0.10
+y = 0.12
+w = 0.80
+h = 0.70
+description = "Held-tab translucent panel — KDA/CS/items reveal moments."
+
+[regions.killfeed]
+x = 0.78
+y = 0.08
+w = 0.22
+h = 0.28
+description = "Top-right kill announcements. Also drives CV killfeed detection (sprint #5)."
+
+[regions.champion_portrait]
+x = 0.16
+y = 0.86
+w = 0.07
+h = 0.14
+description = "Bottom-left champion icon + summoner spells."
+
+[regions.item_bar]
+x = 0.55
+y = 0.88
+w = 0.10
+h = 0.08
+description = "Six item slots + trinket — item-proc moments (Stridebreaker, Zhonyas, GA)."
+
+[regions.hp_mana]
+x = 0.30
+y = 0.87
+w = 0.25
+h = 0.05
+description = "HP and mana bars under the champion HUD — clutch low-HP escapes."
+
+# ----- Sounds -----
+
+[sounds.first_blood]
+file = "first_blood.wav"
+description = "Announcer for the opening kill of the game."
+
+[sounds.enemy_slain]
+file = "enemy_slain.wav"
+description = "Generic enemy-kill announcer (plays on every kill you secure)."
+
+[sounds.ace]
+file = "ace.wav"
+description = "Announcer when all 5 enemies are dead at once."
+
+[sounds.penta_kill]
+file = "penta_kill.wav"
+description = "Announcer for a 5-kill streak by one player."
+
+[sounds.baron_slain]
+file = "baron_slain.wav"
+description = "Baron Nashor objective taken — global power-up cue."
+
+[sounds.buy_item]
+file = "buy_item.wav"
+description = "Shop purchase sound — pair with item_bar zoom for buy moments."
+
+# ----- Transcription -----
+#
+# initial_prompt is what faster-whisper sees BEFORE transcribing each
+# chunk (combined with condition_on_previous_text=False so the bias
+# doesn't decay after the first 30 seconds). Keep it focused on words
+# Whisper otherwise mangles (proper nouns, terse jargon). General
+# English doesn't need to be biased.
+#
+# vocabulary feeds the rapidfuzz post-correction pass that snaps
+# misrecognized tokens to their nearest known word.
+
+[transcription]
+initial_prompt = """League of Legends gameplay commentary by Noodlz \
+(streamer gamertag — pronounce like 'noodles'). Champions: \
+Aatrox Ahri Akali Akshan Alistar Amumu Anivia Annie Aphelios Ashe \
+Aurelion Sol Azir Bard Belveth Blitzcrank Brand Braum Briar Caitlyn \
+Camille Cassiopeia Cho'Gath Corki Darius Diana Draven Dr. Mundo \
+Ekko Elise Evelynn Ezreal Fiddlesticks Fiora Fizz Galio Gangplank \
+Garen Gnar Gragas Graves Gwen Hecarim Heimerdinger Hwei Illaoi \
+Irelia Ivern Janna Jarvan Jax Jayce Jhin Jinx K'Sante Kai'Sa \
+Kalista Karma Karthus Kassadin Katarina Kayle Kayn Kennen Kha'Zix \
+Kindred Kled Kog'Maw LeBlanc Lee Sin Leona Lillia Lissandra Lucian \
+Lulu Lux Malphite Malzahar Maokai Master Yi Milio Miss Fortune \
+Mordekaiser Morgana Naafiri Nami Nasus Nautilus Neeko Nidalee \
+Nilah Nocturne Nunu Olaf Orianna Ornn Pantheon Poppy Pyke Qiyana \
+Quinn Rakan Rammus Rek'Sai Rell Renata Renekton Rengar Riven \
+Rumble Ryze Samira Sejuani Senna Seraphine Sett Shaco Shen Shyvana \
+Singed Sion Sivir Skarner Smolder Sona Soraka Swain Sylas Syndra \
+Tahm Kench Taliyah Talon Taric Teemo Thresh Tristana Trundle \
+Tryndamere Twisted Fate Twitch Udyr Urgot Varus Vayne Veigar \
+Vel'Koz Vex Vi Viego Viktor Vladimir Volibear Warwick Wukong Xayah \
+Xerath Xin Zhao Yasuo Yone Yorick Yuumi Zac Zed Zeri Ziggs Zilean \
+Zoe Zyra. Terms: ult ultimate gank facecheck jungle top mid bot ADC \
+support smite flash ignite teleport recall ace baron dragon herald \
+tower inhibitor lethality mana ward CS minions wave splitpush \
+roaming objective drake nexus pentakill quadrakill triple kill \
+double kill shutdown."""
+vocabulary = [
+    "Aatrox", "Ahri", "Akali", "Akshan", "Alistar", "Amumu", "Anivia",
+    "Annie", "Aphelios", "Ashe", "Aurelion Sol", "Azir", "Bard",
+    "Bel'Veth", "Blitzcrank", "Brand", "Braum", "Briar", "Caitlyn",
+    "Camille", "Cassiopeia", "Cho'Gath", "Corki", "Darius", "Diana",
+    "Draven", "Dr. Mundo", "Ekko", "Elise", "Evelynn", "Ezreal",
+    "Fiddlesticks", "Fiora", "Fizz", "Galio", "Gangplank", "Garen",
+    "Gnar", "Gragas", "Graves", "Gwen", "Hecarim", "Heimerdinger",
+    "Hwei", "Illaoi", "Irelia", "Ivern", "Janna", "Jarvan", "Jax",
+    "Jayce", "Jhin", "Jinx", "K'Sante", "Kai'Sa", "Kalista", "Karma",
+    "Karthus", "Kassadin", "Katarina", "Kayle", "Kayn", "Kennen",
+    "Kha'Zix", "Kindred", "Kled", "Kog'Maw", "LeBlanc", "Lee Sin",
+    "Leona", "Lillia", "Lissandra", "Lucian", "Lulu", "Lux",
+    "Malphite", "Malzahar", "Maokai", "Master Yi", "Milio",
+    "Miss Fortune", "Mordekaiser", "Morgana", "Naafiri", "Nami",
+    "Nasus", "Nautilus", "Neeko", "Nidalee", "Nilah", "Nocturne",
+    "Nunu", "Olaf", "Orianna", "Ornn", "Pantheon", "Poppy", "Pyke",
+    "Qiyana", "Quinn", "Rakan", "Rammus", "Rek'Sai", "Rell", "Renata",
+    "Renekton", "Rengar", "Riven", "Rumble", "Ryze", "Samira",
+    "Sejuani", "Senna", "Seraphine", "Sett", "Shaco", "Shen",
+    "Shyvana", "Singed", "Sion", "Sivir", "Skarner", "Smolder",
+    "Sona", "Soraka", "Swain", "Sylas", "Syndra", "Tahm Kench",
+    "Taliyah", "Talon", "Taric", "Teemo", "Thresh", "Tristana",
+    "Trundle", "Tryndamere", "Twisted Fate", "Twitch", "Udyr",
+    "Urgot", "Varus", "Vayne", "Veigar", "Vel'Koz", "Vex", "Vi",
+    "Viego", "Viktor", "Vladimir", "Volibear", "Warwick", "Wukong",
+    "Xayah", "Xerath", "Xin Zhao", "Yasuo", "Yone", "Yorick", "Yuumi",
+    "Zac", "Zed", "Zeri", "Ziggs", "Zilean", "Zoe", "Zyra",
+    # jargon
+    "gank", "ult", "ultimate", "facecheck", "splitpush", "smite",
+    "Baron", "Dragon", "Herald", "Atakhan", "pentakill", "quadrakill",
+    "shutdown", "lethality", "Zhonyas", "Stridebreaker",
+    # streamer name — fuzzy_correct snaps "neuro", "needles", "noodle" → Noodlz
+    "Noodlz",
+]
+hype_cues = [
+    "pentakill", "quadrakill", "triple kill", "double kill",
+    "ace", "shutdown", "first blood", "baron", "soul point",
+    "got 'em", "got him", "got her", "outplayed", "clutch",
+]
+
+# Direct alias map — bypasses fuzzy_correct threshold. Any token whose
+# lowercased form appears in a list snaps to the canonical (the key).
+# Use for streamer names + terms Whisper turns into common english.
+[transcription.name_aliases]
+"Noodlz" = ["noodles", "noodle", "neuro", "needles", "newdles"]

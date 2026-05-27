@@ -1,0 +1,135 @@
+# Valorant profile.
+#
+# Region coordinates are FRACTIONS of the source frame [0,1] and are
+# resolution-independent. Values below are reasonable starting guesses
+# for a 1920x1080 capture — calibrate against a real recording before
+# relying on auto-zoom (HUD scale, agent UI mode, and OBS resolution
+# all shift the layout).
+#
+# Sounds list the BASENAME of the audio file expected under
+#   WORKSPACE/media_library/valorant/sfx/<file>
+# Drop your own .wav files there (or use POST /sfx/extract to cut them
+# from a clean reference recording). Missing files warn-and-skip.
+
+[meta]
+game = "valorant"
+aliases = ["Valorant", "VALORANT", "val"]
+default_aspect = "16:9"
+
+# ----- Regions -----
+
+[regions.minimap]
+x = 0.01
+y = 0.02
+w = 0.20
+h = 0.30
+description = "Top-left rotation map — site reads, util usage, post-plant."
+
+[regions.scoreboard]
+x = 0.30
+y = 0.00
+w = 0.40
+h = 0.07
+description = "Top-center bar: round score, timer, team alive count."
+
+[regions.tab_overlay]
+x = 0.10
+y = 0.12
+w = 0.80
+h = 0.70
+description = "Held-tab full scoreboard — KDA/economy reveals between rounds."
+
+[regions.killfeed]
+x = 0.78
+y = 0.08
+w = 0.22
+h = 0.28
+description = "Top-right kill announcements. Also drives CV killfeed detection (sprint #5)."
+
+[regions.crosshair]
+x = 0.45
+y = 0.45
+w = 0.10
+h = 0.10
+description = "Dead-center scope/headshot zone — for scope-in OP zooms and headshot replays."
+
+[regions.agent_card]
+x = 0.00
+y = 0.85
+w = 0.10
+h = 0.15
+description = "Bottom-left agent portrait + weapon/ability state."
+
+[regions.ult_orbs]
+x = 0.04
+y = 0.78
+w = 0.10
+h = 0.06
+description = "Ultimate orb count just above agent_card — 'ult ready' moments."
+
+[regions.money_display]
+x = 0.22
+y = 0.02
+w = 0.07
+h = 0.04
+description = "Round credits/cash — pair with cash_pickup sfx for buy-phase bits."
+
+# ----- Sounds -----
+
+[sounds.cash_pickup]
+file = "cash_pickup.wav"
+description = "Money-pickup cue — the 'ka-ching' for buy-phase moments."
+
+[sounds.headshot_ping]
+file = "headshot_ping.wav"
+description = "Iconic headshot audio cue — plays on every headshot kill."
+
+[sounds.kill_confirmed]
+file = "kill_confirmed.wav"
+description = "Generic kill-confirmation audio (non-headshot)."
+
+[sounds.ace]
+file = "ace.wav"
+description = "All 5 enemies dead — round-winning announcer."
+
+[sounds.spike_planted]
+file = "spike_planted.wav"
+description = "Attacker-side spike plant audio cue."
+
+[sounds.spike_defused]
+file = "spike_defused.wav"
+description = "Defender-side defuse complete audio cue."
+
+# ----- Transcription -----
+#
+# initial_prompt biases Whisper toward Val-specific proper nouns; we
+# pair it with condition_on_previous_text=False so the bias doesn't
+# decay past 30s. Keep it tight — agents, weapons, common jargon.
+
+[transcription]
+initial_prompt = """Valorant gameplay commentary. Agents: Astra Breach \
+Brimstone Chamber Clove Cypher Deadlock Fade Gekko Harbor Iso Jett \
+KAY/O Killjoy Neon Omen Phoenix Raze Reyna Sage Skye Sova Tejo Viper \
+Vyse Waylay Yoru. Weapons: Vandal Phantom Operator Sheriff Marshal \
+Outlaw Bulldog Guardian Spectre Stinger Ghost Classic Shorty Frenzy \
+Judge Bucky Odin Ares. Terms: ace clutch retake post-plant pre-aim \
+peek lineup smoke flash recon ultimate spike defuse plant headshot \
+crosshair eco full buy force buy save round half attack defense \
+swap sides."""
+vocabulary = [
+    "Astra", "Breach", "Brimstone", "Chamber", "Clove", "Cypher",
+    "Deadlock", "Fade", "Gekko", "Harbor", "Iso", "Jett", "KAY/O",
+    "Killjoy", "Neon", "Omen", "Phoenix", "Raze", "Reyna", "Sage",
+    "Skye", "Sova", "Tejo", "Viper", "Vyse", "Waylay", "Yoru",
+    "Vandal", "Phantom", "Operator", "Sheriff", "Marshal", "Outlaw",
+    "Bulldog", "Guardian", "Spectre", "Stinger", "Ghost", "Classic",
+    "Shorty", "Frenzy", "Judge", "Bucky", "Odin", "Ares",
+    "spike", "defuse", "plant", "lineup", "smoke", "recon",
+    "ace", "clutch", "retake", "post-plant", "eco", "full buy",
+    "force buy",
+]
+hype_cues = [
+    "ace", "clutch", "got 'em", "got him", "got her",
+    "spike planted", "spike defused", "what a play",
+    "headshot", "one tap", "thrifty", "flawless",
+]

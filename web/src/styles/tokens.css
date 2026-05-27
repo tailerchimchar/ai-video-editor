@@ -1,0 +1,39 @@
+/*
+ * Theme tokens — single source of truth for color, spacing, motion.
+ *
+ * Edit a value here and every component re-themes. Tailwind config
+ * aliases these as `bg-base`, `text-primary`, `accent`, etc.
+ *
+ * Design language: "refined cinematic minimalism." Single dominant
+ * surface (near-black), single accent (electric blue). No gradients
+ * in the base palette — depth comes from the grain texture in
+ * globals.css and the inset top highlight on elevated surfaces.
+ */
+
+:root {
+  /* Surfaces */
+  --bg-base: #0a0a0b;
+  --bg-elevated: #141416;
+  --bg-overlay: #1c1c20;
+
+  /* Borders */
+  --border: #26262a;
+  --border-strong: #3a3a40;
+
+  /* Text */
+  --text-primary: #fafafa;
+  --text-muted: #8a8a90;
+  --text-dim: #52525a;
+
+  /* Brand accent — Noodlz electric blue */
+  --accent: #3b82f6;
+  --accent-glow: rgba(59, 130, 246, 0.18);
+
+  /* Status */
+  --danger: #ef4444;
+  --success: #22c55e;
+
+  /* Motion */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+}

@@ -1,0 +1,6 @@
+{
+  "enabledMcpjsonServers": [
+    "ai-video-editor"
+  ],
+  "enableAllProjectMcpServers": true
+}

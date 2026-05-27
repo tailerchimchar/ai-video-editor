@@ -1,0 +1,58 @@
+[project]
+name = "ai-video-editor-api"
+version = "0.1.0"
+description = "Local-first deterministic video automation API for Outplayed recordings"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "pydantic-settings>=2.4.0",
+    "aiosqlite>=0.20.0",
+    "anthropic>=0.102.0",
+    "langfuse>=4.6.1",
+    "opentelemetry-instrumentation-anthropic>=0.60.0",
+    "numpy>=2.2.6",
+    "httpx>=0.28.1",
+    "tzdata>=2026.2",
+    "faster-whisper>=1.2.1",
+    "onnxruntime<1.20",
+    "sqlite-vec>=0.1.9",
+    "fastembed>=0.4.2",
+    "rapidfuzz>=3.14.0",
+    "vadersentiment>=3.3.2",
+]
+
+[project.scripts]
+dev = "ai_video_editor.cli:dev"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.8.0",
+    "httpx>=0.27.0",
+    "pytest>=9.0.3",
+    "pytest-asyncio>=1.3.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+# Quiet warnings from optional deps (tracing/instrumentation surfaces).
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "SIM", "RUF"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# The project name (ai-video-editor-api) doesn't match the package
+# directory (ai_video_editor), so hatchling can't auto-resolve. Be
+# explicit so `uv sync` doesn't fail.
+[tool.hatch.build.targets.wheel]
+packages = ["src/ai_video_editor"]

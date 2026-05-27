@@ -1,0 +1,10 @@
+/*
+ * Self-hosted fonts via @fontsource. Loaded once in main.tsx so the
+ * font-face declarations are inlined by Vite and the first paint
+ * doesn't flash an unstyled fallback.
+ *
+ * Pairing rule (see plan):
+ *   serif → identity (page headers, compilation name)
+ *   sans  → UI / body
+ *   mono  → backend-mapped values (ids, timestamps, paths)
+ */

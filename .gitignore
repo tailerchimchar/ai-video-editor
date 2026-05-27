@@ -1,0 +1,140 @@
+# ============================================================
+# SECRETS — top of file so it's the first rule git evaluates.
+# Never commit. Anthropic / Langfuse / Riot keys live in .env.
+# ============================================================
+.env
+.env.local
+.env.development
+.env.production
+.env.*.local
+**/.env
+**/.env.local
+*.secret
+*.secrets
+credentials.json
+credentials.*.json
+auth.json
+*.pem
+*.key
+*.p12
+.netrc
+
+# Allow .env.example templates (no real values, just placeholders).
+!.env.example
+!**/.env.example
+
+# ============================================================
+# Python
+# ============================================================
+.venv/
+**/.venv/
+venv/
+env/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+**/*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+*.egg
+build/
+.tox/
+
+# ============================================================
+# Node / TypeScript / Bun
+# ============================================================
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+build/
+**/build/
+.next/
+.cache/
+*.tsbuildinfo
+.parcel-cache/
+.svelte-kit/
+bun.lockb.bak
+
+# ============================================================
+# IDE / OS
+# ============================================================
+.vscode/
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+*.swp
+*.swo
+*~
+
+# ============================================================
+# SQLite — local app state, not source
+# ============================================================
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+ai_video_editor.db
+
+# ============================================================
+# Logs (server output, dev tooling)
+# ============================================================
+*.log
+**/*.log
+logs/
+dev.out.log
+dev.err.log
+overnight_*.log
+
+# ============================================================
+# Scratch / one-off scripts created during interactive sessions
+# ============================================================
+overnight_pipeline.sh
+overnight_v*.sh
+scratch_*.py
+tmp_*.py
+
+# ============================================================
+# Workspace output (user video files — too big + not source)
+# These should live OUTSIDE the repo via WORKSPACE_DIR, but
+# exclude defensively in case stray output lands inside.
+# ============================================================
+workspace/
+output/
+compilations/
+highlights/
+_parts/
+_thumbnails/
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.wav
+*.mp3
+
+# ============================================================
+# Claude Code agent state (project-scoped runtime files)
+# ============================================================
+.claude/sessions/
+.claude/projects/
+.claude/plans/
+.claude/agents/
+.claude/cache/
+
+# ============================================================
+# Misc
+# ============================================================
+*.bak
+*.tmp
+*.temp
+.env.test

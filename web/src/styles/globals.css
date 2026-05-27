@@ -1,0 +1,105 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Tokens first — Tailwind layers reference them via var(). */
+@import "./tokens.css";
+@import "./fonts.css";
+
+/*
+ * Base resets.
+ *
+ * Body uses Geist (UI/body sans). Tabular figures keep timestamps
+ * column-aligned; antialiased smoothing makes the serif headers
+ * read as editorial rather than fuzzy.
+ */
+@layer base {
+  html {
+    color-scheme: dark;
+  }
+
+  body {
+    background-color: var(--bg-base);
+    color: var(--text-primary);
+    font-family: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+    font-feature-settings: "ss01", "cv01", "tnum";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  /*
+   * Film-grain texture. ~1.5% opacity SVG noise tile, screen blend.
+   * Adds the cinematic depth the frontend-design skill asks for
+   * without competing with the UI. data-uri'd so there's no extra
+   * network request.
+   */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 1;
+    opacity: 0.04;
+    mix-blend-mode: screen;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.5 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+  }
+
+  /*
+   * Reduced-motion: hard requirement per the design skill.
+   * Strips entry animations, hover scale, and any decorative motion.
+   * Slider drag remains direct-manipulation (no easing in the first
+   * place, so it's unaffected).
+   */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+
+  /*
+   * Selection — single accent only. No purple/blue browser default.
+   */
+  ::selection {
+    background-color: var(--accent-glow);
+    color: var(--text-primary);
+  }
+}
+
+@layer components {
+  /*
+   * Elevated surface: 1px inset highlight on the top edge.
+   * The Apple Pro / Linear move — depth without dropping shadows.
+   * Tailwind doesn't have inset box-shadow utilities that compose
+   * cleanly, so we keep it as a single component class.
+   */
+  .surface-elevated {
+    background-color: var(--bg-elevated);
+    border: 1px solid var(--border);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  }
+
+  /*
+   * Hover lift: subtle border brightening + accent glow. No translate
+   * so the layout stays steady when interacting.
+   */
+  .surface-interactive {
+    transition:
+      background-color 200ms var(--ease-out),
+      border-color 200ms var(--ease-out),
+      box-shadow 200ms var(--ease-out);
+  }
+
+  .surface-interactive:hover {
+    background-color: var(--bg-overlay);
+    border-color: var(--border-strong);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.06),
+      0 0 0 1px var(--accent-glow);
+  }
+}
