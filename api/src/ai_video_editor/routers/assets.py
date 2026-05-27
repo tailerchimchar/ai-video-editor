@@ -1,14 +1,29 @@
+import asyncio
+import contextlib
 import os
+import re
+import shutil
+import subprocess
 import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
 
 from ..config import settings
 from ..database import get_db
-from ..models import AssetOut, ScanResponse
+from ..models import AssetOut, RankResponse, ScanResponse
 
 router = APIRouter(tags=["assets"])
+
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _track(coro) -> None:
+    """Spawn a background task we won't await — same pattern as edits router."""
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
 
 
 @router.post("/assets/scan", response_model=ScanResponse)
@@ -63,3 +78,202 @@ async def list_assets():
         return [AssetOut(**dict(row)) for row in rows]
     finally:
         await db.close()
+
+
+# ---------------------------------------------------------------------
+# Ingest from URL (Twitch / YouTube / any yt-dlp-supported source)
+# ---------------------------------------------------------------------
+#
+# Why: replaces the "open browser → grab URL → run yt-dlp → wait → drop
+# file → /assets/scan" manual flow with a single API call. The downloaded
+# file lands in OUTPLAYED_MEDIA_DIR (under a <game>/ subfolder so the
+# existing per-game scan logic finds it on the next scan).
+#
+# Privacy: the entire pipeline stays local. yt-dlp pulls from the source
+# to YOUR machine; nothing is uploaded anywhere.
+#
+# Optional dependency: yt-dlp must be importable as a Python module
+# (`python -m yt_dlp`) by SOME python on PATH. Not a hard requirement of
+# this package so the rest of the system stays light. We probe for it
+# at request time and return a clear error if missing.
+
+
+class IngestUrlBody(BaseModel):
+    url: str = Field(..., description="HTTPS URL to a Twitch / YouTube / etc VOD")
+    game: str = Field(..., description="Game subfolder under OUTPLAYED_MEDIA_DIR (e.g. 'league')")
+
+
+_URL_RE = re.compile(r"^https?://[^\s/$.?#].\S*$")
+# Sanitise the game name to a single safe path segment — prevents path
+# traversal via the API. Lowercased, only [a-z0-9_-].
+_GAME_RE = re.compile(r"^[a-z0-9_-]+$")
+
+
+def _resolve_yt_dlp_invocation() -> list[str] | None:
+    """Return the argv prefix for invoking yt-dlp, or None if missing.
+
+    Tries the standalone CLI first (faster startup), falls back to
+    `python -m yt_dlp` against the system Python. None = "not installed,
+    tell the user to `pip install yt-dlp`."
+    """
+    cli = shutil.which("yt-dlp")
+    if cli:
+        return [cli]
+    # Try common Python interpreters for the module fallback.
+    for py in ("python", "py", "python3"):
+        py_path = shutil.which(py)
+        if py_path:
+            try:
+                subprocess.run(
+                    [py_path, "-c", "import yt_dlp"],
+                    check=True,
+                    capture_output=True,
+                    timeout=5,
+                )
+                return [py_path, "-m", "yt_dlp"]
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+                continue
+    return None
+
+
+async def _run_ingest_url_job(job_id: str, url: str, game: str) -> None:
+    """Download VOD via yt-dlp, register the asset, mark the job done."""
+    db = await get_db()
+    try:
+        await db.execute(
+            "UPDATE jobs SET status = 'running' WHERE id = ?", (job_id,)
+        )
+        await db.commit()
+
+        argv = _resolve_yt_dlp_invocation()
+        if argv is None:
+            await _finish_job(
+                db,
+                job_id,
+                error=(
+                    "yt-dlp not found on PATH. Install with `pip install yt-dlp` "
+                    "in any Python on PATH, or download the standalone binary."
+                ),
+            )
+            return
+
+        dest_dir = settings.outplayed_media_dir / game
+        dest_dir.mkdir(parents=True, exist_ok=True)
+
+        # yt-dlp output template: <title-truncated>_<vod-id>.<ext>.
+        # The vod-id keeps re-downloads idempotent (yt-dlp skips existing).
+        out_template = str(dest_dir / "%(title).80B_%(id)s.%(ext)s")
+
+        # --print after_move:filepath prints the final filepath AFTER any
+        # post-processing moves — that's what we want to register in the DB.
+        cmd = [
+            *argv,
+            "-f", "best",
+            "-o", out_template,
+            "--print", "after_move:filepath",
+            "--no-progress",
+            url,
+        ]
+
+        # Subprocess in a worker thread so we don't block the event loop.
+        result = await asyncio.to_thread(
+            subprocess.run,
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=3600,  # 1 hour cap — long enough for most VODs
+        )
+
+        if result.returncode != 0:
+            err = (result.stderr or result.stdout or "yt-dlp failed").strip()[:1500]
+            await _finish_job(db, job_id, error=err)
+            return
+
+        # Parse the printed filepath. yt-dlp emits one path per video; for
+        # playlists we'd get multiple. We only handle the first/only path.
+        filepath = (result.stdout or "").strip().splitlines()
+        if not filepath:
+            await _finish_job(db, job_id, error="yt-dlp returned no output path")
+            return
+        path = filepath[0].strip()
+        if not os.path.exists(path):
+            await _finish_job(db, job_id, error=f"yt-dlp claimed it wrote {path} but no such file")
+            return
+
+        # Register the asset with source_origin='downloaded' so the
+        # cleanup tool (#2) can distinguish from manually-placed files.
+        filename = os.path.basename(path)
+        # If somehow scan already grabbed it, just update; otherwise insert.
+        existing = await db.execute_fetchall(
+            "SELECT id FROM assets WHERE path = ?", (path,)
+        )
+        if existing:
+            asset_id = dict(existing[0])["id"]
+            await db.execute(
+                "UPDATE assets SET source_origin = 'downloaded' WHERE id = ?",
+                (asset_id,),
+            )
+        else:
+            asset_id = str(uuid.uuid4())
+            now = datetime.now(timezone.utc).isoformat()
+            await db.execute(
+                "INSERT INTO assets "
+                "(id, filename, path, game, created_at, indexed_at, source_origin) "
+                "VALUES (?, ?, ?, ?, ?, ?, 'downloaded')",
+                (asset_id, filename, path, game, now, now),
+            )
+        await db.commit()
+        await _finish_job(db, job_id, output_path=asset_id)
+    except Exception as exc:  # never let the worker crash silently
+        with contextlib.suppress(Exception):
+            await _finish_job(db, job_id, error=str(exc)[:1500])
+    finally:
+        await db.close()
+
+
+async def _finish_job(db, job_id: str, *, output_path: str | None = None,
+                      error: str | None = None) -> None:
+    status = "failed" if error else "completed"
+    with contextlib.suppress(Exception):
+        await db.execute(
+            "UPDATE jobs SET status = ?, output_path = ?, error = ?, completed_at = ? "
+            "WHERE id = ?",
+            (status, output_path, error, datetime.now(timezone.utc).isoformat(), job_id),
+        )
+        await db.commit()
+
+
+@router.post("/assets/ingest_url", response_model=RankResponse)
+async def ingest_url(body: IngestUrlBody):
+    """Download a VOD from a URL (Twitch / YouTube / etc) via yt-dlp.
+
+    The downloaded file lands in OUTPLAYED_MEDIA_DIR/<game>/ and an
+    asset row is registered with source_origin='downloaded'.
+
+    Returns a job_id — poll /api/v1/jobs/{id} for status. The job's
+    `output_path` field carries the new asset id on success.
+    """
+    if not _URL_RE.match(body.url):
+        raise HTTPException(400, "url must start with http:// or https://")
+    if not _GAME_RE.match(body.game.lower()):
+        raise HTTPException(400, "game must be lowercase alphanumeric (+ dash/underscore)")
+    if not settings.outplayed_media_dir.exists():
+        raise HTTPException(
+            500,
+            f"OUTPLAYED_MEDIA_DIR does not exist: {settings.outplayed_media_dir}",
+        )
+
+    db = await get_db()
+    try:
+        job_id = str(uuid.uuid4())
+        await db.execute(
+            "INSERT INTO jobs (id, project_id, type, status, created_at) "
+            "VALUES (?, NULL, 'ingest_url', 'pending', ?)",
+            (job_id, datetime.now(timezone.utc).isoformat()),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+    _track(_run_ingest_url_job(job_id, body.url, body.game.lower()))
+    return RankResponse(job_id=job_id)

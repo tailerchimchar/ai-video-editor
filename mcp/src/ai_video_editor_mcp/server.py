@@ -1141,6 +1141,36 @@ def detect_champion(
 
 
 @mcp.tool()
+def ingest_vod_url(url: str, game: str) -> dict:
+    """Download a VOD from a URL (Twitch / YouTube / etc) into the
+    local Outplayed media folder, ready to be analyzed + compiled like
+    any other recording.
+
+    `url` must be HTTPS. `game` is the subfolder (e.g. 'league' or
+    'valorant'); it must match an existing or new directory under
+    OUTPLAYED_MEDIA_DIR. Lowercase alphanumeric only (no spaces).
+
+    Uses yt-dlp under the hood — must be installed on PATH
+    (`pip install yt-dlp`). Source video stays local; nothing is
+    uploaded. The new asset is tagged `source_origin='downloaded'` so
+    the cleanup tool can auto-delete it after compile (manual scans
+    are tagged 'imported' and never auto-deleted).
+
+    Returns the new asset's job result + asset_id (`output_path` field
+    of the job carries the asset id on success). Job-based; this tool
+    waits for completion. Long downloads may report 'timeout' here
+    while still running — re-check with `get_job`.
+    """
+    with _client() as c:
+        job_id = c.post(
+            f"{API}/assets/ingest_url",
+            json={"url": url, "game": game},
+        ).json()["job_id"]
+        job = _wait_for_job(c, job_id)
+        return job
+
+
+@mcp.tool()
 def get_feedback_summary(compilation_id: str | None = None) -> dict:
     """Show how the user's manual edits compare to the system's defaults.
 

@@ -1,6 +1,9 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { listCompilations } from "@/api/compilations";
 import { CompilationCard } from "@/components/CompilationCard";
+import { ImportVodDialog } from "@/components/ImportVodDialog";
+import { Button } from "@/components/ui/Button";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { PageShell } from "@/components/ui/PageShell";
 
@@ -21,6 +24,7 @@ export function CompilationsList() {
     queryKey: ["compilations", "list"],
     queryFn: () => listCompilations(50),
   });
+  const [importOpen, setImportOpen] = useState(false);
 
   return (
     <PageShell>
@@ -33,7 +37,14 @@ export function CompilationsList() {
               ? `${data.length} rendered ${data.length === 1 ? "reel" : "reels"}`
               : ""
         }
+        trailing={
+          <Button size="sm" variant="primary" onClick={() => setImportOpen(true)}>
+            + import VOD
+          </Button>
+        }
       />
+
+      <ImportVodDialog open={importOpen} onClose={() => setImportOpen(false)} />
 
       {error && (
         <div className="surface-elevated rounded p-6 font-mono text-sm text-danger">

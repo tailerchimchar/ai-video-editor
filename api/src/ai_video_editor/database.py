@@ -12,7 +12,12 @@ CREATE TABLE IF NOT EXISTS assets (
     path TEXT NOT NULL UNIQUE,
     game TEXT,
     created_at TEXT NOT NULL,
-    indexed_at TEXT NOT NULL
+    indexed_at TEXT NOT NULL,
+    -- 'imported'   = found by scan_assets walking OUTPLAYED_MEDIA_DIR
+    -- 'downloaded' = pulled via /assets/ingest_url (yt-dlp)
+    -- The cleanup tool only auto-deletes 'downloaded' files; manually
+    -- placed source files are sacred.
+    source_origin TEXT DEFAULT 'imported'
 );
 
 CREATE TABLE IF NOT EXISTS clips (
@@ -171,6 +176,7 @@ async def init_db() -> None:
         # is idempotent but doesn't add new columns to an old table.
         await _ensure_column(db, "transcripts", "sentiment_score", "REAL")
         await _ensure_column(db, "transcripts", "words", "TEXT")
+        await _ensure_column(db, "assets", "source_origin", "TEXT DEFAULT 'imported'")
         # Orphan-job sweep: jobs that were `running` when the previous
         # process died (uvicorn auto-reload killing a Whisper worker is
         # the common cause) sit forever in `running` because no one

@@ -11,6 +11,9 @@ class AssetOut(BaseModel):
     game: str | None
     created_at: str
     indexed_at: str
+    # 'imported' = found by scan; 'downloaded' = ingested via URL.
+    # Drives the auto-delete safety rule in the cleanup tool.
+    source_origin: str | None = "imported"
 
 
 class ScanResponse(BaseModel):
