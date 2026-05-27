@@ -24,6 +24,7 @@ dependencies = [
 
 [project.scripts]
 dev = "ai_video_editor.cli:dev"
+dev-reload = "ai_video_editor.cli:dev_reload"
 
 [dependency-groups]
 dev = [

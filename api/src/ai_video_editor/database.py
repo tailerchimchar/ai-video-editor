@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 import aiosqlite
 import sqlite_vec
 
@@ -169,6 +171,20 @@ async def init_db() -> None:
         # is idempotent but doesn't add new columns to an old table.
         await _ensure_column(db, "transcripts", "sentiment_score", "REAL")
         await _ensure_column(db, "transcripts", "words", "TEXT")
+        # Orphan-job sweep: jobs that were `running` when the previous
+        # process died (uvicorn auto-reload killing a Whisper worker is
+        # the common cause) sit forever in `running` because no one
+        # updates them. On startup, mark any pre-existing `running` or
+        # `pending` jobs as failed so the UI / poll loops can move on.
+        # This is best-effort cosmetic cleanup — no user data is at risk
+        # since the actual work was already dead.
+        await db.execute(
+            "UPDATE jobs SET status = 'failed', "
+            "error = 'orphaned by API restart', "
+            "completed_at = ? "
+            "WHERE status IN ('running', 'pending')",
+            (datetime.now(timezone.utc).isoformat(),),
+        )
         await db.commit()
     finally:
         await db.close()
