@@ -1,11 +1,16 @@
 import { useQuery } from "@tanstack/react-query";
 import { listCompilations } from "@/api/compilations";
-import { CompilationRow } from "@/components/CompilationRow";
+import { CompilationCard } from "@/components/CompilationCard";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { PageShell } from "@/components/ui/PageShell";
 
 /**
- * Landing page — newest-first list of compilations.
+ * Landing page — newest-first gallery of compilations.
+ *
+ * Thumbnail-first grid layout: each tile shows the per-compilation
+ * poster frame (extracted at render time) plus name/date/id. Decision
+ * driver — when you have 20+ reels, text rows aren't scannable; a
+ * gallery lets you find "the funny one from last Tuesday" by sight.
  *
  * Uses TanStack Query for caching + retry. The 30s default staleTime
  * (set in main.tsx) means re-opening the tab refetches but scrolling
@@ -44,9 +49,9 @@ export function CompilationsList() {
       )}
 
       {data && data.length > 0 && (
-        <div className="flex flex-col gap-3">
+        <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {data.map((c, i) => (
-            <CompilationRow key={c.id} compilation={c} index={i} />
+            <CompilationCard key={c.id} compilation={c} index={i} />
           ))}
         </div>
       )}
