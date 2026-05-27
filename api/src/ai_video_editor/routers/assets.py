@@ -80,6 +80,104 @@ async def list_assets():
         await db.close()
 
 
+@router.get("/assets/{asset_id}", response_model=AssetOut)
+async def get_asset(asset_id: str):
+    db = await get_db()
+    try:
+        rows = await db.execute_fetchall("SELECT * FROM assets WHERE id = ?", (asset_id,))
+        if not rows:
+            raise HTTPException(404, "Asset not found")
+        return AssetOut(**dict(rows[0]))
+    finally:
+        await db.close()
+
+
+# ---------------------------------------------------------------------
+# Delete the source FILE (keeps the asset row + any compilations).
+# ---------------------------------------------------------------------
+#
+# Use case: a 4GB Twitch VOD was downloaded via /assets/ingest_url and
+# you've already compiled the highlights you want from it. The .mp4 is
+# now dead weight on disk — delete it. The compilation reels stay
+# intact (their rendered .mp4s are in compilations/, not next to the
+# source). You just can't RE-CUT from the source after deletion.
+#
+# Guardrails (all enforced — refuses to delete otherwise):
+# 1. `source_origin == 'downloaded'` — never auto-delete a manually
+#    placed file (those are sacred).
+# 2. `source_deleted_at IS NULL` — idempotent: already-deleted is a
+#    no-op success.
+# 3. Path must resolve INSIDE OUTPLAYED_MEDIA_DIR — defense against a
+#    malformed DB row pointing at /etc/shadow or similar.
+# 4. File must currently exist (just check) — if gone already, treat
+#    same as already-deleted.
+
+
+class DeleteSourceResponse(BaseModel):
+    asset_id: str
+    freed_bytes: int
+    already_deleted: bool = False
+
+
+@router.post("/assets/{asset_id}/delete_source", response_model=DeleteSourceResponse)
+async def delete_source(asset_id: str) -> DeleteSourceResponse:
+    """Delete the source .mp4 on disk. Asset row stays. Compilations
+    made from this source remain intact and playable."""
+    db = await get_db()
+    try:
+        rows = await db.execute_fetchall("SELECT * FROM assets WHERE id = ?", (asset_id,))
+        if not rows:
+            raise HTTPException(404, "Asset not found")
+        asset = dict(rows[0])
+
+        if asset.get("source_origin") != "downloaded":
+            raise HTTPException(
+                400,
+                "Refusing to delete: source_origin is not 'downloaded'. "
+                "Only files ingested via /assets/ingest_url can be auto-deleted "
+                "— manually placed files are sacred.",
+            )
+        if asset.get("source_deleted_at"):
+            return DeleteSourceResponse(asset_id=asset_id, freed_bytes=0, already_deleted=True)
+
+        # Containment safety: the path MUST be inside OUTPLAYED_MEDIA_DIR.
+        src_root = settings.outplayed_media_dir.resolve()
+        try:
+            file_path = (settings.outplayed_media_dir.parent / asset["path"]).resolve() \
+                if not os.path.isabs(asset["path"]) else os.path.realpath(asset["path"])
+            file_path = os.fspath(file_path)
+        except Exception as exc:
+            raise HTTPException(400, f"Could not resolve asset path: {exc}") from None
+
+        if not file_path.startswith(str(src_root) + os.sep) and file_path != str(src_root):
+            raise HTTPException(
+                400,
+                f"Refusing to delete: asset path {file_path!r} resolves outside "
+                f"OUTPLAYED_MEDIA_DIR {str(src_root)!r}. Possible corrupted DB row.",
+            )
+
+        # Capture size before deletion so the caller can show "freed X GB".
+        freed = 0
+        if os.path.exists(file_path):
+            try:
+                freed = os.path.getsize(file_path)
+            except OSError:
+                freed = 0
+            try:
+                os.remove(file_path)
+            except OSError as exc:
+                raise HTTPException(500, f"os.remove failed: {exc}") from None
+
+        await db.execute(
+            "UPDATE assets SET source_deleted_at = ? WHERE id = ?",
+            (datetime.now(timezone.utc).isoformat(), asset_id),
+        )
+        await db.commit()
+        return DeleteSourceResponse(asset_id=asset_id, freed_bytes=freed)
+    finally:
+        await db.close()
+
+
 # ---------------------------------------------------------------------
 # Ingest from URL (Twitch / YouTube / any yt-dlp-supported source)
 # ---------------------------------------------------------------------

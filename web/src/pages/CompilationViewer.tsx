@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { ClipActionsPanel } from "@/components/ClipActionsPanel";
 import { ClipFilmstrip } from "@/components/ClipFilmstrip";
 import { ClipMetaPanel } from "@/components/ClipMetaPanel";
+import { DeleteSourcePanel } from "@/components/DeleteSourcePanel";
 import { HistoryRail } from "@/components/HistoryRail";
 import { VideoPlayer } from "@/components/VideoPlayer";
 import { Button } from "@/components/ui/Button";
@@ -286,6 +287,8 @@ export function CompilationViewer() {
                 reverting={revert.isPending}
                 onRevert={(toVersion) => revert.mutate({ to_version: toVersion })}
               />
+
+              <DeleteSourcePanel assetId={metadata.data?.asset_id} />
 
               {extend.isError && (
                 <div className="border-danger/40 bg-danger/10 rounded border p-3 font-mono text-xs text-danger">

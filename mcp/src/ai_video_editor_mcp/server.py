@@ -1141,6 +1141,26 @@ def detect_champion(
 
 
 @mcp.tool()
+def delete_vod_source(asset_id: str) -> dict:
+    """Delete the source .mp4 of an INGESTED (downloaded via URL)
+    asset to free disk space. The asset row + any compilations made
+    from it stay intact — you just can't re-cut from the source after.
+
+    Safety: this tool ONLY works on assets where source_origin =
+    'downloaded' (files pulled via ingest_vod_url). Manually placed
+    files (Outplayed recordings, hand-imported MP4s) are sacred and
+    refuse to delete via this path.
+
+    Use case: after a 1+ hour Twitch VOD has been compiled into a
+    highlight reel, the 4GB source is dead weight. This frees that.
+
+    Returns `{asset_id, freed_bytes, already_deleted}`. Idempotent.
+    """
+    with _client() as c:
+        return c.post(f"{API}/assets/{asset_id}/delete_source").json()
+
+
+@mcp.tool()
 def ingest_vod_url(url: str, game: str) -> dict:
     """Download a VOD from a URL (Twitch / YouTube / etc) into the
     local Outplayed media folder, ready to be analyzed + compiled like

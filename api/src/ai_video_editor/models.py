@@ -14,6 +14,10 @@ class AssetOut(BaseModel):
     # 'imported' = found by scan; 'downloaded' = ingested via URL.
     # Drives the auto-delete safety rule in the cleanup tool.
     source_origin: str | None = "imported"
+    # Set when the source FILE was deleted. The asset row stays so
+    # compilations referencing it keep their FK; this flag tells callers
+    # the underlying .mp4 is no longer on disk.
+    source_deleted_at: str | None = None
 
 
 class ScanResponse(BaseModel):

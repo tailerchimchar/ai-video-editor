@@ -17,7 +17,12 @@ CREATE TABLE IF NOT EXISTS assets (
     -- 'downloaded' = pulled via /assets/ingest_url (yt-dlp)
     -- The cleanup tool only auto-deletes 'downloaded' files; manually
     -- placed source files are sacred.
-    source_origin TEXT DEFAULT 'imported'
+    source_origin TEXT DEFAULT 'imported',
+    -- When the source FILE was deleted via /assets/{id}/delete_source.
+    -- The row stays (so compilations made from it keep their FK), but
+    -- the underlying .mp4 is gone. Set once; never unset (re-download
+    -- would create a new asset id).
+    source_deleted_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS clips (
@@ -177,6 +182,7 @@ async def init_db() -> None:
         await _ensure_column(db, "transcripts", "sentiment_score", "REAL")
         await _ensure_column(db, "transcripts", "words", "TEXT")
         await _ensure_column(db, "assets", "source_origin", "TEXT DEFAULT 'imported'")
+        await _ensure_column(db, "assets", "source_deleted_at", "TEXT")
         # Orphan-job sweep: jobs that were `running` when the previous
         # process died (uvicorn auto-reload killing a Whisper worker is
         # the common cause) sit forever in `running` because no one
