@@ -259,6 +259,92 @@ def safe_extract_clip_thumbnails(folder: Path, spec: dict, *, force: bool = Fals
         return {"ok": False, "reason": "exception", "error": str(exc)[:500]}
 
 
+# ----- per-source-asset thumbnails (assets gallery) --------------------
+#
+# Source recordings (raw Outplayed sessions, ingested Twitch VODs) live
+# in OUTPLAYED_MEDIA_DIR — which is READ-ONLY per the source-files-
+# immutable rule (see CLAUDE.md). So asset thumbnails live in
+# WORKSPACE_DIR/asset_thumbnails/<asset_id>.jpg, keeping the source
+# folder pristine.
+#
+# A midpoint frame is "good enough" — gameplay sessions are statistically
+# in-game by the middle of the file. No spec to walk; we just need the
+# file's duration and seek to half.
+
+
+_ASSET_THUMBNAILS_DIRNAME = "asset_thumbnails"
+
+
+def asset_thumbnails_dir() -> Path:
+    """`<workspace>/asset_thumbnails/` — created on first use."""
+    return settings.workspace_dir / _ASSET_THUMBNAILS_DIRNAME
+
+
+def asset_thumbnail_path(asset_id: str) -> Path:
+    return asset_thumbnails_dir() / f"{asset_id}.jpg"
+
+
+def extract_asset_thumbnail(asset_id: str, asset_path: str, *, force: bool = False) -> dict:
+    """Pull a midpoint frame from a source recording.
+
+    Output: `<workspace>/asset_thumbnails/<asset_id>.jpg`. Idempotent —
+    skips when the file already exists unless `force=True`. Returns a
+    structured summary, never raises.
+
+    We DON'T duration-probe the file (one ffprobe per asset adds up on
+    libraries with 100+ recordings). Instead we let ffmpeg seek to a
+    fixed early-ish position (60s in) — for Outplayed clips this lands
+    mid-action; for full sessions it lands mid-loading-screen or early
+    laning, which is still recognizable. Trade-off: simpler + 1 fewer
+    process per asset.
+    """
+    out = asset_thumbnail_path(asset_id)
+    if out.exists() and not force:
+        return {"ok": True, "reason": "already_exists", "path": out.as_posix()}
+
+    if not Path(asset_path).is_file():
+        return {"ok": False, "reason": "asset_path_missing", "asset_id": asset_id}
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        settings.ffmpeg_path,
+        "-y",
+        # Fast keyframe seek BEFORE -i for speed. Lands near the request
+        # rather than exactly on it — fine for a thumbnail.
+        "-ss",
+        "60.0",
+        "-i",
+        asset_path,
+        "-frames:v",
+        "1",
+        "-q:v",
+        "3",
+        "-vf",
+        "scale=480:-1",  # bigger than per-clip thumbs since asset tiles are bigger
+        out.as_posix(),
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return {"ok": False, "reason": "ffmpeg_not_found_or_timeout", "asset_id": asset_id}
+    if result.returncode != 0:
+        return {
+            "ok": False,
+            "reason": "ffmpeg_failed",
+            "asset_id": asset_id,
+            "error": result.stderr[-500:],
+        }
+    return {"ok": True, "path": out.as_posix(), "asset_id": asset_id}
+
+
+def safe_extract_asset_thumbnail(asset_id: str, asset_path: str, *, force: bool = False) -> dict:
+    """Swallow-all-exceptions wrapper, like other safe_extract_* helpers."""
+    try:
+        return extract_asset_thumbnail(asset_id, asset_path, force=force)
+    except Exception as exc:
+        return {"ok": False, "reason": "exception", "error": str(exc)[:500]}
+
+
 def cleanup_orphan_clip_thumbnails(folder: Path, spec: dict) -> dict:
     """Delete `_thumbnails/<id>.jpg` files whose clip is no longer in the spec.
 

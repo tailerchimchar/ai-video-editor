@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { listCompilations } from "@/api/compilations";
 import { CompilationCard } from "@/components/CompilationCard";
+import { GalleryTabs } from "@/components/GalleryTabs";
 import { ImportVodDialog } from "@/components/ImportVodDialog";
 import { Button } from "@/components/ui/Button";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -38,9 +39,12 @@ export function CompilationsList() {
               : ""
         }
         trailing={
-          <Button size="sm" variant="primary" onClick={() => setImportOpen(true)}>
-            + import VOD
-          </Button>
+          <div className="flex items-center gap-3">
+            <GalleryTabs />
+            <Button size="sm" variant="primary" onClick={() => setImportOpen(true)}>
+              + import VOD
+            </Button>
+          </div>
         }
       />
 

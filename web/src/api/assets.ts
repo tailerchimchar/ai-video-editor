@@ -20,6 +20,33 @@ export function listAssets(): Promise<AssetSummary[]> {
   return request<AssetSummary[]>(`/api/v1/assets`);
 }
 
+/**
+ * URL the browser fetches for an asset's poster thumbnail. Goes
+ * through the Vite proxy → StaticFiles mount on the API. Returns null
+ * if there's no asset id to point at.
+ *
+ * `cacheBust` should change when the user requests a regeneration so
+ * the new JPG loads instead of the browser's cached copy.
+ */
+export function assetThumbnailUrl(assetId: string, cacheBust?: string | number): string {
+  const v = cacheBust !== undefined ? `?v=${encodeURIComponent(String(cacheBust))}` : "";
+  return `/workspace/asset_thumbnails/${encodeURIComponent(assetId)}.jpg${v}`;
+}
+
+export interface RegenerateThumbnailResponse {
+  ok: boolean;
+  path?: string;
+  reason?: string;
+  error?: string;
+}
+
+/** POST /api/v1/assets/:id/thumbnail — backfill / refresh the poster. */
+export function regenerateAssetThumbnail(assetId: string): Promise<RegenerateThumbnailResponse> {
+  return request<RegenerateThumbnailResponse>(`/api/v1/assets/${assetId}/thumbnail`, {
+    method: "POST",
+  });
+}
+
 /** GET /api/v1/assets/:id — one asset. */
 export function getAsset(assetId: string): Promise<AssetSummary> {
   return request<AssetSummary>(`/api/v1/assets/${assetId}`);

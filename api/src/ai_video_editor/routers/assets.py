@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from ..config import settings
 from ..database import get_db
 from ..models import AssetOut, RankResponse, ScanResponse
+from ..thumbnail import safe_extract_asset_thumbnail
 
 router = APIRouter(tags=["assets"])
 
@@ -61,6 +62,11 @@ async def scan_assets():
                     "VALUES (?, ?, ?, ?, ?, ?)",
                     (asset_id, filename, filepath, game, created_at, indexed_at),
                 )
+                # Auto-extract a poster frame so the gallery has something
+                # to show on first paint. Best-effort — never fails the scan.
+                # ~100ms per asset; on libraries of 1000+ recordings this
+                # adds wall time but only on FIRST scan (idempotent after).
+                safe_extract_asset_thumbnail(asset_id, filepath)
                 new_count += 1
 
         await db.commit()
@@ -76,6 +82,27 @@ async def list_assets():
     try:
         rows = await db.execute_fetchall("SELECT * FROM assets ORDER BY created_at DESC")
         return [AssetOut(**dict(row)) for row in rows]
+    finally:
+        await db.close()
+
+
+@router.post("/assets/{asset_id}/thumbnail")
+async def regenerate_asset_thumbnail(asset_id: str):
+    """Extract (or re-extract) the poster frame for one asset.
+
+    Useful when:
+    - Backfilling thumbnails for assets indexed before auto-extract shipped.
+    - Recovering after a deletion of the thumbnail file.
+    - Forcing a refresh when the user wants a different frame.
+
+    Returns the safe-extract structured result. 404 if asset unknown.
+    """
+    db = await get_db()
+    try:
+        rows = await db.execute_fetchall("SELECT path FROM assets WHERE id = ?", (asset_id,))
+        if not rows:
+            raise HTTPException(404, "Asset not found")
+        return safe_extract_asset_thumbnail(asset_id, dict(rows[0])["path"], force=True)
     finally:
         await db.close()
 

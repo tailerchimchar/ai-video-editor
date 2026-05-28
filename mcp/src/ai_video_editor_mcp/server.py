@@ -1185,6 +1185,23 @@ def delete_vod_source(asset_id: str) -> dict:
 
 
 @mcp.tool()
+def regenerate_asset_thumbnail(asset_id: str) -> dict:
+    """Re-extract a source asset's poster frame.
+
+    Source asset thumbnails are auto-extracted during `scan_assets`,
+    but assets indexed before that feature shipped don't have one.
+    Call this to backfill — or to refresh after deleting the cached
+    file.
+
+    Output lives at `<workspace>/asset_thumbnails/<asset_id>.jpg` and
+    is served by the StaticFiles mount at `/workspace/asset_thumbnails/...`.
+    Idempotent: re-running just overwrites the existing JPG.
+    """
+    with _client() as c:
+        return c.post(f"{API}/assets/{asset_id}/thumbnail").json()
+
+
+@mcp.tool()
 def ingest_vod_url(url: str, game: str) -> dict:
     """Download a VOD from a URL (Twitch / YouTube / etc) into the
     local Outplayed media folder, ready to be analyzed + compiled like

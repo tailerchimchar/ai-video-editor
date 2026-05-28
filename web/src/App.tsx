@@ -1,21 +1,24 @@
 import { Route, Routes } from "react-router-dom";
+import { AssetsList } from "@/pages/AssetsList";
 import { CompilationsList } from "@/pages/CompilationsList";
 import { CompilationViewer } from "@/pages/CompilationViewer";
 
 /**
  * Top-level route table.
  *
- * Two routes for Phase 1; designed to grow:
- *   /                          — compilations list
- *   /compilations/:id          — viewer + edit slider
+ *   /                          — compilations list (rendered reels)
+ *   /assets                    — sources gallery (raw recordings)
+ *   /compilations/:id          — viewer + per-clip editor
  *
- * Later phases add `/assets`, `/transcripts`, `/intros`, etc. — each
- * is a peer route here; layout shell composes per-page.
+ * `/` and `/assets` are the two gallery views switched by
+ * `GalleryTabs`. Future surfaces (`/transcripts`, `/intros`, …) slot in
+ * as peer routes here.
  */
 export function App() {
   return (
     <Routes>
       <Route path="/" element={<CompilationsList />} />
+      <Route path="/assets" element={<AssetsList />} />
       <Route path="/compilations/:id" element={<CompilationViewer />} />
     </Routes>
   );
