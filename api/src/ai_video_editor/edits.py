@@ -25,8 +25,11 @@ _ROI_PRESETS: dict[str, tuple[str, str, str, str]] = {
     "full": ("iw", "ih", "0", "0"),
     # Center: width/factor x height/factor at the middle (factor injected later)
     "center": ("iw/{f}", "ih/{f}", "(iw-iw/{f})/2", "(ih-ih/{f})/2"),
-    # LoL HUD scoreline (top-center small bar)
-    "scoreline_lol": ("iw*0.30", "ih*0.06", "iw*0.35", "0"),
+    # LoL HUD scoreline (top-right — team kills + personal KDA + clock).
+    # Updated 2026-05-27 from real screenshot — modern League HUD has the
+    # scoreline in the top-right, not top-center (which is reserved for
+    # objective notifications).
+    "scoreline_lol": ("iw*0.20", "ih*0.05", "iw*0.78", "0"),
     # LoL minimap (bottom-right square)
     "minimap_lol": ("ih*0.22", "ih*0.22", "iw-ih*0.23", "ih*0.77"),
     # LoL champion portrait + summoner spells (bottom-left).

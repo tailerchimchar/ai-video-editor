@@ -27,11 +27,15 @@ h = 0.28
 description = "Bottom-right rotation map — ganks, vision, objectives."
 
 [regions.scoreboard]
-x = 0.42
+# Updated 2026-05-27 from real screenshot — modern League HUD moved the
+# scoreline + personal KDA to the TOP-RIGHT. Top-center is now reserved
+# for objective notifications ("CHANNELING", "BARON SPAWNED", etc.).
+# This region covers: team kills · personal K/D/A · CS · game clock.
+x = 0.78
 y = 0.00
-w = 0.16
-h = 0.04
-description = "Top-center score/timer bar (kills, gold, game clock)."
+w = 0.20
+h = 0.05
+description = "Top-right HUD strip: team kills, personal KDA, CS, game clock."
 
 [regions.tab_overlay]
 x = 0.10

@@ -10,6 +10,7 @@ from ai_video_editor.candidates.cv_kda import (
     _KDA_RE,
     _crop_expr_for_scoreboard,
     _make_candidate,
+    _sane_transition,
     detect_kda_events,
 )
 
@@ -20,13 +21,27 @@ def test_kda_regex_accepts_slash_separator():
     assert (int(m.group(1)), int(m.group(2)), int(m.group(3))) == (3, 0, 2)
 
 
-def test_kda_regex_accepts_spaces():
+def test_kda_regex_rejects_space_only_separators():
+    """The League HUD top-right strip shows both `18 vs 23` (team kills,
+    space-separated) AND `11/3/2` (personal KDA, slash-separated) in
+    the same crop. We MUST reject space-only triples — otherwise OCR
+    output like '18 23 11/3/2' picks up (18, 23, 11) instead of (11, 3, 2)."""
     m = _KDA_RE.search("3 0 2")
+    assert m is None
+
+
+def test_kda_regex_locks_onto_kda_not_team_kills():
+    """Real OCR output from the top-right HUD strip — should pick the
+    SLASH-separated triple (the actual KDA), not the leading team
+    kills numbers."""
+    m = _KDA_RE.search("18 23  11/3/2")
     assert m is not None
-    assert (int(m.group(1)), int(m.group(2)), int(m.group(3))) == (3, 0, 2)
+    assert (int(m.group(1)), int(m.group(2)), int(m.group(3))) == (11, 3, 2)
 
 
-def test_kda_regex_accepts_mixed_separators():
+def test_kda_regex_accepts_mixed_slash_separators():
+    """Tesseract sometimes reads / as | or \\ — accept either between
+    digit groups (but not space-only)."""
     m = _KDA_RE.search("3 / 0 | 2")
     assert m is not None
     assert (int(m.group(1)), int(m.group(2)), int(m.group(3))) == (3, 0, 2)
@@ -97,6 +112,45 @@ def test_detect_skips_short_outplayed_clips():
     and already covered by the `outplayed_clip` source. Skip cleanly."""
     out = detect_kda_events("/nonexistent.mp4", duration=30.0, game="league")
     assert out == []
+
+
+def test_sane_transition_accepts_single_kill():
+    assert _sane_transition((3, 1, 2), (4, 1, 2)) is True
+
+
+def test_sane_transition_accepts_no_change():
+    assert _sane_transition((3, 1, 2), (3, 1, 2)) is True
+
+
+def test_sane_transition_accepts_double_kill():
+    assert _sane_transition((3, 1, 2), (5, 1, 2)) is True
+
+
+def test_sane_transition_rejects_decrease():
+    """KDA values never decrease within a single game."""
+    assert _sane_transition((3, 1, 2), (3, 0, 2)) is False
+
+
+def test_sane_transition_rejects_team_kill_misread():
+    """OCR reading team-kills column instead of personal KDA — typically
+    shows up as MULTIPLE axes jumping by 3+ at once. Real KDA evolves
+    one axis at a time."""
+    assert _sane_transition((6, 1, 0), (11, 6, 2)) is False
+    assert _sane_transition((9, 2, 0), (18, 10, 2)) is False
+    assert _sane_transition((6, 2, 0), (12, 6, 2)) is False
+
+
+def test_sane_transition_rejects_huge_single_axis_jump():
+    """OCR sometimes hallucinates a large digit. Even pentakills net
+    only +5 in one sample window — anything 8+ is noise."""
+    assert _sane_transition((10, 2, 0), (10, 2, 14)) is False
+    assert _sane_transition((11, 3, 2), (24, 3, 2)) is False
+
+
+def test_sane_transition_accepts_simultaneous_small_changes():
+    """A kill+assist combo in the same 5s window is plausible (real
+    teamfight). Both axes change, but each by only 1."""
+    assert _sane_transition((3, 1, 2), (4, 1, 3)) is True
 
 
 def test_detect_handles_missing_tools_gracefully():

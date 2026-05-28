@@ -51,9 +51,13 @@ _WINDOW_HALF_SECONDS = 5.0
 # scoreboard rarely shows >30 of anything in a normal League/Val game).
 _MAX_DIGIT = 30
 
-# Match patterns like "3/0/2", "3 / 0 / 2", "3|0|2", "3 0 2" — OCR
-# isn't picky about the separator character, so we accept several.
-_KDA_RE = re.compile(r"(\d{1,2})\s*[/|\\\s]+\s*(\d{1,2})\s*[/|\\\s]+\s*(\d{1,2})")
+# Match patterns like "11/3/2" or "11 / 3 / 2" — REQUIRE at least one
+# slash-like separator. The League HUD's top-right strip shows both
+# `18 vs 23` (team kills, space-separated) AND `11/3/2` (personal KDA,
+# slash-separated) in the same crop. A space-tolerant regex matches
+# "18 23 11" (the wrong triple). Slash-requiring regex skips team kills
+# and locks onto the actual KDA.
+_KDA_RE = re.compile(r"(\d{1,2})\s*[/|\\]+\s*(\d{1,2})\s*[/|\\]+\s*(\d{1,2})")
 
 
 def _ffmpeg_available() -> bool:
@@ -137,6 +141,32 @@ def _ocr_kda(png_path: str) -> tuple[int, int, int] | None:
     return (k, d, a)
 
 
+def _sane_transition(prev: tuple[int, int, int], cur: tuple[int, int, int]) -> bool:
+    """Return True if `cur` looks like a plausible KDA evolution from `prev`.
+
+    Rejects:
+    - Any digit DECREASING — KDA doesn't go down in a normal game.
+    - 2+ digits changing AND any change >= 3 — diagnostic of OCR misreading
+      team kills ("18 vs 23") or other adjacent text into the KDA slots.
+    - Any single digit jumping by 8+ — even pentakill teamfights don't
+      net +8 in one 5-second sample interval.
+
+    Real game progression is +1 per kill, with occasional +2/+3 in
+    quick teamfights. Pentakills (+5 kills in seconds) are theoretically
+    possible but rare; if missed, the next sample picks up the new
+    baseline anyway.
+    """
+    diffs = [cur[i] - prev[i] for i in range(3)]
+    if any(d < 0 for d in diffs):
+        return False
+    positive_changes = [d for d in diffs if d > 0]
+    if not positive_changes:
+        return True  # no change is fine (most samples will be this)
+    if len(positive_changes) >= 2 and max(positive_changes) >= 3:
+        return False  # multi-axis big jump = OCR locked onto wrong text
+    return max(positive_changes) < 8  # single-axis huge jump = noise
+
+
 def _make_candidate(
     event_type: str,
     anchor: float,
@@ -206,11 +236,15 @@ def detect_kda_events(video_path: str, duration: float, game: str | None) -> lis
             if _extract_frame(video_path, t, crop_expr, str(png)):
                 kda = _ocr_kda(str(png))
                 if kda is not None:
-                    if last_kda is not None:
+                    if last_kda is None:
+                        # First valid read — establish baseline.
+                        last_kda = kda
+                        last_t = t
+                    elif _sane_transition(last_kda, kda):
                         # Use the midpoint between samples as the anchor —
-                        # the event happened SOMEWHERE in that 5-second
-                        # window; centering on midpoint is the least-wrong
-                        # guess without per-frame OCR.
+                        # the event happened SOMEWHERE in that interval;
+                        # centering on midpoint is the least-wrong guess
+                        # without per-frame OCR.
                         anchor = (last_t + t) / 2.0
                         if kda[0] > last_kda[0]:
                             out.append(_make_candidate("kill", anchor, kda, last_kda))
@@ -218,8 +252,10 @@ def detect_kda_events(video_path: str, duration: float, game: str | None) -> lis
                             out.append(_make_candidate("death", anchor, kda, last_kda))
                         if kda[2] > last_kda[2]:
                             out.append(_make_candidate("assist", anchor, kda, last_kda))
-                    last_kda = kda
-                    last_t = t
+                        last_kda = kda
+                        last_t = t
+                    # else: OCR misread, ignore and keep last_kda intact.
+                    #       Next sane reading compares against the same baseline.
             png.unlink(missing_ok=True)
             frame_idx += 1
             t += _SAMPLE_INTERVAL_SECONDS
