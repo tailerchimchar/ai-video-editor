@@ -30,6 +30,22 @@ export function extendClip(compilationId: string, args: ExtendClipArgs): Promise
   });
 }
 
+/**
+ * POST /api/v1/edit/compile/:id/reorder_explicit — drag-and-drop commit.
+ * Pass the full new order as a list of clip ids. Validation rejects
+ * missing / unknown / duplicate ids server-side, so a stale UI can't
+ * silently lose clips.
+ */
+export function reorderClipsExplicit(
+  compilationId: string,
+  clipIds: string[],
+): Promise<EditSummary> {
+  return request<EditSummary>(`/api/v1/edit/compile/${compilationId}/reorder_explicit`, {
+    method: "POST",
+    body: { clip_ids: clipIds },
+  });
+}
+
 export interface RevertArgs {
   /** Pick exactly one: jump to a version, or walk back N steps. */
   to_version?: number;

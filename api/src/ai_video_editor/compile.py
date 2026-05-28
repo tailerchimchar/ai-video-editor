@@ -998,6 +998,50 @@ def clear_intro_clip(spec: dict) -> tuple[dict, set[str]]:
 _VALID_REORDER_MODES = ("chronological", "hype", "hook", "funny", "story")
 
 
+def reorder_clips_explicit(spec: dict, clip_ids: list[str]) -> tuple[dict, set[str]]:
+    """Reorder clips to match an EXPLICIT list of clip ids.
+
+    Unlike `reorder_clips` (which takes a sort MODE and preserves intro
+    positions), this mutator is for user-driven drag-and-drop where the
+    user picked the exact order including intro placement.
+
+    Validation:
+      - Every existing clip's id MUST appear exactly once in `clip_ids`.
+      - Any unknown id raises ValueError.
+      - Missing ids raise ValueError.
+
+    Returns the new spec + ALL clip ids as dirty (label re-encode if
+    show_clip_numbers is on; cached parts otherwise reused since the
+    per-clip filterchain hasn't changed).
+    """
+    spec = json.loads(json.dumps(spec))
+    clips = spec.get("clips") or []
+    if not clips:
+        return spec, set()
+
+    # Check duplicates BEFORE set-based set comparison — duplicates would
+    # otherwise look like "missing" because the set collapses them.
+    if len(clip_ids) != len(set(clip_ids)):
+        raise ValueError("reorder_clips_explicit: duplicate ids in requested order")
+    by_id = {c["id"]: c for c in clips if c.get("id")}
+    existing = set(by_id.keys())
+    requested = set(clip_ids)
+    if existing != requested:
+        missing = existing - requested
+        extra = requested - existing
+        parts = []
+        if missing:
+            parts.append(f"missing: {sorted(missing)}")
+        if extra:
+            parts.append(f"unknown: {sorted(extra)}")
+        raise ValueError(
+            f"reorder_clips_explicit: id sets don't match. {' '.join(parts)}"
+        )
+
+    spec["clips"] = [by_id[cid] for cid in clip_ids]
+    return spec, set(clip_ids)
+
+
 def reorder_clips(spec: dict, mode: str) -> tuple[dict, set[str]]:
     """Reorder NON-INTRO clips by a scoring mode. Intros stay put.
 

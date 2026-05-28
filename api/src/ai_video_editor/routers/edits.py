@@ -56,6 +56,9 @@ from ..compile import (
     reorder_clips as spec_reorder_clips,
 )
 from ..compile import (
+    reorder_clips_explicit as spec_reorder_clips_explicit,
+)
+from ..compile import (
     set_caption_mode as spec_set_caption_mode,
 )
 from ..compile import (
@@ -1202,6 +1205,47 @@ async def reorder_compilation_clips(compilation_id: str, body: ReorderBody):
         action=f"reorder:{body.mode}",
         details={"mode": body.mode},
     )
+    await _update_compilation_output(compilation_id, summary.get("output"))
+    return summary
+
+
+class ReorderExplicitBody(BaseModel):
+    """User-driven drag-and-drop reorder. `clip_ids` is the new full order;
+    must contain exactly the same id set as the current spec."""
+
+    clip_ids: list[str] = Field(..., min_length=1)
+
+
+@router.post("/compile/{compilation_id}/reorder_explicit")
+async def reorder_compilation_clips_explicit(
+    compilation_id: str, body: ReorderExplicitBody
+):
+    """Reorder clips by an EXPLICIT user-provided order (drag-and-drop).
+
+    Unlike `/reorder` (which sorts by a scoring mode and preserves intro
+    positions), this endpoint takes the literal new sequence of clip
+    ids. Intros move freely with the rest — if the user dragged an intro
+    to a different position, that's intentional.
+
+    Validation refuses to silently lose or duplicate clips: the request's
+    `clip_ids` set must exactly match the current spec's clip ids.
+    """
+    folder = await _load_compilation_folder(compilation_id)
+
+    def mutator(s: dict) -> tuple[dict, set[str]]:
+        return spec_reorder_clips_explicit(s, body.clip_ids)
+
+    try:
+        summary = await asyncio.to_thread(
+            _do_edit,
+            folder,
+            mutator,
+            compilation_id,
+            action="reorder:explicit",
+            details={"clip_ids": body.clip_ids},
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
     await _update_compilation_output(compilation_id, summary.get("output"))
     return summary
 

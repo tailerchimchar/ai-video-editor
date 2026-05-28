@@ -1,45 +1,27 @@
 import { motion } from "motion/react";
-import { ExtendSlider } from "./ExtendSlider";
 import { Badge } from "./ui/Badge";
 import { formatDuration } from "@/lib/time";
 import { cn } from "@/lib/cn";
 import type { Clip } from "@/types/clip";
 
-interface ReelSegment {
-  id: string;
-  reelStart: number;
-  reelEnd: number;
-  isCurrent: boolean;
-}
-
 interface ClipMetaPanelProps {
   clip: Clip;
-  reelStart: number;
-  reelEnd: number;
-  totalReelSeconds: number;
-  segments: ReelSegment[];
   busy: boolean;
-  onExtend: (deltas: { before: number; after: number }) => void;
 }
 
 /**
- * LEFT-column clip panel: identity (index, timestamps, badges) + the
- * extend/shrink reel slider. The "what does this clip look like in
- * the reel?" surface — paired with the video player above it.
+ * LEFT-column clip identity card: index, timestamps, badges.
  *
- * Caption editing + action stubs live separately in `ClipActionsPanel`
- * on the right. Splitting these makes the captions surface front-and-
- * center on the right where editors expect their primary work area.
+ * Editing previously lived here (the ExtendSlider). With the filmstrip
+ * refactor, extend/shrink now happens by dragging the edges of the
+ * tile directly — so this panel is purely informational. Caption
+ * editing + effects stay on the right in `ClipActionsPanel`.
+ *
+ * The `busy` indicator shows during any mutation in flight for this
+ * clip (extend / caption / effect / etc) so the user gets the same
+ * "something is happening" visual cue.
  */
-export function ClipMetaPanel({
-  clip,
-  reelStart,
-  reelEnd,
-  totalReelSeconds,
-  segments,
-  busy,
-  onExtend,
-}: ClipMetaPanelProps) {
+export function ClipMetaPanel({ clip, busy }: ClipMetaPanelProps) {
   const [reelStartStr, reelEndStr] = clip.reel.split("-").map((s) => s.trim()) as [
     string | undefined,
     string | undefined,
@@ -57,12 +39,12 @@ export function ClipMetaPanel({
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
       className={cn(
-        "surface-elevated space-y-5 rounded-lg p-6",
+        "surface-elevated space-y-4 rounded-lg p-6",
         "transition-shadow duration-300",
         busy && "shadow-[0_0_0_1px_var(--accent-glow),inset_0_1px_0_rgba(255,255,255,0.06)]",
       )}
     >
-      <header className="flex items-start justify-between gap-4 border-b border-border pb-4">
+      <header className="flex items-start justify-between gap-4">
         <div className="space-y-1">
           <div className="font-mono text-[10px] uppercase tracking-wider text-text-dim">
             selected clip
@@ -78,6 +60,9 @@ export function ClipMetaPanel({
           </div>
           <div className="font-mono text-xs text-text-muted">
             src · {srcStart} → {srcEnd}
+          </div>
+          <div className="pt-1 font-mono text-[10px] text-text-dim">
+            drag the tile edges in the filmstrip above to extend or shrink
           </div>
         </div>
 
@@ -95,20 +80,6 @@ export function ClipMetaPanel({
           )}
         </div>
       </header>
-
-      <div>
-        <div className="mb-3 font-mono text-[10px] uppercase tracking-wider text-text-dim">
-          extend or shrink
-        </div>
-        <ExtendSlider
-          clipReelStart={reelStart}
-          clipReelEnd={reelEnd}
-          totalReelSeconds={totalReelSeconds}
-          segments={segments}
-          disabled={busy}
-          onCommit={onExtend}
-        />
-      </div>
     </motion.section>
   );
 }

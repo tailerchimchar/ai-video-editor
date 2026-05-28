@@ -10,7 +10,12 @@ from datetime import datetime, timezone
 
 import pytest
 
-from ai_video_editor.compile import _segments_in_window, cluster_ranked_candidates, plan_clips
+from ai_video_editor.compile import (
+    _segments_in_window,
+    cluster_ranked_candidates,
+    plan_clips,
+    reorder_clips_explicit,
+)
 
 # ----- pure unit tests on the planner -----
 
@@ -889,6 +894,75 @@ def test_add_effect_bad_clip_ref_400s(client, seeded_compilation, monkeypatch):
         json={"clip_ref": "nonsense", "kind": "zoom"},
     )
     assert r.status_code == 400
+
+
+# ----- reorder_clips_explicit (drag-and-drop user reordering) -----
+
+
+def _spec_with_clips(ids: list[str]) -> dict:
+    """Minimal spec with the given clip ids — just enough for the mutator."""
+    return {"clips": [{"id": cid, "start_seconds": float(i)} for i, cid in enumerate(ids)]}
+
+
+def test_reorder_explicit_swaps_order():
+    spec = _spec_with_clips(["a", "b", "c"])
+    new_spec, dirty = reorder_clips_explicit(spec, ["c", "a", "b"])
+    assert [c["id"] for c in new_spec["clips"]] == ["c", "a", "b"]
+    assert dirty == {"a", "b", "c"}  # all clip ids are reported dirty
+
+
+def test_reorder_explicit_preserves_clip_data():
+    """Reordering must not lose or mutate per-clip fields."""
+    spec = {
+        "clips": [
+            {"id": "a", "start_seconds": 10.0, "event_type": "kill"},
+            {"id": "b", "start_seconds": 20.0, "event_type": "death"},
+        ]
+    }
+    new_spec, _ = reorder_clips_explicit(spec, ["b", "a"])
+    assert new_spec["clips"][0]["start_seconds"] == 20.0
+    assert new_spec["clips"][0]["event_type"] == "death"
+    assert new_spec["clips"][1]["start_seconds"] == 10.0
+
+
+def test_reorder_explicit_rejects_missing_id():
+    spec = _spec_with_clips(["a", "b", "c"])
+    with pytest.raises(ValueError, match="missing"):
+        reorder_clips_explicit(spec, ["a", "b"])  # dropped "c"
+
+
+def test_reorder_explicit_rejects_unknown_id():
+    spec = _spec_with_clips(["a", "b"])
+    with pytest.raises(ValueError, match="unknown"):
+        reorder_clips_explicit(spec, ["a", "b", "zzz"])
+
+
+def test_reorder_explicit_rejects_duplicates():
+    spec = _spec_with_clips(["a", "b"])
+    with pytest.raises(ValueError, match="duplicate"):
+        reorder_clips_explicit(spec, ["a", "a"])
+
+
+def test_reorder_explicit_handles_empty_spec():
+    """No clips = no-op, no error."""
+    new_spec, dirty = reorder_clips_explicit({"clips": []}, [])
+    assert new_spec["clips"] == []
+    assert dirty == set()
+
+
+def test_reorder_explicit_moves_intros_freely():
+    """Unlike mode-based reorder which fixes intros in place, an
+    explicit user-driven reorder lets intros move with the rest."""
+    spec = {
+        "clips": [
+            {"id": "intro1", "event_type": "intro"},
+            {"id": "kill1", "event_type": "kill"},
+            {"id": "kill2", "event_type": "kill"},
+        ]
+    }
+    # User drags the intro to the END.
+    new_spec, _ = reorder_clips_explicit(spec, ["kill1", "kill2", "intro1"])
+    assert [c["id"] for c in new_spec["clips"]] == ["kill1", "kill2", "intro1"]
 
 
 # Optional integration helper retained for future use — currently unused.

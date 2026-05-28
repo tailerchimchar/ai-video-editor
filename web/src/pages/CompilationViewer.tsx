@@ -47,6 +47,7 @@ export function CompilationViewer() {
     tiktokify,
     addZoom,
     addFocus,
+    reorder,
   } = useCompilation(id);
 
   const videoUrl = buildWorkspaceUrl(metadata.data?.output_path);
@@ -149,26 +150,7 @@ export function CompilationViewer() {
     return allClips.length > 0 ? (allClips[allClips.length - 1]?.id ?? null) : null;
   }, [clips.data, currentReelTime]);
 
-  // Compute reel positions for the slider's shared timeline axis.
-  const { positions, totalReelSeconds, segments } = useMemo(() => {
-    const allClips = clips.data?.clips ?? [];
-    let running = 0;
-    const positionsArr = allClips.map((c) => {
-      const start = running;
-      running += c.duration;
-      return { id: c.id, reelStart: start, reelEnd: running };
-    });
-    const segmentsArr = positionsArr.map((p) => ({
-      id: p.id,
-      reelStart: p.reelStart,
-      reelEnd: p.reelEnd,
-      isCurrent: p.id === selectedId,
-    }));
-    return { positions: positionsArr, totalReelSeconds: running, segments: segmentsArr };
-  }, [clips.data, selectedId]);
-
   const selectedClip = clips.data?.clips.find((c) => c.id === selectedId) ?? null;
-  const selectedPos = positions.find((p) => p.id === selectedId) ?? null;
 
   return (
     <PageShell>
@@ -189,8 +171,7 @@ export function CompilationViewer() {
        *  history don't get torn down between renders. Only the clip
        *  detail panels are conditional. */}
       {(() => {
-        const sel = selectedClip && selectedPos ? selectedClip : null;
-        const pos = selectedClip && selectedPos ? selectedPos : null;
+        const sel = selectedClip;
         const [srcStartStr, srcEndStr] = sel
           ? sel.source.split("-").map((s) => s.trim())
           : [undefined, undefined];
@@ -234,26 +215,25 @@ export function CompilationViewer() {
                 playingId={playingClipId}
                 thumbnailsBaseUrl={thumbnailsBaseUrl}
                 cacheBust={videoVersion}
+                busy={extend.isPending || reorder.isPending}
                 onSelect={selectClip}
+                onExtend={(clipId, deltas) => {
+                  // Find the dropped clip's index → use it as clip_ref.
+                  // The backend extend_clip mutator accepts numeric refs
+                  // (1-based) or UUID prefixes; we use the index for
+                  // consistency with how the rest of the UI talks to it.
+                  const targetIdx = (clips.data?.clips ?? []).findIndex((c) => c.id === clipId);
+                  if (targetIdx < 0) return;
+                  extend.mutate({
+                    clipRef: String(targetIdx + 1),
+                    before: deltas.before,
+                    after: deltas.after,
+                  });
+                }}
+                onReorder={(newOrder) => reorder.mutate(newOrder)}
               />
 
-              {sel && pos && (
-                <ClipMetaPanel
-                  clip={sel}
-                  reelStart={pos.reelStart}
-                  reelEnd={pos.reelEnd}
-                  totalReelSeconds={totalReelSeconds}
-                  segments={segments}
-                  busy={extendBusy}
-                  onExtend={(deltas) =>
-                    extend.mutate({
-                      clipRef,
-                      before: deltas.before,
-                      after: deltas.after,
-                    })
-                  }
-                />
-              )}
+              {sel && <ClipMetaPanel clip={sel} busy={extendBusy} />}
             </div>
 
             {/* RIGHT — caption editor + future actions + history */}

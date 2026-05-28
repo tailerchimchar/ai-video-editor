@@ -963,6 +963,30 @@ def reorder_compilation_clips(compilation_id: str, mode: str) -> dict:
 
 
 @mcp.tool()
+def reorder_compilation_clips_explicit(compilation_id: str, clip_ids: list[str]) -> dict:
+    """Reorder clips by an EXPLICIT user-chosen sequence — drag-and-drop
+    style.
+
+    Unlike `reorder_compilation_clips` (which sorts by a scoring mode
+    like "hype" or "chronological" and preserves intro positions), this
+    tool takes the literal new full order of clip ids. Intros move
+    freely with the rest.
+
+    `clip_ids` must contain exactly the same id set as the current
+    compilation — every existing id present, no extras, no duplicates.
+
+    Use when the user has manually arranged the clips and you want to
+    commit that arrangement (e.g. the drag-to-reorder filmstrip in the
+    webapp uses this endpoint).
+    """
+    with _client() as c:
+        return c.post(
+            f"{API}/edit/compile/{compilation_id}/reorder_explicit",
+            json={"clip_ids": clip_ids},
+        ).json()
+
+
+@mcp.tool()
 def set_default_intro(intro_name: str | None) -> dict:
     """Mark an intro as the workspace default.
 

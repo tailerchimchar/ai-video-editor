@@ -6,6 +6,7 @@ import {
   addZoomEffect,
   extendClip,
   removeClipCaption,
+  reorderClipsExplicit,
   revertCompilation,
   setClipCaptions,
   tiktokifyClipCaptions,
@@ -90,6 +91,11 @@ export function useCompilation(compilationId: string) {
     onSuccess: invalidate,
   });
 
+  const reorder = useMutation({
+    mutationFn: (clipIds: string[]) => reorderClipsExplicit(compilationId, clipIds),
+    onSuccess: invalidate,
+  });
+
   return {
     metadata,
     clips,
@@ -102,6 +108,7 @@ export function useCompilation(compilationId: string) {
     tiktokify,
     addZoom,
     addFocus,
+    reorder,
     invalidate,
   };
 }
