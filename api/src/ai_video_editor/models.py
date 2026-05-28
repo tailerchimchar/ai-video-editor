@@ -18,6 +18,9 @@ class AssetOut(BaseModel):
     # compilations referencing it keep their FK; this flag tells callers
     # the underlying .mp4 is no longer on disk.
     source_deleted_at: str | None = None
+    # When this asset was sliced out of a parent multi-game VOD, this
+    # points back to the parent's asset id. NULL for standalone files.
+    parent_asset_id: str | None = None
 
 
 class ScanResponse(BaseModel):

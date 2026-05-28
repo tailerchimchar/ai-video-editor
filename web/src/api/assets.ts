@@ -13,6 +13,8 @@ export interface AssetSummary {
   indexed_at: string;
   source_origin?: string | null; // 'imported' | 'downloaded'
   source_deleted_at?: string | null;
+  // Set when this asset was sliced out of a parent multi-game VOD.
+  parent_asset_id?: string | null;
 }
 
 /** GET /api/v1/assets — full list. */
@@ -43,6 +45,18 @@ export interface RegenerateThumbnailResponse {
 /** POST /api/v1/assets/:id/thumbnail — backfill / refresh the poster. */
 export function regenerateAssetThumbnail(assetId: string): Promise<RegenerateThumbnailResponse> {
   return request<RegenerateThumbnailResponse>(`/api/v1/assets/${assetId}/thumbnail`, {
+    method: "POST",
+  });
+}
+
+/**
+ * POST /api/v1/assets/:id/split — detect game boundaries via ffmpeg
+ * blackdetect, then write per-game child files. Returns a job_id; the
+ * caller polls /jobs/{id} for status and refreshes the assets list
+ * on completion.
+ */
+export function splitVodIntoGames(assetId: string): Promise<{ job_id: string }> {
+  return request<{ job_id: string }>(`/api/v1/assets/${assetId}/split`, {
     method: "POST",
   });
 }

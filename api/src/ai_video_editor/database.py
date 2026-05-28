@@ -22,7 +22,12 @@ CREATE TABLE IF NOT EXISTS assets (
     -- The row stays (so compilations made from it keep their FK), but
     -- the underlying .mp4 is gone. Set once; never unset (re-download
     -- would create a new asset id).
-    source_deleted_at TEXT
+    source_deleted_at TEXT,
+    -- For multi-game VOD splits: the asset id of the parent recording
+    -- this clip was sliced out of. NULL on standalone recordings.
+    -- Lets the UI group "game 1 / game 2 / game 3" under their parent
+    -- Twitch scrim VOD without losing the link.
+    parent_asset_id TEXT REFERENCES assets(id)
 );
 
 CREATE TABLE IF NOT EXISTS clips (
@@ -183,6 +188,7 @@ async def init_db() -> None:
         await _ensure_column(db, "transcripts", "words", "TEXT")
         await _ensure_column(db, "assets", "source_origin", "TEXT DEFAULT 'imported'")
         await _ensure_column(db, "assets", "source_deleted_at", "TEXT")
+        await _ensure_column(db, "assets", "parent_asset_id", "TEXT")
         # Orphan-job sweep: jobs that were `running` when the previous
         # process died (uvicorn auto-reload killing a Whisper worker is
         # the common cause) sit forever in `running` because no one

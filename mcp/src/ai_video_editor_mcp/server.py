@@ -1185,6 +1185,34 @@ def delete_vod_source(asset_id: str) -> dict:
 
 
 @mcp.tool()
+def split_vod_into_games(asset_id: str) -> dict:
+    """Detect game boundaries in a long VOD and split it into per-game
+    child files. Use this on Twitch scrim recordings that contain
+    multiple games (2-4 typical) — each game becomes its own asset that
+    can be analyzed + compiled independently.
+
+    How it works:
+    - ffmpeg `blackdetect` scans for dark transitions between games
+      (loading screens, return-to-lobby fades, queue waits).
+    - Stretches of black > 2 seconds are treated as boundaries.
+    - Segments shorter than 60s are dropped as UI artifacts.
+    - Each surviving segment gets a child file beside the parent:
+      `scrim.mp4` -> `scrim_game1.mp4`, `scrim_game2.mp4`, ...
+    - Child files use ffmpeg `-c copy` (no re-encode) — fast + lossless.
+
+    Refuses to run if the source file was deleted via
+    `delete_vod_source` (re-import first). Returns "no split needed"
+    when only one segment was detected (the VOD looks single-game).
+
+    Job-based; this tool polls to completion. On success, `output_path`
+    contains a comma-separated list of new child asset ids.
+    """
+    with _client() as c:
+        job_id = c.post(f"{API}/assets/{asset_id}/split").json()["job_id"]
+        return _wait_for_job(c, job_id)
+
+
+@mcp.tool()
 def regenerate_asset_thumbnail(asset_id: str) -> dict:
     """Re-extract a source asset's poster frame.
 

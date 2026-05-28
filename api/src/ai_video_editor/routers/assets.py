@@ -6,13 +6,21 @@ import shutil
 import subprocess
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from ..candidates.probe import get_duration_seconds
 from ..config import settings
 from ..database import get_db
 from ..models import AssetOut, RankResponse, ScanResponse
+from ..splitter import (
+    child_filename,
+    detect_game_boundaries,
+    intervals_to_segments,
+    split_segment,
+)
 from ..thumbnail import safe_extract_asset_thumbnail
 
 router = APIRouter(tags=["assets"])
@@ -366,6 +374,153 @@ async def _finish_job(db, job_id: str, *, output_path: str | None = None,
             (status, output_path, error, datetime.now(timezone.utc).isoformat(), job_id),
         )
         await db.commit()
+
+
+# ---------------------------------------------------------------------
+# Multi-game VOD split — detect game boundaries via ffmpeg blackdetect,
+# slice the parent into per-game child assets.
+# ---------------------------------------------------------------------
+
+
+async def _run_split_job(job_id: str, asset: dict) -> None:
+    """Detect game boundaries + write per-game child files + register
+    each child as a new asset linked to the parent."""
+    db = await get_db()
+    try:
+        await db.execute(
+            "UPDATE jobs SET status = 'running' WHERE id = ?", (job_id,)
+        )
+        await db.commit()
+
+        video_path = asset["path"]
+        if not os.path.exists(video_path):
+            await _finish_job(db, job_id, error=f"source file missing: {video_path}")
+            return
+
+        # Probe duration first — needed to bound the last segment.
+        # ~50ms via ffprobe, much cheaper than the blackdetect scan.
+        duration = await asyncio.to_thread(get_duration_seconds, video_path)
+        if duration <= 0:
+            await _finish_job(db, job_id, error="couldn't probe duration")
+            return
+
+        # Detect black intervals via ffmpeg blackdetect filter.
+        # Run in a thread because it's a synchronous subprocess call
+        # that scans the whole file (~30-60s for a 1.5hr VOD).
+        intervals = await asyncio.to_thread(detect_game_boundaries, video_path)
+        segments = intervals_to_segments(intervals, duration=duration)
+
+        if len(segments) <= 1:
+            # Either no black periods or only one valid segment after
+            # filtering — nothing to split. Report as completed (not
+            # an error) with a clear note so the user knows.
+            await _finish_job(
+                db,
+                job_id,
+                output_path=(
+                    f"no split needed: detected {len(intervals)} black intervals, "
+                    f"{len(segments)} game segment(s) after filtering"
+                ),
+            )
+            return
+
+        # Slice each segment into a child file beside the parent.
+        # `-c copy` so it's fast (no re-encode) and quality-preserving.
+        parent_dir = Path(video_path).parent
+        new_ids: list[str] = []
+        now = datetime.now(timezone.utc).isoformat()
+        for seg in segments:
+            child_name = child_filename(asset["filename"], seg)
+            child_path = parent_dir / child_name
+            ok, _err = await asyncio.to_thread(
+                split_segment, video_path, str(child_path), seg.start, seg.end
+            )
+            if not ok:
+                # One failed split shouldn't kill the whole job — report
+                # what worked. The user can re-trigger or fix the bad
+                # boundary manually.
+                continue
+
+            asset_id = str(uuid.uuid4())
+            await db.execute(
+                "INSERT INTO assets "
+                "(id, filename, path, game, created_at, indexed_at, "
+                " source_origin, parent_asset_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, 'imported', ?)",
+                (
+                    asset_id,
+                    child_name,
+                    str(child_path),
+                    asset.get("game"),
+                    now,
+                    now,
+                    asset["id"],
+                ),
+            )
+            new_ids.append(asset_id)
+            # Best-effort thumbnail for the child too — the gallery will
+            # show "no thumbnail yet" otherwise.
+            safe_extract_asset_thumbnail(asset_id, str(child_path))
+
+        await db.commit()
+        await _finish_job(
+            db,
+            job_id,
+            output_path=f"split into {len(new_ids)} games: {','.join(new_ids)}",
+        )
+    except Exception as exc:
+        with contextlib.suppress(Exception):
+            await _finish_job(db, job_id, error=str(exc)[:1500])
+    finally:
+        await db.close()
+
+
+@router.post("/assets/{asset_id}/split", response_model=RankResponse)
+async def split_vod(asset_id: str):
+    """Detect game boundaries in a long VOD (typically a Twitch scrim
+    that contains 2-4 games) and slice it into per-game child files.
+
+    Uses ffmpeg `blackdetect` to find dark transitions between games
+    (loading screens, return-to-lobby fades), filters to "real" game-
+    length segments (>60s), and writes each segment to a child .mp4
+    beside the parent. Each child is registered as its own asset with
+    `parent_asset_id` linking back.
+
+    Stream-copies (no re-encode) so it's fast + quality-preserving.
+    Boundaries snap to nearest keyframe — 0-2s drift acceptable for
+    game-boundary granularity.
+
+    Returns a job_id — poll /api/v1/jobs/{id} for status. The job's
+    `output_path` field carries a comma-separated list of new asset
+    ids on success, or "no split needed: ..." when the VOD didn't
+    look multi-game.
+    """
+    db = await get_db()
+    try:
+        rows = await db.execute_fetchall("SELECT * FROM assets WHERE id = ?", (asset_id,))
+        if not rows:
+            raise HTTPException(404, "Asset not found")
+        asset = dict(rows[0])
+
+        if asset.get("source_deleted_at"):
+            raise HTTPException(
+                400,
+                "Refusing to split: the source file was deleted via "
+                "/assets/{id}/delete_source — re-download or re-import first.",
+            )
+
+        job_id = str(uuid.uuid4())
+        await db.execute(
+            "INSERT INTO jobs (id, project_id, type, status, created_at) "
+            "VALUES (?, NULL, 'split', 'pending', ?)",
+            (job_id, datetime.now(timezone.utc).isoformat()),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+    _track(_run_split_job(job_id, asset))
+    return RankResponse(job_id=job_id)
 
 
 @router.post("/assets/ingest_url", response_model=RankResponse)
