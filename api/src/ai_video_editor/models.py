@@ -99,6 +99,9 @@ CandidateSource = Literal[
     "manual_marker",
     "riot_api",
     "overwolf_game_event",
+    # CV-based: scoreboard OCR detects K/D/A increments. Game-agnostic
+    # (works for any game with a "scoreboard" region in its profile).
+    "cv_kda",
 ]
 
 

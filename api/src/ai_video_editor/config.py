@@ -120,6 +120,9 @@ class Settings(BaseSettings):
             "teamfight": (8.0, 6.0),
             "baron": (4.0, 10.0),
             "dragon": (3.0, 7.0),
+            # CV/KDA — emitted by candidates/cv_kda.py
+            "death": (4.0, 4.0),  # short context both sides, less milking
+            "assist": (3.0, 6.0),  # like a kill but lighter
             # audio_peak source (loud regions)
             "funny_audio": (3.0, 6.0),
             # transcript_keyword source — emits these two categories

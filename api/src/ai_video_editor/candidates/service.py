@@ -14,6 +14,7 @@ from ..config import settings
 from ..league import is_league
 from ..league.orchestrator import gather_lol_candidates
 from .audio import energy_curve, peaks_from_energy
+from .cv_kda import detect_kda_events
 from .probe import get_duration_seconds
 from .transcript import detect_transcript_keywords
 
@@ -112,6 +113,23 @@ def compute_candidates(
                 kw.get("event_type"),
                 kw.get("confidence"),
                 kw.get("metadata", {}),
+            )
+        )
+
+    # CV-based scoreboard OCR (cross-game — needs the game profile to
+    # declare a `scoreboard` region). Only runs on session recordings
+    # (longer than outplayed_clip_max_seconds) because Outplayed clips
+    # are too short to benefit + the existing outplayed_clip source
+    # already covers them.
+    for kda in detect_kda_events(video_path, duration, asset.get("game")):
+        rows.append(
+            _row(
+                "cv_kda",
+                kda["start_seconds"],
+                kda["end_seconds"],
+                kda.get("event_type"),
+                kda.get("confidence"),
+                kda.get("metadata", {}),
             )
         )
 
