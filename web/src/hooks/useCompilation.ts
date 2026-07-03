@@ -1,5 +1,11 @@
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
-import { getCompilation, getCompilationClips, getCompilationHistory } from "@/api/compilations";
+import {
+  getCompilation,
+  getCompilationClips,
+  getCompilationHistory,
+  getVLMHealth,
+  vlmReviewCompilation,
+} from "@/api/compilations";
 import {
   addClipCaption,
   addFocusEffect,
@@ -96,6 +102,22 @@ export function useCompilation(compilationId: string) {
     onSuccess: invalidate,
   });
 
+  // VLM taste-layer. Health is a separate low-frequency query so the
+  // "Re-review with VLM" button can grey out when the backend is
+  // unreachable. Refetch every 30s so a newly-started Ollama gets
+  // picked up without a manual refresh.
+  const vlmHealth = useQuery({
+    queryKey: ["vlm", "health"],
+    queryFn: getVLMHealth,
+    refetchInterval: 30_000,
+    staleTime: 15_000,
+  });
+
+  const vlmReview = useMutation({
+    mutationFn: () => vlmReviewCompilation(compilationId),
+    onSuccess: invalidate,
+  });
+
   return {
     metadata,
     clips,
@@ -109,6 +131,8 @@ export function useCompilation(compilationId: string) {
     addZoom,
     addFocus,
     reorder,
+    vlmHealth,
+    vlmReview,
     invalidate,
   };
 }

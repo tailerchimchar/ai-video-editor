@@ -165,6 +165,29 @@ class Settings(BaseSettings):
     ranker_max_retries: int = 2
     ranker_timeout_seconds: float = 120.0
 
+    # --- VLM (vision language model) taste layer -------------------------
+    # A local VLM validates each cut and the whole compilation. Loop
+    # mechanics + verdict schema are game-agnostic; per-game specifics
+    # live in vlm/game_hints/<game>.md. Ships Ollama-only ($0); a paid
+    # backend can be added via the same VLMBackend protocol later.
+    vlm_enabled: bool = True
+    vlm_backend: str = "ollama"  # only "ollama" today; hosted later
+    vlm_max_clip_iter: int = 5
+    vlm_max_comp_iter: int = 3
+    vlm_frame_samples_clip: int = 8
+    vlm_frame_samples_comp: int = 40
+    # Ollama backend
+    vlm_ollama_url: str = "http://localhost:11434"
+    # Model ladder — tried in order until one is reachable + pulled.
+    # Defaults tuned for 6 GB VRAM boxes (GTX 1660 class); bump on RTX
+    # cards. Setting either to empty string disables that tier.
+    vlm_model_primary: str = "qwen3-vl:4b"
+    vlm_model_fallback: str = "qwen3-vl:2b"
+    # Bounded per-call HTTP timeout for the VLM. On slower GPUs a call
+    # may take 20-30s; this cap prevents a wedged Ollama from stalling
+    # a whole compile forever.
+    vlm_call_timeout_seconds: float = 120.0
+
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",

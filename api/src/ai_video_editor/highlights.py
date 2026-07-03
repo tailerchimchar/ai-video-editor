@@ -67,6 +67,12 @@ def _mmss(seconds: float) -> str:
     return f"{s // 60}m{s % 60:02d}s"
 
 
+def _vlm_enabled() -> bool:
+    """Feature flag for the VLM per-clip validation loop. Safe on any
+    startup — never touches Ollama; just reads the config bit."""
+    return bool(settings.vlm_enabled)
+
+
 def _parse_name(asset: dict) -> tuple[str, str, str]:
     """(game, date, time_disc) parsed from the recording filename, with
     graceful fallbacks for unrecognized names."""
@@ -196,27 +202,65 @@ def build_highlights(asset: dict, rankings: list[dict], candidates: list[dict]) 
 
     duration = get_duration_seconds(asset["path"])
     champ = _champion(candidates)
+    game_slug, _, _ = _parse_name(asset)
     clips: list[dict] = []
+    # VLM per-clip validation loop is opt-in via VLM_ENABLED. When it's
+    # off (or the backend is unreachable), we fall back to the direct
+    # trim_clip path — same behavior as before this loop existed.
+    use_vlm = _vlm_enabled()
     for i, r in enumerate(kept, start=1):
         cand = cand_by_id.get(r.get("candidate_id"), {})
         event = cand.get("event_type") or "clip"
         start, end = cut_window(cand, r, duration)
         fname = f"{i:02d}_{_safe(event)}_{_mmss(start)}.mp4"
-        ok, err = trim_clip(asset["path"], (dest / fname).as_posix(), start, end)
-        clips.append(
-            {
-                "file": fname,
+        out_path = dest / fname
+
+        if use_vlm:
+            from .vlm.loops import validate_and_cut
+
+            meta = cand.get("metadata") or {}
+            loop_result = validate_and_cut(
+                source_path=asset["path"],
+                out_path=out_path,
+                start=start,
+                end=end,
+                game=(game_slug or "").lower() or None,
+                event_type=event,
+                source=cand.get("source"),
+                anchor_seconds=meta.get("anchor_seconds"),
+            )
+            clip_entry: dict = {
+                "file": fname if loop_result.ok else None,
                 "event": event,
-                "start_seconds": round(start, 2),
-                "end_seconds": round(end, 2),
+                "start_seconds": round(loop_result.start_seconds, 2),
+                "end_seconds": round(loop_result.end_seconds, 2),
                 "hype_score": r.get("hype_score"),
                 "funny_score": r.get("funny_score"),
                 "story_score": r.get("story_score"),
                 "reason": r.get("reason"),
-                "ok": ok,
-                "error": err,
+                "ok": loop_result.ok,
+                "error": None if loop_result.ok else loop_result.final_verdict.why,
+                "vlm_verdict": loop_result.final_verdict.verdict,
+                "vlm_why": loop_result.final_verdict.why,
+                "vlm_iterations": loop_result.iterations,
             }
-        )
+            clips.append(clip_entry)
+        else:
+            ok, err = trim_clip(asset["path"], out_path.as_posix(), start, end)
+            clips.append(
+                {
+                    "file": fname,
+                    "event": event,
+                    "start_seconds": round(start, 2),
+                    "end_seconds": round(end, 2),
+                    "hype_score": r.get("hype_score"),
+                    "funny_score": r.get("funny_score"),
+                    "story_score": r.get("story_score"),
+                    "reason": r.get("reason"),
+                    "ok": ok,
+                    "error": err,
+                }
+            )
 
     written = sum(1 for c in clips if c["ok"])
     game, _, _ = _parse_name(asset)

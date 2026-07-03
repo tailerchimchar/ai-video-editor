@@ -1248,6 +1248,64 @@ def backfill_asset_durations() -> dict:
 
 
 @mcp.tool()
+def vlm_health() -> dict:
+    """Report whether the VLM (vision language model) taste-layer backend
+    is reachable + which model is active + a canary latency reading.
+
+    The VLM is used to validate each cut clip and review the whole
+    compilation as it's being built. It's an OPTIONAL enrichment step —
+    when unavailable, compiles run without validation.
+
+    Returns a dict like `{ok, backend, enabled, model, latency_ms,
+    reason}`. If `ok` is False, `reason` explains why (Ollama not
+    installed, model not pulled, VLM_ENABLED=false, etc). Zero side
+    effects; safe to call repeatedly.
+    """
+    with _client() as c:
+        return c.post(f"{API}/vlm/health").json()
+
+
+@mcp.tool()
+def vlm_review_compilation(
+    compilation_id: str,
+    max_passes: int | None = None,
+    n_frames: int | None = None,
+) -> dict:
+    """Run the VLM taste-layer review on a rendered compilation.
+
+    Samples ~30-60 frames spread across the compiled reel and returns
+    a list of suggested fixes to improve pacing / cohesion / variety.
+    Each fix names a clip (by `clip_ref` — 1-based index, UUID prefix,
+    or M:SS timestamp) and one of: extend_before, extend_after,
+    trim_start, trim_end, remove_clip, apply_zoom, apply_focus.
+
+    This tool is REVIEW-ONLY — no mutations are applied. Use the
+    returned `fixes` list as guidance for follow-up editing tool calls
+    (`extend_compilation_clip`, `remove_compilation_clip`,
+    `zoom_compilation_clip`, `focus_compilation_clip`). The user (or a
+    higher-level agent) decides which fixes to actually apply.
+
+    Requires the compilation to already be rendered (call `finalize_
+    compilation` first). Requires VLM_ENABLED=true + a reachable
+    backend — check `vlm_health` first if the returned fixes list is
+    empty and something feels off.
+
+    Returns `{ok, passes, is_cohesive, fixes[], backend, model}`.
+    `is_cohesive: true` with empty fixes means the reel looks good.
+    """
+    body: dict = {}
+    if max_passes is not None:
+        body["max_passes"] = max_passes
+    if n_frames is not None:
+        body["n_frames"] = n_frames
+    with _client() as c:
+        return c.post(
+            f"{API}/edit/compile/{compilation_id}/vlm_review",
+            json=body,
+        ).json()
+
+
+@mcp.tool()
 def ingest_vod_url(url: str, game: str) -> dict:
     """Download a VOD from a URL (Twitch / YouTube / etc) into the
     local Outplayed media folder, ready to be analyzed + compiled like

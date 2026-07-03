@@ -5,6 +5,7 @@ import { ClipFilmstrip } from "@/components/ClipFilmstrip";
 import { ClipMetaPanel } from "@/components/ClipMetaPanel";
 import { DeleteSourcePanel } from "@/components/DeleteSourcePanel";
 import { HistoryRail } from "@/components/HistoryRail";
+import { VLMReviewPanel } from "@/components/VLMReviewPanel";
 import { VideoPlayer } from "@/components/VideoPlayer";
 import { Button } from "@/components/ui/Button";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -48,6 +49,8 @@ export function CompilationViewer() {
     addZoom,
     addFocus,
     reorder,
+    vlmHealth,
+    vlmReview,
   } = useCompilation(id);
 
   const videoUrl = buildWorkspaceUrl(metadata.data?.output_path);
@@ -266,6 +269,15 @@ export function CompilationViewer() {
                 entries={history.data?.history ?? []}
                 reverting={revert.isPending}
                 onRevert={(toVersion) => revert.mutate({ to_version: toVersion })}
+              />
+
+              <VLMReviewPanel
+                health={vlmHealth.data}
+                healthLoading={vlmHealth.isLoading}
+                review={vlmReview.data}
+                reviewPending={vlmReview.isPending}
+                reviewError={vlmReview.error as Error | null}
+                onReview={() => vlmReview.mutate()}
               />
 
               <DeleteSourcePanel assetId={metadata.data?.asset_id} />

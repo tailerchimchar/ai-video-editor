@@ -16,7 +16,6 @@ from ai_video_editor.splitter import (
     parse_blackdetect_output,
 )
 
-
 # ----- parse_blackdetect_output -----
 
 
