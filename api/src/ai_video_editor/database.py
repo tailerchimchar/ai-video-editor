@@ -27,7 +27,13 @@ CREATE TABLE IF NOT EXISTS assets (
     -- this clip was sliced out of. NULL on standalone recordings.
     -- Lets the UI group "game 1 / game 2 / game 3" under their parent
     -- Twitch scrim VOD without losing the link.
-    parent_asset_id TEXT REFERENCES assets(id)
+    parent_asset_id TEXT REFERENCES assets(id),
+    -- Cached ffprobe duration. Populated on scan / ingest_url / split
+    -- so the gallery can gate features (e.g. the split button only
+    -- shows on > 1hr recordings) without ffprobing 130 files per page
+    -- load. NULL until backfilled — callers should treat NULL as
+    -- "unknown" (NOT "zero").
+    duration_seconds REAL
 );
 
 CREATE TABLE IF NOT EXISTS clips (
@@ -189,6 +195,7 @@ async def init_db() -> None:
         await _ensure_column(db, "assets", "source_origin", "TEXT DEFAULT 'imported'")
         await _ensure_column(db, "assets", "source_deleted_at", "TEXT")
         await _ensure_column(db, "assets", "parent_asset_id", "TEXT")
+        await _ensure_column(db, "assets", "duration_seconds", "REAL")
         # Orphan-job sweep: jobs that were `running` when the previous
         # process died (uvicorn auto-reload killing a Whisper worker is
         # the common cause) sit forever in `running` because no one

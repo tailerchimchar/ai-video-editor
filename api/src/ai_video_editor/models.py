@@ -21,6 +21,9 @@ class AssetOut(BaseModel):
     # When this asset was sliced out of a parent multi-game VOD, this
     # points back to the parent's asset id. NULL for standalone files.
     parent_asset_id: str | None = None
+    # Cached ffprobe duration in seconds. NULL means "not yet probed"
+    # — UI should treat that as "unknown" (don't assume zero).
+    duration_seconds: float | None = None
 
 
 class ScanResponse(BaseModel):

@@ -12,22 +12,41 @@ interface AssetCardProps {
   index: number;
 }
 
-// Split button eligibility. The blackdetect scan handles its own "is
-// this actually multi-game?" judgment server-side (it just returns
-// "no split needed" when the file looks single-game), so we only HIDE
-// the button when there's a structural reason it can't possibly work:
+// One hour. Single League or Val games are 30-50 min; only recordings
+// longer than this could plausibly contain multiple games back-to-back
+// (scrim VODs, multi-game Twitch sessions, tournament series).
+const MIN_SPLIT_DURATION_SECONDS = 3600;
+
+// Split button eligibility. The blackdetect scan COULD handle short
+// files (just returns "no split needed"), but showing the button on
+// every Outplayed event clip adds visual noise without value. So we
+// hide it unless:
 //
-// - Source file deleted (nothing to scan).
-// - Child of a previous split (already segmented; splitting a 30-min
-//   game further would be noise).
+// - The source file exists (not deleted).
+// - This asset isn't already a split child (no recursive splitting).
+// - We know the file is longer than 1hr (multi-game capable).
 //
-// Everything else gets the button. The user discovers whether their
-// recording contains multiple games by trying. Honest default for an
-// alpha product where we can't predict the source format.
+// Duration is NULL on pre-backfill rows. We treat unknown as "don't
+// show" — better to under-promise than offer a button that won't work.
+// Hit POST /assets/backfill_durations to populate the existing library.
 function canSplit(asset: AssetSummary): boolean {
   if (asset.source_deleted_at) return false;
   if (asset.parent_asset_id) return false;
+  const dur = asset.duration_seconds;
+  if (dur == null || dur <= MIN_SPLIT_DURATION_SECONDS) return false;
   return true;
+}
+
+/** "1h 47m" / "32m" / "1:23" — null/zero render as empty string. */
+function formatDuration(seconds: number | null | undefined): string {
+  if (!seconds || seconds <= 0) return "";
+  const total = Math.round(seconds);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m`;
+  return `${s}s`;
 }
 
 /**
@@ -55,6 +74,7 @@ export function AssetCard({ asset, index }: AssetCardProps) {
   const isDownloaded = asset.source_origin === "downloaded";
   const isDeleted = !!asset.source_deleted_at;
   const showSplit = canSplit(asset);
+  const durationText = formatDuration(asset.duration_seconds);
 
   // Split state: the mutation kicks off a background job; we poll the
   // job until completion and then refresh the assets list.
@@ -163,6 +183,12 @@ export function AssetCard({ asset, index }: AssetCardProps) {
             {asset.game && (
               <>
                 <span>{asset.game}</span>
+                <span className="text-text-dim/50">·</span>
+              </>
+            )}
+            {durationText && (
+              <>
+                <span>{durationText}</span>
                 <span className="text-text-dim/50">·</span>
               </>
             )}

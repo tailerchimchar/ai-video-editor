@@ -15,6 +15,9 @@ export interface AssetSummary {
   source_deleted_at?: string | null;
   // Set when this asset was sliced out of a parent multi-game VOD.
   parent_asset_id?: string | null;
+  // ffprobe-cached duration in seconds. `null` means "not yet probed"
+  // (pre-backfill rows) — treat as "unknown", NOT zero.
+  duration_seconds?: number | null;
 }
 
 /** GET /api/v1/assets — full list. */

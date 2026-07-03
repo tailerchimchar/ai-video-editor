@@ -65,10 +65,22 @@ async def scan_assets():
                 asset_id = str(uuid.uuid4())
                 indexed_at = datetime.now(timezone.utc).isoformat()
 
+                # Probe duration up front. ~50-100ms via ffprobe; cheap
+                # and lets the gallery gate features (split button) on
+                # duration without N ffprobes per page load. None on
+                # failure — UI treats NULL as "unknown" gracefully.
+                try:
+                    dur = get_duration_seconds(filepath)
+                except Exception:
+                    dur = None
+                if dur is not None and dur <= 0:
+                    dur = None
+
                 await db.execute(
-                    "INSERT INTO assets (id, filename, path, game, created_at, indexed_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
-                    (asset_id, filename, filepath, game, created_at, indexed_at),
+                    "INSERT INTO assets "
+                    "(id, filename, path, game, created_at, indexed_at, duration_seconds) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (asset_id, filename, filepath, game, created_at, indexed_at, dur),
                 )
                 # Auto-extract a poster frame so the gallery has something
                 # to show on first paint. Best-effort — never fails the scan.
@@ -92,6 +104,56 @@ async def list_assets():
         return [AssetOut(**dict(row)) for row in rows]
     finally:
         await db.close()
+
+
+async def _backfill_durations_job(asset_ids: list[tuple[str, str]]) -> None:
+    """Background worker: ffprobe each (id, path) and UPDATE the row.
+
+    Independent connection (background task) — never blocks request
+    handlers. Each ffprobe is ~50-100ms; sequentialised on purpose so
+    we don't spawn 130 subprocesses at once.
+    """
+    db = await get_db()
+    try:
+        for asset_id, path in asset_ids:
+            try:
+                dur = await asyncio.to_thread(get_duration_seconds, path)
+            except Exception:
+                dur = 0.0
+            if dur <= 0:
+                continue  # leave NULL; will retry on next backfill call
+            await db.execute(
+                "UPDATE assets SET duration_seconds = ? WHERE id = ?",
+                (dur, asset_id),
+            )
+            await db.commit()
+    finally:
+        await db.close()
+
+
+@router.post("/assets/backfill_durations")
+async def backfill_durations():
+    """Backfill `duration_seconds` for any asset row where it's still NULL.
+
+    One-shot maintenance endpoint — safe to call repeatedly. Existing
+    rows from before the duration column shipped are missing this data,
+    and the gallery uses duration to gate features (e.g. the "split
+    into games" button only shows on > 1hr recordings). Returns the
+    count of rows that will be probed; the actual ffprobes run in a
+    background task so the response returns immediately.
+    """
+    db = await get_db()
+    try:
+        rows = await db.execute_fetchall(
+            "SELECT id, path FROM assets WHERE duration_seconds IS NULL"
+        )
+        pending = [(dict(r)["id"], dict(r)["path"]) for r in rows]
+    finally:
+        await db.close()
+
+    if pending:
+        _track(_backfill_durations_job(pending))
+    return {"queued": len(pending)}
 
 
 @router.post("/assets/{asset_id}/thumbnail")
@@ -340,20 +402,30 @@ async def _run_ingest_url_job(job_id: str, url: str, game: str) -> None:
         existing = await db.execute_fetchall(
             "SELECT id FROM assets WHERE path = ?", (path,)
         )
+        try:
+            dur = await asyncio.to_thread(get_duration_seconds, path)
+        except Exception:
+            dur = None
+        if dur is not None and dur <= 0:
+            dur = None
+
         if existing:
             asset_id = dict(existing[0])["id"]
             await db.execute(
-                "UPDATE assets SET source_origin = 'downloaded' WHERE id = ?",
-                (asset_id,),
+                "UPDATE assets "
+                "SET source_origin = 'downloaded', duration_seconds = ? "
+                "WHERE id = ?",
+                (dur, asset_id),
             )
         else:
             asset_id = str(uuid.uuid4())
             now = datetime.now(timezone.utc).isoformat()
             await db.execute(
                 "INSERT INTO assets "
-                "(id, filename, path, game, created_at, indexed_at, source_origin) "
-                "VALUES (?, ?, ?, ?, ?, ?, 'downloaded')",
-                (asset_id, filename, path, game, now, now),
+                "(id, filename, path, game, created_at, indexed_at, "
+                " source_origin, duration_seconds) "
+                "VALUES (?, ?, ?, ?, ?, ?, 'downloaded', ?)",
+                (asset_id, filename, path, game, now, now, dur),
             )
         await db.commit()
         await _finish_job(db, job_id, output_path=asset_id)
@@ -442,11 +514,15 @@ async def _run_split_job(job_id: str, asset: dict) -> None:
                 continue
 
             asset_id = str(uuid.uuid4())
+            # We know the segment duration from the planned split window —
+            # cheaper + more accurate than re-probing the cut file (which
+            # may have a 0-2s keyframe snap on either end).
+            child_duration = max(0.0, seg.end - seg.start)
             await db.execute(
                 "INSERT INTO assets "
                 "(id, filename, path, game, created_at, indexed_at, "
-                " source_origin, parent_asset_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, 'imported', ?)",
+                " source_origin, parent_asset_id, duration_seconds) "
+                "VALUES (?, ?, ?, ?, ?, ?, 'imported', ?, ?)",
                 (
                     asset_id,
                     child_name,
@@ -455,6 +531,7 @@ async def _run_split_job(job_id: str, asset: dict) -> None:
                     now,
                     now,
                     asset["id"],
+                    child_duration,
                 ),
             )
             new_ids.append(asset_id)

@@ -1230,6 +1230,24 @@ def regenerate_asset_thumbnail(asset_id: str) -> dict:
 
 
 @mcp.tool()
+def backfill_asset_durations() -> dict:
+    """Backfill cached ffprobe durations for assets indexed before the
+    duration column shipped.
+
+    The gallery uses `duration_seconds` to gate features (e.g. the
+    "split into games" button only shows on recordings longer than
+    1 hour). Existing rows from before this column shipped have NULL
+    duration and the gallery hides the button on them.
+
+    Safe to call repeatedly: only NULL rows are probed. Returns the
+    count of rows queued (work happens in a background task, so
+    durations populate over the next minute or so).
+    """
+    with _client() as c:
+        return c.post(f"{API}/assets/backfill_durations").json()
+
+
+@mcp.tool()
 def ingest_vod_url(url: str, game: str) -> dict:
     """Download a VOD from a URL (Twitch / YouTube / etc) into the
     local Outplayed media folder, ready to be analyzed + compiled like
