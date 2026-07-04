@@ -148,6 +148,11 @@ class OllamaBackend(VLMBackend):
             "model": model,
             "stream": False,
             "format": "json",
+            # Bump context window — Ollama defaults to 4096 tokens which
+            # gets blown out the moment a single image is attached
+            # (~8-9k tokens per frame at typical resolutions). 32k gives
+            # room for ~8 frames + prompts without truncation.
+            "options": {"num_ctx": 32768},
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user, **({"images": images} if images else {})},

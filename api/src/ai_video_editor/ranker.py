@@ -143,7 +143,10 @@ def rank_candidates(game: str | None, candidates: list[dict]) -> list[RankedCand
     )
     response = client.messages.parse(
         model=settings.ranker_model,
-        max_tokens=8000,
+        # Verbose reasons on scrim-length videos (15+ candidates) can
+        # blow past 8k; 32k is well under Haiku's ~200k output cap and
+        # gives headroom for candidates that carry rich metadata.
+        max_tokens=32000,
         system=[
             {
                 "type": "text",

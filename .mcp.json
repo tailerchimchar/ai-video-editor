@@ -11,6 +11,10 @@
       "env": {
         "AI_VIDEO_EDITOR_URL": "http://localhost:8000"
       }
+    },
+    "notion": {
+      "type": "http",
+      "url": "https://mcp.notion.com/mcp"
     }
   }
 }

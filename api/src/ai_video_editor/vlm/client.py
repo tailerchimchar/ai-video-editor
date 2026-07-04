@@ -8,6 +8,7 @@ caller. The `VLMBackend` protocol lives in `backends/base.py`.
 from __future__ import annotations
 
 from ..config import settings
+from .backends.anthropic_backend import AnthropicBackend
 from .backends.base import VLMBackend
 from .backends.ollama_backend import OllamaBackend
 
@@ -18,10 +19,18 @@ class UnsupportedVLMBackendError(RuntimeError):
 
 def select_backend(name: str | None = None) -> VLMBackend:
     """Return an instance of the backend named by `name` (or the env-configured
-    default). Raises `UnsupportedVLMBackendError` for unknown names."""
+    default). Raises `UnsupportedVLMBackendError` for unknown names.
+
+    Supported today:
+      - `ollama` — local Qwen3-VL via localhost:11434
+      - `anthropic` — hosted Claude vision (default; see cost + latency
+        rationale in the Notion doc "Cost + Performance Tradeoffs")
+    """
     resolved = (name or settings.vlm_backend).lower()
     if resolved == "ollama":
         return OllamaBackend()
+    if resolved == "anthropic":
+        return AnthropicBackend()
     raise UnsupportedVLMBackendError(
-        f"Unknown VLM_BACKEND {resolved!r}. Supported: ollama."
+        f"Unknown VLM_BACKEND {resolved!r}. Supported: ollama, anthropic."
     )

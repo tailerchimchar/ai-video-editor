@@ -42,6 +42,7 @@ def extract_frames(
     n_samples: int,
     duration_seconds: float,
     quality: int = 4,
+    max_width: int = 512,
 ) -> list[Path]:
     """Extract `n_samples` JPEGs from `video_path` into `out_dir`.
 
@@ -49,6 +50,12 @@ def extract_frames(
     failed to encode). Best-effort — a single failed frame doesn't
     abort the batch. `quality` is ffmpeg's `-q:v` scale (2 = best,
     31 = worst); default 4 balances size + legibility for a VLM.
+
+    `max_width` downscales frames to at most this many pixels wide
+    (preserving aspect). Small frames matter a LOT for Ollama's context
+    budget — a 1920x1080 frame encodes to ~8k tokens, while a 512-wide
+    frame is ~1.5k. Default 512 tuned so 8 frames + prompts fit in a
+    32k `num_ctx` window comfortably.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     times = plan_sample_times(duration_seconds, n_samples)
@@ -67,6 +74,8 @@ def extract_frames(
             video_path,
             "-frames:v",
             "1",
+            "-vf",
+            f"scale={max_width}:-2",
             "-q:v",
             str(quality),
             str(out_path),

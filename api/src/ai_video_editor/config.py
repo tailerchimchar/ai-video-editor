@@ -171,21 +171,32 @@ class Settings(BaseSettings):
     # live in vlm/game_hints/<game>.md. Ships Ollama-only ($0); a paid
     # backend can be added via the same VLMBackend protocol later.
     vlm_enabled: bool = True
-    vlm_backend: str = "ollama"  # only "ollama" today; hosted later
+    # Backend selection. Default is `anthropic` because on typical dev
+    # hardware (< 12 GB VRAM cards, no tensor cores) local Ollama can't
+    # finish a Qwen3-VL 4b call inside a workable timeout — the GTX 1660
+    # stress test on 2026-07-03 hit the 120s wall on every call. Hosted
+    # Claude Haiku 4.5 vision runs each call in ~2-3s at ~$0.01/call
+    # and keeps the user's GPU free for gaming. Flip to `ollama` to
+    # opt back into local (12 GB+ VRAM strongly recommended).
+    vlm_backend: str = "anthropic"
     vlm_max_clip_iter: int = 5
     vlm_max_comp_iter: int = 3
     vlm_frame_samples_clip: int = 8
     vlm_frame_samples_comp: int = 40
     # Ollama backend
     vlm_ollama_url: str = "http://localhost:11434"
-    # Model ladder — tried in order until one is reachable + pulled.
-    # Defaults tuned for 6 GB VRAM boxes (GTX 1660 class); bump on RTX
-    # cards. Setting either to empty string disables that tier.
+    # Ollama model ladder — tried in order until one is reachable + pulled.
+    # Setting either to empty string disables that tier.
     vlm_model_primary: str = "qwen3-vl:4b"
     vlm_model_fallback: str = "qwen3-vl:2b"
-    # Bounded per-call HTTP timeout for the VLM. On slower GPUs a call
-    # may take 20-30s; this cap prevents a wedged Ollama from stalling
-    # a whole compile forever.
+    # Anthropic backend. Haiku 4.5 is the default because a
+    # verdict-check-with-frames call is a "classify what you see" task,
+    # not a "reason deeply about it" task — cheaper model, same job.
+    # Bump to `claude-sonnet-4-6` if the verdicts drift.
+    vlm_anthropic_model: str = "claude-haiku-4-5"
+    # Bounded per-call HTTP timeout for the VLM. Anthropic replies land
+    # in 2-3s typically; Ollama can take much longer. 120s is a safety
+    # net that trips on both.
     vlm_call_timeout_seconds: float = 120.0
 
     model_config = {

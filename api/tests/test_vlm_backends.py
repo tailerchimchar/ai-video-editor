@@ -50,19 +50,35 @@ class _UnavailableBackend:
 # ---------------------------------------------------------------------
 
 
-def test_select_backend_ollama_default() -> None:
+def test_select_backend_ollama() -> None:
     backend = select_backend("ollama")
     assert backend.name == "ollama"
 
 
+def test_select_backend_anthropic() -> None:
+    backend = select_backend("anthropic")
+    assert backend.name == "anthropic"
+
+
 def test_select_backend_case_insensitive() -> None:
-    backend = select_backend("OLLAMA")
-    assert backend.name == "ollama"
+    assert select_backend("OLLAMA").name == "ollama"
+    assert select_backend("Anthropic").name == "anthropic"
 
 
 def test_select_backend_unknown_raises() -> None:
     with pytest.raises(UnsupportedVLMBackendError):
         select_backend("gemini-vision")
+
+
+def test_anthropic_backend_health_no_api_key() -> None:
+    """No key configured -> health reports unavailable with a clear reason,
+    never raises (mirrors the Ollama fallback semantics)."""
+    from ai_video_editor.vlm.backends.anthropic_backend import AnthropicBackend
+
+    backend = AnthropicBackend(api_key="")
+    result = backend.health()
+    assert result["ok"] is False
+    assert "ANTHROPIC_API_KEY" in result["reason"]
 
 
 # ---------------------------------------------------------------------

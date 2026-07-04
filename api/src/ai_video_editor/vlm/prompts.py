@@ -94,16 +94,29 @@ def load_game_hints(game: str | None) -> tuple[str, str]:
     """Return (`hint_text`, `resolved_hint_name`).
 
     Resolution order:
-      1. `<game>.md` if the file exists
-      2. `_default.md`
+      1. `<game>.md` if the file exists (case-insensitive)
+      2. Substring match against known game-hint filenames
+         (e.g. asset `game="League of Legends"` -> `league.md`,
+         `"League of Legends_05-29-2026_..."` -> `league.md`)
+      3. `_default.md`
 
     Never raises — missing hints degrade to a minimal generic prompt
     rather than crashing the compile.
     """
     if game:
-        specific = _HINTS_DIR / f"{game.lower()}.md"
+        g = game.lower().strip()
+        specific = _HINTS_DIR / f"{g}.md"
         if specific.is_file():
             return specific.read_text(encoding="utf-8"), specific.stem
+        # Substring match — Outplayed session folders / display names
+        # often carry the game as a prefix ("League of Legends", "Valorant")
+        # so a simple `<name> in game` catches most real-world inputs.
+        for candidate in _HINTS_DIR.glob("*.md"):
+            stem = candidate.stem
+            if stem.startswith("_"):
+                continue
+            if stem in g:
+                return candidate.read_text(encoding="utf-8"), stem
     default = _HINTS_DIR / "_default.md"
     if default.is_file():
         return default.read_text(encoding="utf-8"), "_default"
