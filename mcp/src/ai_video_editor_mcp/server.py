@@ -1266,6 +1266,93 @@ def vlm_health() -> dict:
 
 
 @mcp.tool()
+def compile_shorts(
+    asset_id: str,
+    mode: str,
+    topic: str | None = None,
+    music_path: str | None = None,
+) -> dict:
+    """Render YouTube Shorts / TikTok / Reels-ready 9:16 videos from a
+    game's highlights folder. Requires the asset to already have been
+    analyzed with `cut=True` (so the highlights folder + clip files
+    exist on disk).
+
+    Two modes:
+
+    - `voiceover` — 1 clip per short, source audio ducked to 20% so
+      you can dub your own narration on top in your DAW. Best for
+      "how I set up this play"-style commentary shorts. The generated
+      `index.md` includes a suggested voice-over prompt per short
+      (e.g. "How I set up this kill in laning phase").
+    - `montage` — 2-N adjacent clips packed into one short (chronological
+      order). Optional royalty-free music bed via `music_path` param
+      or the `SHORTS_DEFAULT_MUSIC_PATH` config setting.
+
+    `topic` filters which narrative buckets get compiled. Available
+    buckets: `first_blood`, `laning_phase`, `mid_game`, `late_game`,
+    `objective_steal`, `multikill`, `teamfight`, `outplay`. Substring
+    match, case-insensitive — `topic="kill"` matches `multikill`. Omit
+    to compile all non-empty buckets. Preview available buckets with
+    `list_shorts_topics` before committing.
+
+    Deterministic: same asset + same args -> same output files. Every
+    short passes through the existing VLM coherence check; results
+    land in `index.md`.
+
+    Output folder: `WORKSPACE/shorts/<asset-stem>_<mode>/`. Filenames
+    are `short_<NN>_<bucket>_<mmss>.mp4` sorted chronologically by
+    each short's earliest clip.
+
+    Returns the job result — poll internally handled; the tool waits
+    for completion. On timeout the job continues in the background.
+    """
+    if mode not in ("voiceover", "montage"):
+        return {"status": "failed", "error": "mode must be 'voiceover' or 'montage'"}
+    body: dict = {"mode": mode}
+    if topic:
+        body["topic"] = topic
+    if music_path:
+        body["music_path"] = music_path
+    with _client() as c:
+        job_id = c.post(f"{API}/assets/{asset_id}/shorts", json=body).json()["job_id"]
+        return _wait_for_job(c, job_id)
+
+
+@mcp.tool()
+def list_shorts(asset_id: str, mode: str | None = None) -> dict:
+    """List rendered shorts on disk for an asset.
+
+    Read-only — does not trigger a render. `mode` filters to
+    `voiceover` or `montage`; omit for both. Returns the folder path,
+    the list of short filenames, and the full `index.md` contents
+    (which include per-short bucket, title overlay, VO prompt, music
+    used, and VLM coherence verdict).
+    """
+    params = f"?mode={mode}" if mode in ("voiceover", "montage") else ""
+    with _client() as c:
+        return c.get(f"{API}/assets/{asset_id}/shorts{params}").json()
+
+
+@mcp.tool()
+def list_shorts_topics(asset_id: str) -> dict:
+    """Preview which narrative buckets are available for this asset
+    without rendering anything.
+
+    Reads the highlights folder + `index.json`, runs the bucketing
+    rules (phase-based + event-based + adjacency-based), and returns
+    a per-bucket clip count with a small clip preview each. Requires
+    the asset to have been analyzed with `cut=True` first.
+
+    Use this before `compile_shorts` to know:
+    - Which buckets have enough clips to compile
+    - Which clips fall below the hype threshold (dropped)
+    - Whether you want to filter with `topic=<bucket>` or compile all
+    """
+    with _client() as c:
+        return c.get(f"{API}/assets/{asset_id}/shorts/topics").json()
+
+
+@mcp.tool()
 def vlm_review_compilation(
     compilation_id: str,
     max_passes: int | None = None,

@@ -21,6 +21,32 @@ Reach for this skill when the task touches ANY of:
 
 If the task is about compilation lifecycle (build → mutate → render → revert) more broadly, see [[compilation-expert]]. If it's about the MCP tool surface, see [[mcp-expert]].
 
+## Recent changes (as of 2026-07-04) — read before editing
+
+Three things landed after the initial skill was written; anyone touching related code should know:
+
+- **Rampage windowing fix** — `highlights.py::_window_anchor` now unions the anchor rule (`anchor - pre .. anchor + post`) with the ranker's `suggested_start_seconds` / `suggested_end_seconds`. Capped at `settings.highlight_max_seconds` (default 120s). When the ranker clusters multiple kills into one candidate (a rampage), its window is used to extend outward — no more chopped nexus rampages. `_window_anchor` used to be pure anchor-rule; do NOT revert without reading the tests at `tests/test_highlights.py::test_window_anchor_extends_to_ranker_window_when_wider`.
+
+- **Label promotion for audio-derived candidates** — `candidates/service.py::promote_audio_event_types` runs at end of `compute_candidates`. Any `audio_peak` or `transcript_keyword` candidate whose window is within `_AUDIO_PROMOTION_TOLERANCE_SECONDS` (20s) of a Riot/cv_kda kill/death/assist gets its `event_type` promoted to the visible label. Old `metadata.promoted_from` preserves the original label for trace visibility. The historical `funny_audio` event_type is now `audio_peak` at emit time; `event_window_overrides` in `config.py` keeps both keys for backward compat with pre-2026-07 DB rows.
+
+- **Chronological highlights folder** — `highlights.py::build_highlights` sorts kept rankings by `suggested_start_seconds` (was: `hype_score` descending). The folder reads as a log of the game; filenames `01_..., 02_...` walk play time. If a caller needs a hype-first order, that's the `compile_highlights(order="hook"|"hype")` layer's job, not the highlights folder.
+
+## Recent: Shorts pipeline (informal, MVP)
+
+There is no `compile_shorts` endpoint or MCP tool yet — Shorts are being hand-generated via direct ffmpeg from validated clips (see the Notion doc for the pro-tier rubric). When productizing:
+
+- 9:16 aspect (`aspect="9:16"` in existing compile path — passes through `aspect_filter()`)
+- Blur-fill background pattern (16:9 gameplay centered vertically, blurred+scaled version fills top/bottom bars). Filter graph shape:
+  ```
+  [0:v]split=2[a][b];
+  [a]scale=720:-2:flags=lanczos,setsar=1[fg];
+  [b]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,boxblur=25:2,setsar=1[bg];
+  [bg][fg]overlay=(W-w)/2:(H-h)/2
+  ```
+- ~30-55s duration cap (Shorts algorithm sweet spot)
+- Output goes to `WORKSPACE_DIR/shorts/<game>_<date>/`
+- Pro-tier follow-ups (not in MVP): hook-edit (payoff-first), kill-moment zoom via `apply_zoom` at the peak, music bed (royalty-free), dynamic KDA overlay from cv_kda data, face-cam bubble (blocked on user recording it)
+
 ## Mental model
 
 Two layers, cleanly separated.

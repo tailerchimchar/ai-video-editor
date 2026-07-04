@@ -86,7 +86,13 @@ def compute_candidates(
                     "audio_peak",
                     peak["start_seconds"],
                     peak["end_seconds"],
-                    "funny_audio",
+                    # Honest label — this is JUST a loud audio moment.
+                    # The `promote_audio_event_types` pass upgrades it to
+                    # `kill` / `death` / `assist` when a nearby visible
+                    # event fires. The historical `funny_audio` label
+                    # incorrectly implied humor content the finder never
+                    # verified.
+                    "audio_peak",
                     peak["confidence"],
                     {
                         "duration_seconds": round(duration, 2),
@@ -133,4 +139,106 @@ def compute_candidates(
             )
         )
 
+    # Promote event_type on audio-derived candidates when a visible
+    # kill/death/assist happened nearby. Without this, audio_peak clips
+    # get shipped as event_type='audio_peak' even when they anticipate
+    # or celebrate a real Riot/cv_kda kill — which then confuses the VLM
+    # ("I can't verify an audio event from silent frames"). The fix
+    # belongs here, not in the ranker or the VLM prompt: the candidate
+    # label should match the visible truth.
+    rows = promote_audio_event_types(rows)
+
     return rows, {"riot": riot_status}
+
+
+_AUDIO_SOURCES = frozenset({"audio_peak", "transcript_keyword"})
+_VISIBLE_SOURCES = frozenset({"riot_api", "cv_kda"})
+_VISIBLE_EVENTS = frozenset({"kill", "death", "assist", "ace", "pentakill",
+                             "quadrakill", "doublekill", "teamfight",
+                             "baron", "dragon", "objective"})
+
+
+# Seconds of slack around a visible event for the audio promoter to
+# still count as "same moment". A loud audio peak that anticipates OR
+# celebrates a kill often lands 10-20 seconds away from the kill's
+# exact timestamp; strict overlap misses those. The `cluster_gap_seconds`
+# (30s) sets the ranker's cluster boundary; we use a smaller value
+# here so distant events don't wrongly promote each other.
+_AUDIO_PROMOTION_TOLERANCE_SECONDS = 20.0
+
+
+def promote_audio_event_types(
+    rows: list[dict],
+    *,
+    tolerance_seconds: float = _AUDIO_PROMOTION_TOLERANCE_SECONDS,
+) -> list[dict]:
+    """Replace audio-derived `event_type` with the visible event that
+    fires nearby (within `tolerance_seconds`).
+
+    Pure: consumes and returns candidate rows only, no I/O. Written as a
+    top-level helper so it's unit-testable without spinning up the whole
+    `compute_candidates` pipeline. Deterministic ordering — same input →
+    same output.
+
+    Rule:
+      - Only touch rows with `source in _AUDIO_SOURCES` (audio_peak +
+        transcript_keyword)
+      - Look for any row with `source in _VISIBLE_SOURCES` whose
+        window is within `tolerance_seconds` of the audio row's window
+        (proximity, not strict overlap — a loud reaction can precede
+        or celebrate a kill by ~15s and still be the same moment)
+      - If found, and the visible row's `event_type` is a real gameplay
+        event (kill / death / assist / etc), copy that `event_type`
+        onto the audio row and stash `metadata.promoted_from` so the
+        trace still shows what fired originally
+      - Otherwise leave the audio row alone (there's no visible
+        counterpart, so `audio_peak` is honest)
+
+    We do NOT drop the audio row — its confidence + timing carry the
+    audio signal, which the ranker still wants as a boost. Only the
+    label changes.
+    """
+    visible = [
+        r
+        for r in rows
+        if r.get("source") in _VISIBLE_SOURCES
+        and r.get("event_type") in _VISIBLE_EVENTS
+    ]
+    if not visible:
+        return rows
+
+    out: list[dict] = []
+    for r in rows:
+        if r.get("source") not in _AUDIO_SOURCES:
+            out.append(r)
+            continue
+        a_start = float(r.get("start_seconds", 0.0))
+        a_end = float(r.get("end_seconds", 0.0))
+        best: dict | None = None
+        best_conf = -1.0
+        for v in visible:
+            v_start = float(v.get("start_seconds", 0.0))
+            v_end = float(v.get("end_seconds", 0.0))
+            # Proximity within tolerance — the gap between the two
+            # intervals must be <= tolerance_seconds. Strict overlap
+            # is a subset (gap = 0).
+            gap = max(0.0, max(v_start - a_end, a_start - v_end))
+            if gap > tolerance_seconds:
+                continue
+            conf = float(v.get("confidence") or 0.0)
+            if conf > best_conf:
+                best_conf = conf
+                best = v
+        if best is None:
+            out.append(r)
+            continue
+        # Copy — preserve `metadata.promoted_from` for trace + testability
+        promoted = dict(r)
+        promoted["metadata"] = {
+            **(r.get("metadata") or {}),
+            "promoted_from": r.get("event_type"),
+            "promoted_by_source": best.get("source"),
+        }
+        promoted["event_type"] = best.get("event_type")
+        out.append(promoted)
+    return out

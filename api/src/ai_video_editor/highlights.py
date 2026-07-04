@@ -133,10 +133,20 @@ def _event_override(event_type: str | None) -> tuple[float, float] | None:
 
 
 def _window_anchor(cand: dict, r: dict, duration: float) -> tuple[float, float]:
-    """Center on the exact event moment ± per-event (or global) pre/post.
+    """Center on the exact event moment ± per-event (or global) pre/post,
+    then extend to whatever wider window the ranker suggested.
 
     Anchor = explicit `metadata.anchor_seconds` (Riot kill) or, for older
     candidates without it, the symmetric midpoint of the candidate window.
+
+    Rampage fix: when the ranker clustered multiple kills into one
+    candidate (e.g. an assist→kill→kill→double-kill burst), its
+    `suggested_start/end` span the whole sequence. The anchor rule
+    alone would truncate the payoff after `anchor + post`. Taking the
+    UNION of both windows preserves the per-event pre/post as a
+    minimum while letting the ranker's smarter cluster window expand
+    outward. Capped at `highlight_max_seconds` so a pathological cluster
+    can't produce a 5-minute clip.
     """
     meta = cand.get("metadata") or {}
     anchor = meta.get("anchor_seconds")
@@ -144,7 +154,20 @@ def _window_anchor(cand: dict, r: dict, duration: float) -> tuple[float, float]:
         anchor = (cand.get("start_seconds", 0) + cand.get("end_seconds", 0)) / 2
     override = _event_override(cand.get("event_type"))
     pre, post = override or (settings.highlight_pre_seconds, settings.highlight_post_seconds)
-    return _clamp(anchor - pre, anchor + post, duration)
+    start, end = anchor - pre, anchor + post
+
+    sug_start = r.get("suggested_start_seconds")
+    sug_end = r.get("suggested_end_seconds")
+    if sug_start is not None:
+        start = min(start, float(sug_start))
+    if sug_end is not None:
+        end = max(end, float(sug_end))
+
+    cap = float(settings.highlight_max_seconds)
+    if end - start > cap:
+        end = start + cap
+
+    return _clamp(start, end, duration)
 
 
 def _window_full(cand: dict, r: dict, duration: float) -> tuple[float, float]:
@@ -190,7 +213,14 @@ def build_highlights(asset: dict, rankings: list[dict], candidates: list[dict]) 
     Returns a summary dict (also persisted as index.json)."""
     cand_by_id = {c["id"]: c for c in candidates}
     kept = [r for r in rankings if r.get("keep")]
-    kept.sort(key=lambda r: r.get("hype_score", 0), reverse=True)
+    # Chronological: the highlights folder is a log of the game as it
+    # happened. Ranker decides WHICH to keep via hype_score / keep flag;
+    # we just present survivors in game-time order so filename indexes
+    # (01_..., 02_...) match the play sequence and the preview reel
+    # feels like a coherent recap instead of a hype-shuffled montage.
+    # For a hype-first compile, use compile_highlights(order="hook"|
+    # "hype") — that's the layer where ordering choices belong.
+    kept.sort(key=lambda r: float(r.get("suggested_start_seconds", 0)))
 
     rel = relative_folder(asset, candidates)
     dest = settings.workspace_dir / rel

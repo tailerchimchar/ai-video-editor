@@ -5,13 +5,33 @@ name: ai-expert
 description: Project's AI/LLM expertise — the candidate-first architecture, the single Anthropic call, model choice, prompt caching, the process-level spend guard, Langfuse tracing, and why there is intentionally no RAG yet. Use when adding LLM calls, tuning the ranker, debugging traces, reasoning about token cost, or answering "should we use an LLM for X".
 ---
 
-## Central rule: exactly ONE Anthropic call in the whole app
+## Central rule: TWO Anthropic call surfaces (was: one)
 
-There is precisely one place this app talks to Anthropic:
-`api/src/ai_video_editor/ranker.py:144` — `client.messages.parse()`,
-invoked once per video from the rank job in
-`api/src/ai_video_editor/routers/analyze.py:187` via
-`asyncio.to_thread(rank_candidates, ...)`.
+**Update 2026-07-04**: this used to say "exactly ONE." That's no longer
+true — the hosted VLM backend also hits Anthropic. See below.
+
+Both Anthropic surfaces:
+
+1. `api/src/ai_video_editor/ranker.py:144` — `client.messages.parse()`,
+   invoked **once per video** from the rank job. Model
+   `claude-haiku-4-5`, `max_tokens=32000` (bumped from 8000 on
+   2026-07-04 after a 15-candidate scrim truncated at ~21KB). Ranks
+   candidate metadata; never sees video. Cost ~$0.03/rank.
+
+2. `api/src/ai_video_editor/vlm/backends/anthropic_backend.py::AnthropicBackend`
+   — `client.messages.create()` with base64 image blocks, invoked
+   **once per VLM iteration** (per-clip loop + whole-comp review).
+   Model `claude-haiku-4-5` for vision (default; overridable via
+   `VLM_ANTHROPIC_MODEL`). System prompt frozen + cached via
+   `cache_control: ephemeral` so retries on the same clip drop input
+   cost ~90%. Cost ~$0.01-0.02 per call. Typical compile: 10-30 VLM
+   calls = ~$0.20-0.50.
+
+Both surfaces are covered by `AnthropicInstrumentor` in `tracing.py`
+— no manual span-attach needed for `messages.create`. The ranker's
+`messages.parse` still needs the post-hoc `update_current_generation`
+call at `ranker.py:163-183` because `AnthropicInstrumentor` doesn't
+cover `parse`.
 
 Nothing else calls Anthropic. Not candidate generation. Not scan.
 Not transcript. Not compile. Not editing primitives. Not intros. Not

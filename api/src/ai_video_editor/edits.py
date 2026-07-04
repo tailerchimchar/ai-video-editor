@@ -60,6 +60,45 @@ def aspect_filter(aspect: str) -> str:
     return ""  # 16:9 / passthrough
 
 
+# Base 9:16 output resolution — TikTok / Reels / Shorts canonical.
+_SHORT_WIDTH = 720
+_SHORT_HEIGHT = 1280
+
+
+def blur_fill_9x16() -> str:
+    """Convert a 16:9 source into 9:16 WITHOUT cropping — the full frame
+    stays visible in the vertical center; a blurred, scaled copy of the
+    same frame fills the top+bottom bars.
+
+    Preferred over `aspect_filter("9:16")` for gameplay footage where
+    edge HUD elements matter (League killfeed top-right, minimap
+    bottom-right, portrait bottom-left, item bar bottom-center). The
+    crop-based aspect filter chops those off; this one preserves them.
+
+    Emits a `filter_complex`-shaped chain (uses labels + a `split`), so
+    callers must use ffmpeg's `-filter_complex` flag, NOT `-vf`. The
+    output label is `[out]`.
+
+    Filter graph:
+      [0:v]split=2 -> [fg][bg]
+      [fg]  scale=720:-2 (preserves 16:9 aspect, ~720x405)
+      [bg]  scale=720:1280 (fills, then boxblur)
+      overlay[fg] onto [bg] centered
+
+    Reference: `.claude/skills/editing-expert/SKILL.md:41-44` for the
+    same shape (kept in the skill for future callers).
+    """
+    return (
+        f"[0:v]split=2[fga][bga];"
+        f"[fga]scale={_SHORT_WIDTH}:-2:flags=lanczos,setsar=1[fg];"
+        f"[bga]scale={_SHORT_WIDTH}:{_SHORT_HEIGHT}:"
+        f"force_original_aspect_ratio=increase:flags=lanczos,"
+        f"crop={_SHORT_WIDTH}:{_SHORT_HEIGHT},"
+        f"boxblur=luma_radius=25:luma_power=2,setsar=1[bg];"
+        f"[bg][fg]overlay=(W-w)/2:(H-h)/2[out]"
+    )
+
+
 def resolve_roi(roi: str | dict, factor: float) -> tuple[str, str, str, str]:
     """Return ffmpeg (w, h, x, y) expressions for the requested ROI.
 

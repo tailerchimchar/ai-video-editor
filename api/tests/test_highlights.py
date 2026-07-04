@@ -103,6 +103,45 @@ def test_window_anchor_falls_back_to_globals_when_no_event_override():
     assert s == 102.5 and e == 117.5
 
 
+def test_window_anchor_extends_to_ranker_window_when_wider():
+    """Rampage fix: when the ranker clustered multiple kills into one
+    candidate, its suggested window is wider than the anchor rule alone.
+    The anchor window should extend outward to the ranker's window."""
+    cand = {"start_seconds": 100, "end_seconds": 120,
+            "event_type": "kill", "metadata": {"anchor_seconds": 110}}
+    # Ranker suggested a rampage 90 → 140s (spans several kills).
+    rank = {"suggested_start_seconds": 90.0, "suggested_end_seconds": 140.0}
+    s, e = _window_anchor(cand, rank, 200)
+    # Anchor rule alone: 107 → 118. Ranker's window is wider both ends.
+    # Union: min(107, 90) = 90 ; max(118, 140) = 140.
+    assert s == 90.0
+    assert e == 140.0
+
+
+def test_window_anchor_ignores_ranker_window_when_narrower():
+    """A narrow ranker window doesn't shrink the anchor-rule minimum."""
+    cand = {"start_seconds": 100, "end_seconds": 120,
+            "event_type": "kill", "metadata": {"anchor_seconds": 110}}
+    # Ranker's window is inside the anchor window; anchor's floor holds.
+    rank = {"suggested_start_seconds": 109.0, "suggested_end_seconds": 112.0}
+    s, e = _window_anchor(cand, rank, 200)
+    assert s == 107.0
+    assert e == 118.0
+
+
+def test_window_anchor_caps_at_max_seconds():
+    """A pathological ranker window past `highlight_max_seconds` is
+    clamped down. Prevents multi-minute clips from a mis-cluster."""
+    from ai_video_editor.config import settings
+
+    cand = {"start_seconds": 0, "end_seconds": 10,
+            "event_type": "kill", "metadata": {"anchor_seconds": 5}}
+    # Ranker suggests a 3-minute window — clamped to `highlight_max_seconds`.
+    rank = {"suggested_start_seconds": 0.0, "suggested_end_seconds": 200.0}
+    s, e = _window_anchor(cand, rank, 1000)
+    assert e - s <= settings.highlight_max_seconds
+
+
 def test_cut_window_dispatches_by_source_and_anchor():
     # Any candidate with anchor_seconds → anchor strategy (open/closed
     # for *future* sources)

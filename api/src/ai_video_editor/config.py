@@ -94,6 +94,12 @@ class Settings(BaseSettings):
     # context/lead-up; tune to taste.
     highlight_pre_seconds: float = 7.5
     highlight_post_seconds: float = 7.5
+    # Ceiling on any single highlight clip's length. Anchor windowing
+    # unions with the ranker's suggested window (so rampages don't get
+    # chopped mid-double-kill); this cap keeps a pathological ranker
+    # cluster from producing a multi-minute clip. Well past a real
+    # rampage/teamfight length.
+    highlight_max_seconds: float = 120.0
 
     # Per-event-type window overrides. Different events deserve different
     # pacing: a kill needs short pre + long post (milk the celebration),
@@ -123,7 +129,9 @@ class Settings(BaseSettings):
             # CV/KDA — emitted by candidates/cv_kda.py
             "death": (4.0, 4.0),  # short context both sides, less milking
             "assist": (3.0, 6.0),  # like a kill but lighter
-            # audio_peak source (loud regions)
+            # audio_peak source (loud regions). Historical `funny_audio`
+            # key kept as an alias for pre-2026-07 rows still in the DB.
+            "audio_peak": (3.0, 6.0),
             "funny_audio": (3.0, 6.0),
             # transcript_keyword source — emits these two categories
             "hype_callout": (3.0, 6.0),
@@ -198,6 +206,32 @@ class Settings(BaseSettings):
     # in 2-3s typically; Ollama can take much longer. 120s is a safety
     # net that trips on both.
     vlm_call_timeout_seconds: float = 120.0
+
+    # --- YouTube Shorts pipeline -----------------------------------------
+    # `compile_shorts` reads the highlights folder, buckets clips by
+    # narrative intent, and outputs 9:16 blur-fill shorts ready for
+    # posting. Rule-based + deterministic: same asset + args -> same
+    # output bytes. See docs/shorts.md (queued) or the plan file for
+    # the full bucket rules.
+    shorts_hype_threshold: float = 0.6
+    shorts_max_duration_seconds: float = 60.0
+    shorts_min_duration_seconds: float = 15.0
+    # Empty string = no default music. If set, path is used for montage
+    # mode when the caller doesn't pass its own `music_path`.
+    shorts_default_music_path: str = ""
+    # VO mode: source game audio is ducked to this fraction of its
+    # original volume so a dubbed voice-over sits cleanly on top.
+    shorts_source_duck_volume: float = 0.20
+    # Montage mode: background music mixes in at this fraction under
+    # full-volume source. Static amix (no sidechain in MVP).
+    shorts_montage_music_volume: float = 0.40
+    # Adjacency window for the greedy montage grouper. Clips within a
+    # bucket whose anchor times are within this many seconds get packed
+    # into the same short.
+    shorts_adjacency_seconds: float = 30.0
+    # Hard cap on clips per single short (safety against a giant
+    # cluster producing a 3-minute "short").
+    shorts_max_clips_per_short: int = 5
 
     model_config = {
         "env_file": ".env",

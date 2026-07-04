@@ -16,6 +16,7 @@ from .routers import (
     league,
     projects,
     sfx,
+    shorts,
     vlm,
 )
 from .tracing import flush_tracing, init_tracing
@@ -43,6 +44,7 @@ app.include_router(league.router, prefix="/api/v1")
 app.include_router(intros.router, prefix="/api/v1")
 app.include_router(feedback.router, prefix="/api/v1")
 app.include_router(vlm.router, prefix="/api/v1")
+app.include_router(shorts.router, prefix="/api/v1")
 
 # Serve workspace files directly so the webapp's <video> elements can
 # stream `compilation.mp4`, fetch `thumbnail.jpg`, etc. Source recordings
