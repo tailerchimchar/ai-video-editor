@@ -444,15 +444,29 @@ def test_indexed_layout_chain_unknown_raises() -> None:
 
 
 def test_cropped_hud_graph_contains_hud_overlays() -> None:
-    """The cropped_hud filter graph must overlay killfeed + minimap
-    from the SOURCE (via split=3) — that's the whole point vs blur-fill."""
+    """The cropped_hud filter graph must overlay scoreline + minimap
+    from the SOURCE (via split=4) plus a blurred background — that's
+    the whole point vs blur-fill."""
     from ai_video_editor.edits import cropped_hud_9x16
 
     g = cropped_hud_9x16()
-    assert "split=3" in g
-    # Killfeed ROI (from _ROI_PRESETS['killfeed_lol'])
-    assert "iw*0.22:ih*0.28:iw*0.78:ih*0.08" in g
+    # 4-way split: main sharp crop + blur bg + scoreline + minimap
+    assert "split=4" in g
+    # Scoreline ROI — thin top-right strip capturing team kills / KDA / timer
+    assert "iw*0.22:ih*0.10:iw*0.78:ih*0.005" in g
     # Minimap ROI (from _ROI_PRESETS['minimap_lol'])
     assert "ih*0.22:ih*0.22:iw-ih*0.23:ih*0.77" in g
-    # Two overlays chained: killfeed onto bg, then minimap on top
-    assert g.count("overlay=") == 2
+    # Blur box for the letterbox fill
+    assert "boxblur" in g
+    # Three overlays: main-onto-blur, scoreline, minimap
+    assert g.count("overlay=") == 3
+
+
+def test_cropped_hud_zoom_out_scales_crop_width() -> None:
+    from ai_video_editor.edits import cropped_hud_9x16
+
+    # zoom_out=1.0 is pure 9:16 crop; higher values widen it
+    g_tight = cropped_hud_9x16(zoom_out=1.0)
+    g_wide = cropped_hud_9x16(zoom_out=1.5)
+    assert "ih*9/16*1.0000" in g_tight
+    assert "ih*9/16*1.5000" in g_wide

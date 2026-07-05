@@ -247,6 +247,12 @@ class Settings(BaseSettings):
     # 16:9 frame in a thin center strip with blurred bars top/bottom
     # (safer for non-League content but harder to see the play).
     shorts_layout: str = "cropped_hud"
+    # Zoom multiplier applied to the `cropped_hud` layout's center crop.
+    # 1.0 = pure 9:16 (very tight, fills the whole vertical frame).
+    # 1.2 = 20% wider crop of the source → more map / gameplay visible,
+    # blurred letterbox above and below the main image inside the 720x1280
+    # output. Higher = wider view, larger bars.
+    shorts_zoom_out: float = 1.44
 
     model_config = {
         "env_file": ".env",

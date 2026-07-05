@@ -65,52 +65,67 @@ _SHORT_WIDTH = 720
 _SHORT_HEIGHT = 1280
 
 
-def cropped_hud_9x16() -> str:
+def cropped_hud_9x16(zoom_out: float | None = None) -> str:
     """9:16 layout that trades a tighter play area for OVERLAID HUD.
 
-    The current `blur_fill_9x16` preserves the full 16:9 frame in a
-    thin center strip — everything's small and the play area feels
-    "far gone" on a phone screen. This layout:
+    Reads `settings.shorts_zoom_out` for the crop width multiplier when
+    not overridden per-call.
 
-      1. Crops the source to a much tighter center slice (pure 9:16
-         from the middle → 608px wide of 1920) and scales that to
-         720x1280 — the whole vertical frame is play area.
-      2. Extracts the League killfeed (top-right of source, ROI from
-         `killfeed_lol` in `_ROI_PRESETS`) and re-composites it in
-         the top-right of the vertical frame.
-      3. Extracts the minimap (bottom-right of source, from
-         `minimap_lol`) and re-composites it in the bottom-right of
-         the vertical.
-
-    The play area is ~3x larger than blur-fill at the cost of losing
-    the left-side HUD (item bar left half, champion portrait). Both
-    are Streamer / TikTok-native layouts; the tradeoff is deliberate.
-    Config `SHORTS_LAYOUT=cropped_hud|blur_fill` selects at compile
-    time.
+    Layout:
+      1. Crops the source to a `zoom_out * 9/16` slice of the width from
+         center. `zoom_out=1.0` matches the pure 9:16 crop (very tight);
+         `zoom_out=1.2` (default) shows ~20% more horizontal game map.
+      2. Scales the crop to 720 wide, preserving aspect. That leaves
+         the sharp foreground at some height ≤ 1280.
+      3. Fills the 720x1280 frame with a BLURRED, zoomed copy of the
+         same source so the letterbox areas top/bottom aren't dead
+         black bars — same aesthetic as `blur_fill_9x16` for the fill.
+      4. Overlays a top-right SCORELINE strip (team kills / personal KDA
+         / clock — the League HUD's top-right info block). Always
+         populated, unlike the killfeed which was empty most of the time.
+      5. Overlays the minimap (from `_ROI_PRESETS['minimap_lol']`)
+         bottom-right of the vertical.
 
     Filter graph shape: entry `[0:v]`, exit `[out]`, `filter_complex`.
     """
+    from .config import settings
+
+    factor = (
+        float(zoom_out)
+        if zoom_out is not None
+        else float(settings.shorts_zoom_out)
+    )
+    # crop_w = ih * (9/16) * factor — expressed at ffmpeg-eval time so
+    # the filter graph stays source-resolution-independent.
+    crop_w = f"ih*9/16*{factor:.4f}"
     return (
-        # Split the source three ways: main gameplay, killfeed strip,
-        # minimap square.
-        "[0:v]split=3[main][kf][mm];"
-        # Main: 9:16 crop from horizontal center, scaled up to fill
-        # the full 720x1280 vertical frame.
-        "[main]crop=ih*9/16:ih:(iw-ih*9/16)/2:0,"
-        "scale=720:1280:flags=lanczos,setsar=1[bg];"
-        # Killfeed: same ROI as `_ROI_PRESETS['killfeed_lol']` in this
-        # module. Scale to 240 wide (readable on a phone, doesn't
-        # dominate the play area).
-        "[kf]crop=iw*0.22:ih*0.28:iw*0.78:ih*0.08,"
-        "scale=240:-1:flags=lanczos,setsar=1[kfs];"
-        # Minimap: same as `_ROI_PRESETS['minimap_lol']`. Square, 240px.
+        # Split the source four ways: main sharp crop, blurred fill,
+        # scoreline strip (top-right HUD), minimap square.
+        "[0:v]split=4[main][blur_src][sl][mm];"
+        # Main: zoom-out center crop, scaled to 720 wide (height auto,
+        # ≤ 1280). Even height so the codec is happy.
+        f"[main]crop={crop_w}:ih:(iw-{crop_w})/2:0,"
+        "scale=720:-2:flags=lanczos,setsar=1[fg];"
+        # Blurred background fill — same recipe as blur_fill_9x16.
+        "[blur_src]scale=720:1280:force_original_aspect_ratio=increase:"
+        "flags=lanczos,crop=720:1280,boxblur=luma_radius=25:luma_power=2,"
+        "setsar=1[bg];"
+        # Center the sharp foreground on the blurred background.
+        "[bg][fg]overlay=(W-w)/2:(H-h)/2[main_composed];"
+        # Scoreline strip — team kills / personal KDA / clock lives in
+        # the top-right of League's HUD, always populated. Wider crop
+        # than the old killfeed (grabs 10% of source height starting at
+        # the very top) so the whole info block comes through. Scale to
+        # 320 wide (bigger than the old killfeed) for readability.
+        "[sl]crop=iw*0.22:ih*0.10:iw*0.78:ih*0.005,"
+        "scale=320:-1:flags=lanczos,setsar=1[sls];"
+        # Minimap: ROI = `_ROI_PRESETS['minimap_lol']`. Square, 240px.
         "[mm]crop=ih*0.22:ih*0.22:iw-ih*0.23:ih*0.77,"
         "scale=240:240:flags=lanczos,setsar=1[mms];"
-        # Overlay killfeed near top-right (16px margin, 60px from top
-        # so it doesn't overlap the title-overlay drawn later).
-        "[bg][kfs]overlay=W-w-16:60[step1];"
-        # Minimap bottom-right, above the item bar which lives in the
-        # source's own bottom stripe (visible in the tight-crop main).
+        # Scoreline overlay top-right (16px right margin, 20px from top
+        # since the strip is thin and doesn't fight the title drawtext).
+        "[main_composed][sls]overlay=W-w-16:20[step1];"
+        # Minimap bottom-right.
         "[step1][mms]overlay=W-w-16:H-h-40[out]"
     )
 
@@ -122,10 +137,13 @@ def cropped_hud_9x16() -> str:
 BLUR_FILL_9X16_LABELS: tuple[str, ...] = ("fga", "bga", "fg", "bg")
 CROPPED_HUD_9X16_LABELS: tuple[str, ...] = (
     "main",
-    "kf",
+    "blur_src",
+    "sl",
     "mm",
+    "fg",
     "bg",
-    "kfs",
+    "main_composed",
+    "sls",
     "mms",
     "step1",
 )
