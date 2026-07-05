@@ -65,6 +65,72 @@ _SHORT_WIDTH = 720
 _SHORT_HEIGHT = 1280
 
 
+def cropped_hud_9x16() -> str:
+    """9:16 layout that trades a tighter play area for OVERLAID HUD.
+
+    The current `blur_fill_9x16` preserves the full 16:9 frame in a
+    thin center strip — everything's small and the play area feels
+    "far gone" on a phone screen. This layout:
+
+      1. Crops the source to a much tighter center slice (pure 9:16
+         from the middle → 608px wide of 1920) and scales that to
+         720x1280 — the whole vertical frame is play area.
+      2. Extracts the League killfeed (top-right of source, ROI from
+         `killfeed_lol` in `_ROI_PRESETS`) and re-composites it in
+         the top-right of the vertical frame.
+      3. Extracts the minimap (bottom-right of source, from
+         `minimap_lol`) and re-composites it in the bottom-right of
+         the vertical.
+
+    The play area is ~3x larger than blur-fill at the cost of losing
+    the left-side HUD (item bar left half, champion portrait). Both
+    are Streamer / TikTok-native layouts; the tradeoff is deliberate.
+    Config `SHORTS_LAYOUT=cropped_hud|blur_fill` selects at compile
+    time.
+
+    Filter graph shape: entry `[0:v]`, exit `[out]`, `filter_complex`.
+    """
+    return (
+        # Split the source three ways: main gameplay, killfeed strip,
+        # minimap square.
+        "[0:v]split=3[main][kf][mm];"
+        # Main: 9:16 crop from horizontal center, scaled up to fill
+        # the full 720x1280 vertical frame.
+        "[main]crop=ih*9/16:ih:(iw-ih*9/16)/2:0,"
+        "scale=720:1280:flags=lanczos,setsar=1[bg];"
+        # Killfeed: same ROI as `_ROI_PRESETS['killfeed_lol']` in this
+        # module. Scale to 240 wide (readable on a phone, doesn't
+        # dominate the play area).
+        "[kf]crop=iw*0.22:ih*0.28:iw*0.78:ih*0.08,"
+        "scale=240:-1:flags=lanczos,setsar=1[kfs];"
+        # Minimap: same as `_ROI_PRESETS['minimap_lol']`. Square, 240px.
+        "[mm]crop=ih*0.22:ih*0.22:iw-ih*0.23:ih*0.77,"
+        "scale=240:240:flags=lanczos,setsar=1[mms];"
+        # Overlay killfeed near top-right (16px margin, 60px from top
+        # so it doesn't overlap the title-overlay drawn later).
+        "[bg][kfs]overlay=W-w-16:60[step1];"
+        # Minimap bottom-right, above the item bar which lives in the
+        # source's own bottom stripe (visible in the tight-crop main).
+        "[step1][mms]overlay=W-w-16:H-h-40[out]"
+    )
+
+
+# Labels that appear inside the two 9:16 filter graphs above. When the
+# shorts pipeline concats multiple clips into one output, each per-clip
+# instance of the graph needs its internal labels suffixed with the
+# clip index. Callers use these constants to do that rewrite.
+BLUR_FILL_9X16_LABELS: tuple[str, ...] = ("fga", "bga", "fg", "bg")
+CROPPED_HUD_9X16_LABELS: tuple[str, ...] = (
+    "main",
+    "kf",
+    "mm",
+    "bg",
+    "kfs",
+    "mms",
+    "step1",
+)
+
+
 def blur_fill_9x16() -> str:
     """Convert a 16:9 source into 9:16 WITHOUT cropping — the full frame
     stays visible in the vertical center; a blurred, scaled copy of the

@@ -401,3 +401,58 @@ def test_find_adjacent_indices_uses_running_last_not_first() -> None:
     clips = [_clip(f"{i}.mp4", anchor=i * 25) for i in range(4)]
     groups = _find_adjacent_indices(clips, 30)
     assert groups == [[0, 1, 2, 3]]
+
+
+# ---------------------------------------------------------------------
+# Layout switch — cropped_hud vs blur_fill filter graphs
+# ---------------------------------------------------------------------
+
+
+def test_indexed_layout_chain_cropped_hud_rewrites_labels() -> None:
+    from ai_video_editor.shorts import _indexed_layout_chain
+
+    c0 = _indexed_layout_chain("cropped_hud", 0)
+    c1 = _indexed_layout_chain("cropped_hud", 1)
+    # Entry label rewritten per index
+    assert "[0:v]" in c0 and "[0:v]" not in c1
+    assert "[1:v]" in c1
+    # Exit label always [vN]
+    assert c0.endswith("[v0]")
+    assert c1.endswith("[v1]")
+    # Internal labels get the index suffix so a concat doesn't collide
+    assert "[main0]" in c0
+    assert "[main1]" in c1
+    # blur-fill's labels shouldn't leak into cropped_hud
+    assert "[fga0]" not in c0
+
+
+def test_indexed_layout_chain_blur_fill_still_available() -> None:
+    from ai_video_editor.shorts import _indexed_layout_chain
+
+    chain = _indexed_layout_chain("blur_fill", 0)
+    assert "boxblur" in chain
+    assert chain.endswith("[v0]")
+
+
+def test_indexed_layout_chain_unknown_raises() -> None:
+    import pytest
+
+    from ai_video_editor.shorts import _indexed_layout_chain
+
+    with pytest.raises(ValueError):
+        _indexed_layout_chain("blimey", 0)
+
+
+def test_cropped_hud_graph_contains_hud_overlays() -> None:
+    """The cropped_hud filter graph must overlay killfeed + minimap
+    from the SOURCE (via split=3) — that's the whole point vs blur-fill."""
+    from ai_video_editor.edits import cropped_hud_9x16
+
+    g = cropped_hud_9x16()
+    assert "split=3" in g
+    # Killfeed ROI (from _ROI_PRESETS['killfeed_lol'])
+    assert "iw*0.22:ih*0.28:iw*0.78:ih*0.08" in g
+    # Minimap ROI (from _ROI_PRESETS['minimap_lol'])
+    assert "ih*0.22:ih*0.22:iw-ih*0.23:ih*0.77" in g
+    # Two overlays chained: killfeed onto bg, then minimap on top
+    assert g.count("overlay=") == 2

@@ -70,6 +70,15 @@ class CompileShortsBody(BaseModel):
             "Ignored in voiceover mode."
         ),
     )
+    layout: str | None = Field(
+        default=None,
+        description=(
+            "Visual layout: `cropped_hud` (default) or `blur_fill`. "
+            "cropped_hud shrinks the play area less and re-composites "
+            "the killfeed/minimap into the vertical frame. blur_fill "
+            "preserves the full 16:9 in a thin center strip."
+        ),
+    )
 
 
 async def _load_candidates(db, asset_id: str) -> list[dict]:
@@ -103,6 +112,7 @@ async def _run_shorts_job(
             mode=body.mode,
             topic=body.topic,
             music_path=body.music_path,
+            layout=body.layout,
         )
         if not result.get("ok"):
             await _finish_job(

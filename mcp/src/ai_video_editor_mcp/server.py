@@ -1271,6 +1271,7 @@ def compile_shorts(
     mode: str,
     topic: str | None = None,
     music_path: str | None = None,
+    layout: str | None = None,
 ) -> dict:
     """Render YouTube Shorts / TikTok / Reels-ready 9:16 videos from a
     game's highlights folder. Requires the asset to already have been
@@ -1313,6 +1314,8 @@ def compile_shorts(
         body["topic"] = topic
     if music_path:
         body["music_path"] = music_path
+    if layout:
+        body["layout"] = layout
     with _client() as c:
         job_id = c.post(f"{API}/assets/{asset_id}/shorts", json=body).json()["job_id"]
         return _wait_for_job(c, job_id)

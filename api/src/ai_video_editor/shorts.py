@@ -44,7 +44,14 @@ from pathlib import Path
 
 from .config import settings
 from .editing import trim_clip
-from .edits import _escape_drawtext, _escape_fontfile_path, blur_fill_9x16
+from .edits import (
+    BLUR_FILL_9X16_LABELS,
+    CROPPED_HUD_9X16_LABELS,
+    _escape_drawtext,
+    _escape_fontfile_path,
+    blur_fill_9x16,
+    cropped_hud_9x16,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -498,6 +505,30 @@ def _title_drawtext(title: str) -> str:
     )
 
 
+_LAYOUT_BUILDERS: dict[str, tuple[callable, tuple[str, ...]]] = {  # type: ignore[type-arg]
+    "blur_fill": (blur_fill_9x16, BLUR_FILL_9X16_LABELS),
+    "cropped_hud": (cropped_hud_9x16, CROPPED_HUD_9X16_LABELS),
+}
+
+
+def _indexed_layout_chain(layout: str, i: int) -> str:
+    """Return the per-clip filter chain for `layout` with all internal
+    labels suffixed by `i` so multiple clips can be concatenated.
+
+    Raises `ValueError` for unknown layouts.
+    """
+    if layout not in _LAYOUT_BUILDERS:
+        raise ValueError(
+            f"unknown shorts layout {layout!r}; "
+            f"expected one of {sorted(_LAYOUT_BUILDERS)}"
+        )
+    builder, labels = _LAYOUT_BUILDERS[layout]
+    chain = builder().replace("[0:v]", f"[{i}:v]")
+    for lbl in labels:
+        chain = chain.replace(f"[{lbl}]", f"[{lbl}{i}]")
+    return chain.replace("[out]", f"[v{i}]")
+
+
 def _build_filter_complex(
     *,
     n_video_inputs: int,
@@ -506,12 +537,14 @@ def _build_filter_complex(
     music_input_index: int | None,
     duck_volume: float,
     music_volume: float,
+    layout: str = "cropped_hud",
 ) -> str:
     """Assemble the full `-filter_complex` string.
 
     Video path:
-      For each source video, apply the blur-fill (yields `[vN]`), then
-      concat all into `[vall]`, then draw the title.
+      For each source video, apply the layout chain (`blur_fill` or
+      `cropped_hud`) yielding `[vN]`, concat all into `[vcat]`, then
+      draw the title.
     Audio path:
       Concat source audio -> `[asrc]`. If VO mode: volume=duck.
       If montage + music present: amix with the music track.
@@ -519,21 +552,8 @@ def _build_filter_complex(
     Result: `[vout][aout]`.
     """
     parts: list[str] = []
-
-    # Per-video blur-fill: label each as [v0], [v1], ...
     for i in range(n_video_inputs):
-        # Use the shared blur_fill_9x16 but rewrite [0:v]→[i:v] and
-        # [out]→[vi] so we can concat.
-        chain = (
-            blur_fill_9x16()
-            .replace("[0:v]", f"[{i}:v]")
-            .replace("[fga]", f"[fga{i}]")
-            .replace("[bga]", f"[bga{i}]")
-            .replace("[fg]", f"[fg{i}]")
-            .replace("[bg]", f"[bg{i}]")
-            .replace("[out]", f"[v{i}]")
-        )
-        parts.append(chain)
+        parts.append(_indexed_layout_chain(layout, i))
 
     # Concat video streams (video-only concat, `n=N:v=1:a=0`)
     concat_v_ins = "".join(f"[v{i}]" for i in range(n_video_inputs))
@@ -569,6 +589,7 @@ def render_short(
     *,
     mode: str,
     music_path: str | None = None,
+    layout: str | None = None,
 ) -> tuple[bool, str | None]:
     """Render one short from its plan. Returns (ok, error_message_or_none).
 
@@ -600,6 +621,7 @@ def render_short(
         music_input_index=music_input_index,
         duck_volume=duck,
         music_volume=music_vol,
+        layout=layout or settings.shorts_layout,
     )
 
     cmd = [
@@ -725,6 +747,7 @@ def build_shorts(
     mode: str,
     topic: str | None = None,
     music_path: str | None = None,
+    layout: str | None = None,
     run_vlm_check: bool = True,
 ) -> dict:
     """Top-level entry: bucket -> plan -> render -> VLM check -> index.md.
@@ -803,6 +826,7 @@ def build_shorts(
             music_path=resolved_music,
             run_vlm_check=run_vlm_check,
             max_iter=max_iter,
+            layout=layout,
         )
         results.append(result)
 
@@ -961,6 +985,7 @@ def _render_and_refine(
     music_path: str | None,
     run_vlm_check: bool,
     max_iter: int,
+    layout: str | None = None,
 ) -> RenderResult:
     """Render → VLM whole-comp review → refine loop.
 
@@ -984,7 +1009,11 @@ def _render_and_refine(
 
     for iteration in range(max_iter + 1):
         ok, err = render_short(
-            current_plan, out_path, mode=mode, music_path=music_path
+            current_plan,
+            out_path,
+            mode=mode,
+            music_path=music_path,
+            layout=layout,
         )
         if not ok:
             return RenderResult(

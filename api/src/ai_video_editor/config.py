@@ -240,6 +240,13 @@ class Settings(BaseSettings):
     # Adds one VLM call (~$0.02) + one re-render (~30s) per iteration.
     shorts_auto_fix_enabled: bool = True
     shorts_max_review_iter: int = 2
+    # Visual layout for shorts. `cropped_hud` (default) shrinks the
+    # play area less than blur-fill by cropping to pure 9:16 from the
+    # center + re-composites the League killfeed and minimap in the
+    # top-right and bottom-right corners. `blur_fill` keeps the full
+    # 16:9 frame in a thin center strip with blurred bars top/bottom
+    # (safer for non-League content but harder to see the play).
+    shorts_layout: str = "cropped_hud"
 
     model_config = {
         "env_file": ".env",
