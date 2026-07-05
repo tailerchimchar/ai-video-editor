@@ -1301,8 +1301,14 @@ def compile_shorts(
     land in `index.md`.
 
     Output folder: `WORKSPACE/shorts/<asset-stem>_<mode>/`. Filenames
-    are `short_<NN>_<bucket>_<mmss>.mp4` sorted chronologically by
-    each short's earliest clip.
+    are `short_<NN>_[HIGH_]<bucket>_<mmss>.mp4`.
+
+    **Voice-over mode is priority-ranked** — `short_01` is the user's
+    top-ranked category, not the earliest in-game moment. Ranking
+    (highest to lowest): laning-phase kills > 3+-kill multikills >
+    teamfights that "turn a game around" > everything else. The
+    `HIGH_` filename infix flags 3+-kill multikills. Montage mode
+    stays chronological (adjacency-cluster order preserved).
 
     Returns the job result — poll internally handled; the tool waits
     for completion. On timeout the job continues in the background.
@@ -1353,6 +1359,93 @@ def list_shorts_topics(asset_id: str) -> dict:
     """
     with _client() as c:
         return c.get(f"{API}/assets/{asset_id}/shorts/topics").json()
+
+
+@mcp.tool()
+def compile_cross_asset_montage(
+    game: str,
+    window: str = "week",
+    music_path: str | None = None,
+    layout: str | None = None,
+) -> dict:
+    """Compile ONE "best of" montage short from your top multikill
+    plays across EVERY session for `game` — not just one recording.
+
+    Sweeps `WORKSPACE/highlights/<game>/<session>/` folders inside
+    the time window, keeps only the multikill clusters (2+ adjacent
+    kills within 30 seconds), and ranks them across sessions:
+    kill-group size DESC (triples/quadras beat doubles), then hype
+    score DESC, then most-recent session first. Renders one 9:16
+    montage short using the same layout / audio / VLM check as
+    single-asset `compile_shorts`.
+
+    `window` options:
+    - `day`  — today and yesterday only
+    - `week` — last 7 days (great for a weekly "best of" post)
+    - `all`  — every session on disk (use when the week window is
+      empty; typical for testing on old recordings)
+
+    Output: `WORKSPACE/shorts/_cross_asset/<game>_<window>_<YYYY-MM-DD>/
+    best_of_[HIGH_]<window>_<date>.mp4` + an `index.md` that lists
+    every session scanned and every clip picked (with source folder,
+    kill-group size, and hype score). The `HIGH_` infix appears when
+    any 3+-kill cluster is included.
+
+    Deterministic: same folder state + same args → identical output.
+    Requires each source session's `analyze_asset(cut=True)` to have
+    already run (produces the highlights folder + clip files).
+
+    Poll internally — the tool waits for completion (typically
+    2-5 minutes depending on clip count).
+    """
+    if window not in ("day", "week", "all"):
+        return {"status": "failed", "error": "window must be 'day', 'week', or 'all'"}
+    body: dict = {"game": game, "window": window}
+    if music_path:
+        body["music_path"] = music_path
+    if layout:
+        body["layout"] = layout
+    with _client() as c:
+        job_id = c.post(f"{API}/shorts/cross_asset_montage", json=body).json()[
+            "job_id"
+        ]
+        return _wait_for_job(c, job_id)
+
+
+@mcp.tool()
+def preview_cross_asset_montage(game: str, window: str = "week") -> dict:
+    """Dry-run: preview WHICH clips would be compiled by
+    `compile_cross_asset_montage` — without rendering.
+
+    Reads every session folder for `game` inside the window, ranks the
+    multikill clips, and returns the top candidates with their source
+    session, kill-group size, hype score, and reason. Cheap — walks
+    JSON files only, no ffmpeg.
+
+    Use this before committing to a 5-minute compile to sanity-check
+    the pick.
+    """
+    if window not in ("day", "week", "all"):
+        return {"status": "failed", "error": "window must be 'day', 'week', or 'all'"}
+    with _client() as c:
+        return c.get(
+            f"{API}/shorts/cross_asset_montage/preview?game={game}&window={window}"
+        ).json()
+
+
+@mcp.tool()
+def list_cross_asset_shorts(game: str | None = None) -> dict:
+    """Enumerate cross-asset "best of" shorts already rendered on disk
+    under `WORKSPACE/shorts/_cross_asset/`.
+
+    Read-only. Filter by `game` (substring match on folder prefix) to
+    narrow down. Returns one entry per rendered folder with the folder
+    path, its list of `.mp4` filenames, and whether `index.md` is
+    present.
+    """
+    params = f"?game={game}" if game else ""
+    with _client() as c:
+        return c.get(f"{API}/shorts/cross_asset_montage{params}").json()
 
 
 @mcp.tool()

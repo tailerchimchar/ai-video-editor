@@ -39,7 +39,7 @@ import re
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from .config import settings
@@ -84,6 +84,23 @@ _OUTPLAY_PATTERNS = tuple(
         r"\b3v[4-5]\b",
         r"solo kill of two",
     )
+)
+
+# Voice-over priority tiers. Higher = surfaces earlier in the render
+# list, so `short_01_*` is always the user's top-ranked category.
+# User's stated ranking: laning-phase kill > 3+-kill multikill >
+# teamfight-turnaround > everything else.
+_PRIORITY_LANING_KILL = 300
+_PRIORITY_MULTIKILL_3PLUS = 200
+_PRIORITY_TEAMFIGHT_TURN = 100
+_PRIORITY_DEFAULT = 0
+
+# "Turned the game around" heuristic — deterministic substring match on
+# the ranker's `reason` string. Zero new LLM calls; the ranker already
+# emits these words naturally when the play is a comeback / clutch.
+_TURNAROUND_PATTERN = re.compile(
+    r"\b(comeback|clutch|turn(ed|ing|around)?|save[sd]?|1v[3-5]|outplayed)\b",
+    re.IGNORECASE,
 )
 
 
@@ -184,6 +201,9 @@ class ShortPlan:
 
     index: int = 0
     """1-based ordering across all shorts in this compile."""
+
+    priority: int = 0
+    """Higher = surfaces earlier in voice-over mode. See `_plan_priority`."""
 
 
 @dataclass
@@ -382,6 +402,63 @@ def _bucket_slug(bucket: str) -> str:
     return re.sub(r"[^a-z0-9_]+", "_", bucket.lower()).strip("_") or "clip"
 
 
+def _plan_priority(
+    bucket: str,
+    clips: tuple[ShortClip, ...],
+    *,
+    multikill_group_size: int | None = None,
+) -> int:
+    """Score a plan against the user's stated ranking.
+
+    Order (first match wins):
+      1. laning_phase + kill event      → _PRIORITY_LANING_KILL
+      2. multikill parent group >= 3     → _PRIORITY_MULTIKILL_3PLUS
+      3. teamfight + turnaround signal   → _PRIORITY_TEAMFIGHT_TURN
+      4. everything else                 → _PRIORITY_DEFAULT
+
+    `multikill_group_size` is the size of the adjacency cluster this
+    plan's clips came from. Callers computing per-clip VO plans MUST
+    pass it (a triple-kill in VO mode is 3 separate 1-clip shorts, so
+    `len(clips)` alone won't tell us the parent group is 3). Falls
+    back to `len(clips)` for the montage case where the plan itself
+    IS the group.
+
+    Turnaround signal reads the ranker's `reason` string via
+    `_TURNAROUND_PATTERN` — no new LLM call.
+
+    Pure. Deterministic given the same clips.
+    """
+    if bucket == "laning_phase" and any(
+        _is_kill_event(c.event_type) for c in clips
+    ):
+        return _PRIORITY_LANING_KILL
+    if bucket == "multikill":
+        size = multikill_group_size if multikill_group_size is not None else len(clips)
+        if size >= 3:
+            return _PRIORITY_MULTIKILL_3PLUS
+    if bucket == "teamfight" and any(
+        _TURNAROUND_PATTERN.search(c.reason) for c in clips
+    ):
+        return _PRIORITY_TEAMFIGHT_TURN
+    return _PRIORITY_DEFAULT
+
+
+def _multikill_group_sizes(
+    bucket_clips: list[ShortClip],
+) -> dict[str, int]:
+    """Map each multikill clip's `file` → the size of its parent
+    adjacency group. Reuses `_find_adjacent_indices` — same rule the
+    bucketing itself uses."""
+    kill_ish = [c for c in bucket_clips if _is_kill_event(c.event_type)]
+    groups = _find_adjacent_indices(kill_ish, _MULTIKILL_ADJACENCY_SECONDS)
+    out: dict[str, int] = {}
+    for g in groups:
+        size = len(g)
+        for i in g:
+            out[kill_ish[i].file] = size
+    return out
+
+
 def plan_shorts(
     clips: list[ShortClip],
     *,
@@ -437,14 +514,23 @@ def plan_shorts(
         bucket_clips = sorted(
             set(bucket_clips), key=lambda c: (c.anchor_seconds, c.file)
         )
+        # For multikill VO plans, each single-clip plan needs to know the
+        # size of its parent adjacency group. Precompute once per bucket.
+        mk_sizes = (
+            _multikill_group_sizes(bucket_clips) if bucket == "multikill" else {}
+        )
         if mode == "voiceover":
             for c in bucket_clips:
+                tup = (c,)
                 plans.append(
                     ShortPlan(
                         bucket=bucket,
-                        clips=(c,),
+                        clips=tup,
                         title=_title_for(bucket, 1),
                         vo_prompt=_vo_prompt_for(bucket),
+                        priority=_plan_priority(
+                            bucket, tup, multikill_group_size=mk_sizes.get(c.file)
+                        ),
                     )
                 )
         elif mode == "montage":
@@ -460,12 +546,22 @@ def plan_shorts(
                             clips=tup,
                             title=_title_for(bucket, len(tup)),
                             vo_prompt=_vo_prompt_for(bucket),
+                            priority=_plan_priority(bucket, tup),
                         )
                     )
         else:
             raise ValueError(f"unknown mode {mode!r}; expected voiceover|montage")
 
-    plans.sort(key=lambda p: (p.clips[0].anchor_seconds, p.clips[0].file))
+    # Voice-over sorts by priority DESC (user's ranking) then chronological.
+    # Montage stays chronological — its output is per-adjacency-cluster
+    # and reordering by priority would fragment the game's narrative flow.
+    if mode == "voiceover":
+        plans.sort(
+            key=lambda p: (-p.priority, p.clips[0].anchor_seconds, p.clips[0].file)
+        )
+    else:
+        plans.sort(key=lambda p: (p.clips[0].anchor_seconds, p.clips[0].file))
+
     return [
         ShortPlan(
             bucket=p.bucket,
@@ -473,6 +569,7 @@ def plan_shorts(
             title=p.title,
             vo_prompt=p.vo_prompt,
             index=i + 1,
+            priority=p.priority,
         )
         for i, p in enumerate(plans)
     ]
@@ -481,11 +578,20 @@ def plan_shorts(
 def short_filename(plan: ShortPlan) -> str:
     """Deterministic filename for a plan.
 
-    `short_<NN>_<bucket>_<mmss>.mp4` where mmss is the anchor of the
-    first (earliest) clip in the short.
+    `short_<NN>_[HIGH_]<bucket>_<mmss>.mp4` where mmss is the anchor of
+    the first (earliest) clip. The `HIGH_` infix appears specifically
+    for 3+-kill multikills — the user's "REALLY high priority" flag.
+    Laning kills also outrank normal multikills in VO ordering, but
+    they don't get HIGH_ because that flag is about kill-count intensity
+    (2 vs 3+), not narrative priority.
     """
     mmss = plan.clips[0].mmss
-    return f"short_{plan.index:02d}_{_bucket_slug(plan.bucket)}_{mmss}.mp4"
+    high = (
+        "HIGH_"
+        if plan.bucket == "multikill" and plan.priority >= _PRIORITY_MULTIKILL_3PLUS
+        else ""
+    )
+    return f"short_{plan.index:02d}_{high}{_bucket_slug(plan.bucket)}_{mmss}.mp4"
 
 
 # ---------------------------------------------------------------------
@@ -713,6 +819,14 @@ def _write_index_md(
         status = "OK" if r.ok else "FAILED"
         lines.append(f"## {r.out_path.name}  [{status}]")
         lines.append(f"Bucket: {plan.bucket}")
+        if plan.priority > 0:
+            high = (
+                " HIGH"
+                if plan.bucket == "multikill"
+                and plan.priority >= _PRIORITY_MULTIKILL_3PLUS
+                else ""
+            )
+            lines.append(f"Priority: {plan.priority}{high}")
         clip_summary = ", ".join(
             f"{c.mmss} ({c.event_type})" for c in plan.clips
         )
@@ -852,6 +966,11 @@ def build_shorts(
                 "title": r.plan.title,
                 "vo_prompt": r.plan.vo_prompt,
                 "clip_count": len(r.plan.clips),
+                "priority": r.plan.priority,
+                "is_high_priority": (
+                    r.plan.bucket == "multikill"
+                    and r.plan.priority >= _PRIORITY_MULTIKILL_3PLUS
+                ),
                 "ok": r.ok,
                 "error": r.error,
                 "vlm_verdict": r.vlm_verdict,
@@ -1140,6 +1259,7 @@ def _render_and_refine(
             title=current_plan.title,
             vo_prompt=current_plan.vo_prompt,
             index=current_plan.index,
+            priority=current_plan.priority,
         )
 
     # Shouldn't reach here (loop always returns) — belt & suspenders.
@@ -1210,6 +1330,467 @@ def preview_buckets(asset: dict, candidates: list[dict]) -> dict:
             for b, cs in buckets.items()
         },
     }
+
+
+# ---------------------------------------------------------------------
+# Cross-asset "best of" montage — sweep every session folder for a game
+# ---------------------------------------------------------------------
+
+
+_SESSION_DATE_PREFIX = re.compile(r"^(\d{2})-(\d{2})-(\d{4})")
+
+_CROSS_ASSET_WINDOWS: dict[str, int | None] = {
+    "day": 1,        # today and yesterday
+    "week": 7,       # last 7 days
+    "all": None,     # no filter
+}
+
+_CROSS_ASSET_TITLES: dict[str, str] = {
+    "day": "BEST OF TODAY",
+    "week": "BEST OF THE WEEK",
+    "all": "BEST OF",
+}
+
+_CROSS_ASSET_BUCKET = "cross_asset_multikill"
+
+
+@dataclass(frozen=True)
+class SessionRef:
+    """One highlights session folder we might pull clips from."""
+
+    folder: Path
+    date: date
+    game: str
+
+
+def _parse_session_date(folder_name: str) -> date | None:
+    """Extract the `MM-DD-YYYY` prefix from a session folder name.
+
+    Handles both `05-15-2026_19h55` and `05-15-2026_Jhin`. Returns None
+    for folders that don't start with a parseable date (they get
+    skipped in the scan, not crashed).
+    """
+    m = _SESSION_DATE_PREFIX.match(folder_name)
+    if not m:
+        return None
+    month, day, year = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    try:
+        return date(year, month, day)
+    except ValueError:
+        return None
+
+
+def _highlights_root(game: str) -> Path:
+    """`WORKSPACE/highlights/<game>/` — same convention as
+    `highlights.py`'s `relative_folder`."""
+    from .highlights import _safe
+
+    return settings.workspace_dir / "highlights" / _safe(game)
+
+
+def _scan_sessions(
+    game: str, window: str, *, today: date
+) -> list[SessionRef]:
+    """Walk `WORKSPACE/highlights/<game>/*/`, parse dates, filter by window.
+
+    Windows:
+      day  → date >= today - 1d (includes today + yesterday)
+      week → date >= today - 7d
+      all  → no filter
+
+    Returns sorted by (date DESC, folder.name ASC) so most-recent
+    sessions rank first when hype scores tie.
+    """
+    if window not in _CROSS_ASSET_WINDOWS:
+        raise ValueError(
+            f"unknown window {window!r}; expected one of "
+            f"{sorted(_CROSS_ASSET_WINDOWS)}"
+        )
+    root = _highlights_root(game)
+    if not root.is_dir():
+        return []
+    days = _CROSS_ASSET_WINDOWS[window]
+    cutoff = today - timedelta(days=days) if days is not None else None
+    sessions: list[SessionRef] = []
+    for entry in root.iterdir():
+        if not entry.is_dir():
+            continue
+        d = _parse_session_date(entry.name)
+        if d is None:
+            continue
+        if cutoff is not None and d < cutoff:
+            continue
+        sessions.append(SessionRef(folder=entry, date=d, game=game))
+    sessions.sort(key=lambda s: (-s.date.toordinal(), s.folder.name))
+    return sessions
+
+
+@dataclass(frozen=True)
+class _CrossAssetClip:
+    """One multikill clip from one session, with the sidecar metadata
+    needed to rank + label it in the montage."""
+
+    clip: ShortClip
+    session: SessionRef
+    group_size: int
+    """How many kills in the adjacency cluster this clip belongs to
+    (2 = double, 3 = triple, ...). Drives the "HIGH priority" tag."""
+
+
+def _gather_cross_asset_multikills(
+    sessions: list[SessionRef],
+) -> list[_CrossAssetClip]:
+    """For each session, load clips, categorize, keep multikill bucket
+    with per-clip group_size attached. Returns a flat list."""
+    out: list[_CrossAssetClip] = []
+    for session in sessions:
+        clips = load_clips(session.folder)
+        if not clips:
+            continue
+        kept = [c for c in clips if c.hype_score >= settings.shorts_hype_threshold]
+        if not kept:
+            continue
+        # Compute group sizes on the same adjacency algorithm the
+        # regular multikill bucket uses. Doing it directly (not via
+        # categorize_clips) so we know the size of the group each clip
+        # belongs to — the sidecar categorize_clips doesn't expose.
+        by_anchor = sorted(kept, key=lambda c: (c.anchor_seconds, c.file))
+        kill_ish = [c for c in by_anchor if _is_kill_event(c.event_type)]
+        groups = _find_adjacent_indices(kill_ish, _MULTIKILL_ADJACENCY_SECONDS)
+        for g in groups:
+            if len(g) < 2:
+                continue
+            for idx in g:
+                out.append(
+                    _CrossAssetClip(
+                        clip=kill_ish[idx],
+                        session=session,
+                        group_size=len(g),
+                    )
+                )
+    return out
+
+
+def _rank_cross_asset_clips(
+    clips: list[_CrossAssetClip], max_clips: int
+) -> list[_CrossAssetClip]:
+    """Rank by (group_size DESC, hype_score DESC, session_date DESC,
+    file ASC) and cap at `max_clips`. Fully deterministic."""
+    ordered = sorted(
+        clips,
+        key=lambda x: (
+            -x.group_size,
+            -x.clip.hype_score,
+            -x.session.date.toordinal(),
+            x.session.folder.name,
+            x.clip.file,
+        ),
+    )
+    return ordered[:max_clips]
+
+
+def _cross_asset_output_folder(game: str, window: str, today: date) -> Path:
+    """`WORKSPACE/shorts/_cross_asset/<game>_<window>_<YYYY-MM-DD>/`"""
+    from .highlights import _safe
+
+    stem = f"{_safe(game)}_{window}_{today.isoformat()}"
+    return settings.workspace_dir / "shorts" / "_cross_asset" / stem
+
+
+def _write_cross_asset_index_md(
+    folder: Path,
+    *,
+    game: str,
+    window: str,
+    today: date,
+    sessions_scanned: list[SessionRef],
+    ranked: list[_CrossAssetClip],
+    result: RenderResult | None,
+    music_path: str | None,
+) -> None:
+    """index.md for a cross-asset compile — lists sessions swept,
+    ranked candidates, and the render outcome."""
+    lines: list[str] = []
+    lines.append(f"# Cross-asset best-of for {game} ({window})")
+    lines.append(f"Generated: {datetime.now(timezone.utc).isoformat()}")
+    lines.append(f"Today: {today.isoformat()}")
+    lines.append(f"Sessions scanned: {len(sessions_scanned)}")
+    for s in sessions_scanned:
+        lines.append(f"  - {s.date.isoformat()}  {s.folder.name}")
+    lines.append("")
+    lines.append(f"## Ranked clips ({len(ranked)})")
+    for i, r in enumerate(ranked, 1):
+        high = " HIGH" if r.group_size >= 3 else ""
+        lines.append(
+            f"{i:02d}. [{r.group_size}-kill{high}] "
+            f"hype={r.clip.hype_score:.2f}  "
+            f"{r.session.folder.name}/{r.clip.file}  "
+            f"({r.clip.mmss} {r.clip.event_type})"
+        )
+        if r.clip.reason:
+            lines.append(f"    reason: {r.clip.reason}")
+    lines.append("")
+    if result is not None:
+        status = "OK" if result.ok else "FAILED"
+        lines.append(f"## Render  [{status}]")
+        lines.append(f"Output: {result.out_path.name}")
+        if music_path:
+            lines.append(f"Music: {music_path}")
+        if result.vlm_verdict:
+            lines.append(f"VLM: {result.vlm_verdict} — {result.vlm_why or ''}")
+        if not result.ok:
+            lines.append(f"Error: {result.error}")
+    (folder / "index.md").write_text("\n".join(lines), encoding="utf-8")
+
+
+def preview_cross_asset_montage(
+    *,
+    game: str,
+    window: str = "week",
+    today: date | None = None,
+    max_clips: int | None = None,
+) -> dict:
+    """Dry-run: scan + rank cross-asset multikill candidates without
+    rendering. Useful before spending 5 min on ffmpeg.
+
+    Pure I/O (folder walk + JSON reads); no ffmpeg.
+    """
+    resolved_today = today or date.today()
+    max_c = (
+        settings.shorts_cross_asset_max_clips if max_clips is None else max_clips
+    )
+    try:
+        sessions = _scan_sessions(game, window, today=resolved_today)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc), "candidates": []}
+    all_clips = _gather_cross_asset_multikills(sessions)
+    ranked = _rank_cross_asset_clips(all_clips, max_c)
+    return {
+        "ok": True,
+        "game": game,
+        "window": window,
+        "today": resolved_today.isoformat(),
+        "sessions_scanned": [
+            {"date": s.date.isoformat(), "folder": s.folder.name}
+            for s in sessions
+        ],
+        "sessions_scanned_count": len(sessions),
+        "candidates_total": len(all_clips),
+        "max_clips": max_c,
+        "candidates": [
+            {
+                "session": r.session.folder.name,
+                "session_date": r.session.date.isoformat(),
+                "file": r.clip.file,
+                "path": r.clip.path.as_posix(),
+                "event_type": r.clip.event_type,
+                "hype_score": r.clip.hype_score,
+                "anchor_mmss": r.clip.mmss,
+                "group_size": r.group_size,
+                "is_high_priority": r.group_size >= 3,
+                "reason": r.clip.reason,
+            }
+            for r in ranked
+        ],
+    }
+
+
+def build_cross_asset_montage(
+    *,
+    game: str,
+    window: str = "week",
+    music_path: str | None = None,
+    layout: str | None = None,
+    today: date | None = None,
+    max_clips: int | None = None,
+    run_vlm_check: bool = True,
+) -> dict:
+    """Sweep every session folder for `game`, pull the top multikill
+    clips inside `window`, and render ONE "best of" montage short.
+
+    Ranking: kill-group size DESC → hype_score DESC → session_date DESC
+    → file ASC. Fully deterministic given the folder state on disk.
+
+    Returns a summary dict shaped like `build_shorts`.
+    """
+    resolved_today = today or date.today()
+    max_c = (
+        settings.shorts_cross_asset_max_clips if max_clips is None else max_clips
+    )
+
+    try:
+        sessions = _scan_sessions(game, window, today=resolved_today)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc), "shorts_written": 0, "shorts": []}
+
+    if not sessions:
+        return {
+            "ok": True,
+            "shorts_written": 0,
+            "reason": f"no sessions in window={window} for game={game!r}",
+            "sessions_scanned_count": 0,
+            "shorts": [],
+        }
+
+    all_clips = _gather_cross_asset_multikills(sessions)
+    ranked = _rank_cross_asset_clips(all_clips, max_c)
+    if not ranked:
+        # Write an index.md so the user can see WHICH sessions were
+        # scanned (helps debug "why did I get nothing").
+        out_folder = _cross_asset_output_folder(game, window, resolved_today)
+        out_folder.mkdir(parents=True, exist_ok=True)
+        _write_cross_asset_index_md(
+            out_folder,
+            game=game,
+            window=window,
+            today=resolved_today,
+            sessions_scanned=sessions,
+            ranked=[],
+            result=None,
+            music_path=None,
+        )
+        return {
+            "ok": True,
+            "shorts_written": 0,
+            "reason": (
+                f"no multikill clips (>=2 adjacent kills) in {len(sessions)} "
+                f"session(s) for window={window}"
+            ),
+            "folder": out_folder.as_posix(),
+            "sessions_scanned_count": len(sessions),
+            "shorts": [],
+        }
+
+    # Resolve music path (same rule as build_shorts)
+    resolved_music: str | None = (
+        music_path or settings.shorts_default_music_path or None
+    )
+    if resolved_music and not Path(resolved_music).is_file():
+        _log.warning(
+            "cross-asset music path %r not found — proceeding without music",
+            resolved_music,
+        )
+        resolved_music = None
+
+    # Build the plan. Priority = MULTIKILL_3PLUS if any 3+ group is in it.
+    tup = tuple(r.clip for r in ranked)
+    max_group = max(r.group_size for r in ranked)
+    plan_priority = (
+        _PRIORITY_MULTIKILL_3PLUS if max_group >= 3 else _PRIORITY_DEFAULT
+    )
+    plan = ShortPlan(
+        bucket=_CROSS_ASSET_BUCKET,
+        clips=tup,
+        title=_CROSS_ASSET_TITLES.get(window, "BEST OF"),
+        vo_prompt="",
+        index=1,
+        priority=plan_priority,
+    )
+
+    out_folder = _cross_asset_output_folder(game, window, resolved_today)
+    out_folder.mkdir(parents=True, exist_ok=True)
+    # Clean prior renders so re-runs are deterministic
+    for old in out_folder.glob("*.mp4"):
+        old.unlink(missing_ok=True)
+
+    high = "HIGH_" if plan_priority >= _PRIORITY_MULTIKILL_3PLUS else ""
+    out_name = f"best_of_{high}{window}_{resolved_today.isoformat()}.mp4"
+    out_path = out_folder / out_name
+
+    # Synthesize a minimal `asset` dict for the refine loop. It only
+    # needs `path` (for re-cutting) and `game` (for VLM prompts). Cross-
+    # asset auto-fix would need per-clip asset resolution (different
+    # sessions came from different recordings) — force max_iter=0 for
+    # now. The whole-comp VLM coherence check still runs.
+    fake_asset = {
+        "path": ranked[0].session.folder.as_posix(),
+        "game": game,
+    }
+    result = _render_and_refine(
+        plan,
+        out_path,
+        mode="montage",
+        asset=fake_asset,
+        music_path=resolved_music,
+        run_vlm_check=run_vlm_check,
+        max_iter=0,
+        layout=layout,
+    )
+
+    _write_cross_asset_index_md(
+        out_folder,
+        game=game,
+        window=window,
+        today=resolved_today,
+        sessions_scanned=sessions,
+        ranked=ranked,
+        result=result,
+        music_path=resolved_music,
+    )
+
+    return {
+        "ok": True,
+        "folder": out_folder.as_posix(),
+        "shorts_written": 1 if result.ok else 0,
+        "shorts_total": 1,
+        "sessions_scanned_count": len(sessions),
+        "candidates_total": len(all_clips),
+        "shorts": [
+            {
+                "file": result.out_path.name,
+                "bucket": _CROSS_ASSET_BUCKET,
+                "title": plan.title,
+                "clip_count": len(plan.clips),
+                "priority": plan.priority,
+                "is_high_priority": (
+                    plan.priority >= _PRIORITY_MULTIKILL_3PLUS
+                ),
+                "ok": result.ok,
+                "error": result.error,
+                "vlm_verdict": result.vlm_verdict,
+                "vlm_why": result.vlm_why,
+                "sources": [
+                    {
+                        "session": r.session.folder.name,
+                        "session_date": r.session.date.isoformat(),
+                        "file": r.clip.file,
+                        "group_size": r.group_size,
+                        "hype_score": r.clip.hype_score,
+                    }
+                    for r in ranked
+                ],
+            }
+        ],
+    }
+
+
+def list_cross_asset_shorts(game: str | None = None) -> dict:
+    """Enumerate cross-asset shorts on disk under
+    `WORKSPACE/shorts/_cross_asset/`. Read-only. Optionally filter by
+    game (substring match on the folder prefix)."""
+    from .highlights import _safe
+
+    root = settings.workspace_dir / "shorts" / "_cross_asset"
+    if not root.is_dir():
+        return {"folders": []}
+    prefix = _safe(game) + "_" if game else None
+    folders: list[dict] = []
+    for entry in sorted(root.iterdir()):
+        if not entry.is_dir():
+            continue
+        if prefix and not entry.name.startswith(prefix):
+            continue
+        shorts = sorted(p.name for p in entry.glob("*.mp4"))
+        index_md = entry / "index.md"
+        folders.append(
+            {
+                "folder": entry.as_posix(),
+                "name": entry.name,
+                "shorts": shorts,
+                "index_md_present": index_md.is_file(),
+            }
+        )
+    return {"folders": folders}
 
 
 # `tempfile` is imported for future concat-list file usage; keep to

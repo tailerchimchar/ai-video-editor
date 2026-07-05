@@ -26,7 +26,14 @@ from pydantic import BaseModel, Field
 
 from ..database import get_db
 from ..models import RankResponse
-from ..shorts import _shorts_folder, build_shorts, preview_buckets
+from ..shorts import (
+    _shorts_folder,
+    build_cross_asset_montage,
+    build_shorts,
+    list_cross_asset_shorts,
+    preview_buckets,
+    preview_cross_asset_montage,
+)
 
 router = APIRouter(tags=["shorts"])
 
@@ -200,6 +207,116 @@ async def list_shorts(asset_id: str, mode: str | None = None):
             "index_md": index_md.read_text(encoding="utf-8") if index_md.is_file() else None,
         }
     return out
+
+
+class CrossAssetMontageBody(BaseModel):
+    """Payload for `POST /shorts/cross_asset_montage`."""
+
+    game: str = Field(..., description="Game name (e.g. 'League of Legends')")
+    window: str = Field(
+        default="week",
+        description=(
+            "Time window over which to sweep session folders. "
+            "`day` = today + yesterday, `week` = last 7 days, "
+            "`all` = no filter. Defaults to `week`."
+        ),
+    )
+    music_path: str | None = Field(default=None, description="Optional music bed.")
+    layout: str | None = Field(
+        default=None,
+        description="`cropped_hud` (default) or `blur_fill`.",
+    )
+
+
+async def _run_cross_asset_job(
+    job_id: str,
+    body: CrossAssetMontageBody,
+) -> None:
+    """Background worker for cross-asset montage compiles."""
+    db = await get_db()
+    try:
+        await db.execute(
+            "UPDATE jobs SET status = 'running' WHERE id = ?", (job_id,)
+        )
+        await db.commit()
+
+        result = await asyncio.to_thread(
+            build_cross_asset_montage,
+            game=body.game,
+            window=body.window,
+            music_path=body.music_path,
+            layout=body.layout,
+        )
+        if not result.get("ok"):
+            await _finish_job(
+                db,
+                job_id,
+                error=str(result.get("error") or "cross-asset render failed"),
+            )
+            return
+        await _finish_job(
+            db,
+            job_id,
+            output_path=(
+                f"{result.get('shorts_written', 0)}/"
+                f"{result.get('shorts_total', 0)} -> {result.get('folder', '?')}"
+            ),
+        )
+    except Exception as exc:
+        with contextlib.suppress(Exception):
+            await _finish_job(db, job_id, error=str(exc)[:1500])
+    finally:
+        await db.close()
+
+
+@router.post("/shorts/cross_asset_montage", response_model=RankResponse)
+async def compile_cross_asset_montage(body: CrossAssetMontageBody):
+    """Trigger a cross-asset "best of" montage render job.
+
+    Sweeps every `WORKSPACE/highlights/<game>/<session>/` folder
+    inside `window`, ranks multikill clusters (3+ kills = HIGH
+    priority), and renders ONE 9:16 montage short. Returns a
+    `job_id`; poll `/api/v1/jobs/{id}` for status.
+    """
+    if body.window not in ("day", "week", "all"):
+        raise HTTPException(400, "window must be 'day', 'week', or 'all'")
+
+    db = await get_db()
+    try:
+        job_id = str(uuid.uuid4())
+        await db.execute(
+            "INSERT INTO jobs (id, project_id, type, status, created_at) "
+            "VALUES (?, NULL, 'cross_asset_shorts', 'pending', ?)",
+            (job_id, datetime.now(timezone.utc).isoformat()),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+    _track(_run_cross_asset_job(job_id, body))
+    return RankResponse(job_id=job_id)
+
+
+@router.get("/shorts/cross_asset_montage")
+async def list_cross_asset(game: str | None = None):
+    """List cross-asset "best of" shorts rendered on disk.
+
+    Optionally filter by game (substring on the folder prefix).
+    Read-only — never triggers a render.
+    """
+    return list_cross_asset_shorts(game=game)
+
+
+@router.get("/shorts/cross_asset_montage/preview")
+async def preview_cross_asset(game: str, window: str = "week"):
+    """Dry-run: scan + rank the cross-asset candidates without rendering.
+
+    Cheap; useful to see WHAT would be compiled before spending
+    ~5 minutes on ffmpeg.
+    """
+    if window not in ("day", "week", "all"):
+        raise HTTPException(400, "window must be 'day', 'week', or 'all'")
+    return preview_cross_asset_montage(game=game, window=window)
 
 
 @router.get("/assets/{asset_id}/shorts/topics")

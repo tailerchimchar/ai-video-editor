@@ -470,3 +470,121 @@ def test_cropped_hud_zoom_out_scales_crop_width() -> None:
     g_wide = cropped_hud_9x16(zoom_out=1.5)
     assert "ih*9/16*1.0000" in g_tight
     assert "ih*9/16*1.5000" in g_wide
+
+
+# ---------------------------------------------------------------------
+# Voice-over priority ranking (user's stated ordering)
+# ---------------------------------------------------------------------
+
+
+def test_voiceover_ranks_laning_kill_first() -> None:
+    """A laning-phase kill should sort before a mid-game kill in VO
+    output, even if the laning kill is later chronologically."""
+    clips = [
+        _clip("mid_kill.mp4", anchor=1000, event="kill"),   # mid game, earlier bucket-wise
+        _clip("laning_kill.mp4", anchor=500, event="kill"), # laning phase
+    ]
+    plans = plan_shorts(clips, mode="voiceover")
+    # Only expect plans for the two clips (single-bucket per clip).
+    laning = [p for p in plans if p.bucket == "laning_phase"]
+    assert laning, "laning_phase plan missing"
+    # The laning-phase plan should have index=1 (highest priority)
+    assert laning[0].index == 1
+    assert laning[0].priority > 0
+
+
+def test_voiceover_ranks_3plus_multikill_over_teamfight() -> None:
+    """A triple-kill (multikill bucket, 3 clips) should sort ahead of
+    a teamfight-with-turnaround."""
+    # Triple kill: 3 kills within 30s in mid-game
+    tk = [
+        _clip("k1.mp4", anchor=1000, event="kill"),
+        _clip("k2.mp4", anchor=1010, event="kill"),
+        _clip("k3.mp4", anchor=1020, event="kill"),
+    ]
+    # Teamfight with turnaround: 3+ adjacent clips within 60s, ranker
+    # reason mentions "comeback"
+    tf = [
+        _clip("t1.mp4", anchor=1400, event="assist", reason="huge comeback"),
+        _clip("t2.mp4", anchor=1420, event="assist", reason="huge comeback"),
+        _clip("t3.mp4", anchor=1440, event="assist", reason="huge comeback"),
+    ]
+    plans = plan_shorts(tk + tf, mode="voiceover")
+    # Voice-over emits 1 short per clip per bucket. Priority per bucket:
+    #   multikill (3 clips) → 200
+    #   teamfight (turnaround reason) → 100
+    # Multikill plans should come before teamfight plans in index order.
+    multi_indexes = [p.index for p in plans if p.bucket == "multikill"]
+    tf_indexes = [p.index for p in plans if p.bucket == "teamfight"]
+    assert multi_indexes and tf_indexes
+    assert max(multi_indexes) < min(tf_indexes)
+
+
+def test_voiceover_priority_ties_break_chronologically() -> None:
+    """Two same-priority plans should sort by anchor time ASC."""
+    clips = [
+        _clip("a.mp4", anchor=200, event="kill"),  # laning
+        _clip("b.mp4", anchor=100, event="kill"),  # laning, earlier
+    ]
+    plans = plan_shorts(clips, mode="voiceover")
+    laning = [p for p in plans if p.bucket == "laning_phase"]
+    # Both priority=300; earlier anchor wins
+    assert [p.clips[0].file for p in laning] == ["b.mp4", "a.mp4"]
+
+
+def test_montage_stays_chronological_despite_priority() -> None:
+    """Montage mode is chronological regardless of priority — user's
+    per-adjacency-cluster narrative shouldn't get reordered."""
+    clips = [
+        # 3-kill multikill in mid game (would be HIGH priority in VO)
+        _clip("mk1.mp4", anchor=1000, event="kill"),
+        _clip("mk2.mp4", anchor=1010, event="kill"),
+        _clip("mk3.mp4", anchor=1020, event="kill"),
+        # A single earlier laning kill (which is HIGHEST VO priority)
+        _clip("l1.mp4", anchor=500, event="kill"),
+    ]
+    plans = plan_shorts(clips, mode="montage")
+    # First plan should be the earliest anchor (laning kill), not the
+    # multikill.
+    assert plans[0].clips[0].file == "l1.mp4"
+
+
+def test_high_prefix_on_3plus_multikill_filename() -> None:
+    """Filenames get a HIGH_ infix for 3+-kill multikills."""
+    clips = [
+        _clip("k1.mp4", anchor=1000, event="kill"),
+        _clip("k2.mp4", anchor=1010, event="kill"),
+        _clip("k3.mp4", anchor=1020, event="kill"),
+    ]
+    plans = plan_shorts(clips, mode="montage")
+    multi = [p for p in plans if p.bucket == "multikill"]
+    assert multi
+    name = short_filename(multi[0])
+    assert "HIGH_" in name, name
+
+
+def test_no_high_prefix_on_2kill_multikill_filename() -> None:
+    """Double kills (2 clips) don't get HIGH_ — they're the baseline."""
+    clips = [
+        _clip("d1.mp4", anchor=1000, event="kill"),
+        _clip("d2.mp4", anchor=1010, event="kill"),
+    ]
+    plans = plan_shorts(clips, mode="montage")
+    multi = [p for p in plans if p.bucket == "multikill"]
+    assert multi
+    name = short_filename(multi[0])
+    assert "HIGH_" not in name, name
+
+
+def test_turnaround_pattern_matches_expected_words() -> None:
+    """The turnaround regex should match common comeback phrasings."""
+    from ai_video_editor.shorts import _TURNAROUND_PATTERN
+
+    for phrase in [
+        "huge comeback",
+        "clutch save",
+        "turned the game around",
+        "1v3 outplay",
+        "outplayed the enemy",
+    ]:
+        assert _TURNAROUND_PATTERN.search(phrase), phrase

@@ -253,6 +253,12 @@ class Settings(BaseSettings):
     # blurred letterbox above and below the main image inside the 720x1280
     # output. Higher = wider view, larger bars.
     shorts_zoom_out: float = 1.44
+    # Cross-asset "best of" montage — sweeps every session folder for
+    # a game and stitches the top multikill clips into one short.
+    # `max_clips` caps the montage length; default window is `week`
+    # (last 7 days) but `day` / `all` are supported too.
+    shorts_cross_asset_max_clips: int = 5
+    shorts_cross_asset_default_window: str = "week"
 
     model_config = {
         "env_file": ".env",
