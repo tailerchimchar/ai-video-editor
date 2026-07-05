@@ -232,6 +232,14 @@ class Settings(BaseSettings):
     # Hard cap on clips per single short (safety against a giant
     # cluster producing a 3-minute "short").
     shorts_max_clips_per_short: int = 5
+    # Auto-fix loop: after a short renders, run the VLM whole-comp
+    # review. When it reports actionable window fixes (extend_before /
+    # extend_after / trim_start / trim_end), re-cut the source with
+    # the adjusted window and re-render. Bounded by
+    # `shorts_max_review_iter` so a stubborn VLM can't loop forever.
+    # Adds one VLM call (~$0.02) + one re-render (~30s) per iteration.
+    shorts_auto_fix_enabled: bool = True
+    shorts_max_review_iter: int = 2
 
     model_config = {
         "env_file": ".env",

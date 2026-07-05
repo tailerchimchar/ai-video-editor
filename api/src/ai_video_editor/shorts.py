@@ -43,6 +43,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .config import settings
+from .editing import trim_clip
 from .edits import _escape_drawtext, _escape_fontfile_path, blur_fill_9x16
 
 _log = logging.getLogger(__name__)
@@ -700,6 +701,17 @@ def _write_index_md(
             lines.append(f"Music: {r.music_path}")
         if r.vlm_verdict is not None:
             lines.append(f"VLM coherence: {r.vlm_verdict} — {r.vlm_why or ''}")
+        # Refinement audit trail — makes it obvious when the auto-fix
+        # loop actually rewrote a clip's window.
+        refinements = (r.extras or {}).get("refinements_applied") or []
+        iters = (r.extras or {}).get("refine_iterations", 0)
+        stopped = (r.extras or {}).get("refine_stopped")
+        if refinements:
+            lines.append(f"Refinements ({iters} iter, stopped: {stopped or 'ok'}):")
+            for entry in refinements:
+                lines.append(f"  - {entry}")
+        elif iters > 0 and stopped:
+            lines.append(f"Refine loop: {iters} iter, stopped: {stopped}")
         if not r.ok:
             lines.append(f"Error: {r.error}")
         lines.append("")
@@ -772,24 +784,26 @@ def build_shorts(
     for old in out_folder.glob("*.mp4"):
         old.unlink(missing_ok=True)
 
+    # Refine loop cap: 0 disables auto-fix entirely (single render + check
+    # semantics preserved when config toggle is off).
+    max_iter = (
+        settings.shorts_max_review_iter
+        if settings.shorts_auto_fix_enabled
+        else 0
+    )
+
     results: list[RenderResult] = []
     for plan in plans:
         out_path = out_folder / short_filename(plan)
-        ok, err = render_short(
+        result = _render_and_refine(
             plan,
             out_path,
             mode=mode,
+            asset=asset,
             music_path=resolved_music,
+            run_vlm_check=run_vlm_check,
+            max_iter=max_iter,
         )
-        result = RenderResult(
-            plan=plan,
-            out_path=out_path,
-            ok=ok,
-            error=err,
-            music_path=resolved_music if (ok and resolved_music) else None,
-        )
-        if ok and run_vlm_check:
-            _maybe_run_vlm_coherence_check(result, asset.get("game"))
         results.append(result)
 
     _write_index_md(
@@ -818,36 +832,313 @@ def build_shorts(
                 "error": r.error,
                 "vlm_verdict": r.vlm_verdict,
                 "vlm_why": r.vlm_why,
+                "refine_iterations": (r.extras or {}).get("refine_iterations", 0),
+                "refinements_applied": (r.extras or {}).get(
+                    "refinements_applied"
+                ) or [],
+                "refine_stopped": (r.extras or {}).get("refine_stopped"),
             }
             for r in results
         ],
     }
 
 
-def _maybe_run_vlm_coherence_check(result: RenderResult, game: str | None) -> None:
-    """Attach VLM coherence verdict to `result`. Best-effort — logs and
-    swallows any failure so a broken VLM never fails a render."""
-    if not settings.vlm_enabled:
-        return
+# Which VLM `CompilationFix.fix` types this pipeline can act on. Other
+# fixes (apply_zoom, apply_focus, remove_clip) require multi-clip
+# awareness the MVP doesn't have — logged as unapplied when they arrive.
+_WINDOW_FIX_TYPES = frozenset(
+    {"extend_before", "extend_after", "trim_start", "trim_end"}
+)
+
+
+def _apply_window_fix_to_clip(
+    clip: ShortClip,
+    fix,
+    asset_path: str,
+    out_dir: Path,
+    iteration: int,
+) -> ShortClip | None:
+    """Re-cut `clip` from `asset_path` with a shifted window per `fix`,
+    write to `out_dir` under a fresh filename. Returns the new ShortClip,
+    or None if the fix couldn't be applied (bad seconds, ffmpeg failure).
+
+    Pure of side-effects beyond writing one mp4 file.
+    """
+    seconds = float(fix.fix_seconds or 0.0)
+    new_start = clip.start_seconds
+    new_end = clip.end_seconds
+    if fix.fix == "extend_before":
+        new_start = max(0.0, new_start - seconds)
+    elif fix.fix == "extend_after":
+        new_end = new_end + seconds
+    elif fix.fix == "trim_start":
+        new_start = min(new_end - 0.5, new_start + seconds)
+    elif fix.fix == "trim_end":
+        new_end = max(new_start + 0.5, new_end - seconds)
+    else:
+        return None
+
+    if new_end - new_start < 0.5:
+        _log.info(
+            "shorts refine skipped: window %s→%s too small after %s(%.1fs)",
+            new_start,
+            new_end,
+            fix.fix,
+            seconds,
+        )
+        return None
+
+    stem = Path(clip.file).stem
+    out_name = f"{stem}_iter{iteration}.mp4"
+    new_path = out_dir / out_name
+    ok, err = trim_clip(asset_path, str(new_path), new_start, new_end)
+    if not ok:
+        _log.warning("shorts refine trim_clip failed: %s", err)
+        return None
+
+    return ShortClip(
+        file=out_name,
+        path=new_path,
+        event_type=clip.event_type,
+        start_seconds=round(new_start, 2),
+        end_seconds=round(new_end, 2),
+        hype_score=clip.hype_score,
+        funny_score=clip.funny_score,
+        story_score=clip.story_score,
+        reason=clip.reason,
+    )
+
+
+def _resolve_clip_ref(clip_ref: str, clip_count: int) -> int:
+    """Map VLM's `clip_ref` (typically '01' / '02' / an M:SS timestamp)
+    to a 0-based index into the short's clips. Falls back to 0 when
+    the ref doesn't parse — single-clip shorts are the common case."""
+    ref = str(clip_ref).strip()
+    if ref.isdigit():
+        idx = int(ref) - 1
+        if 0 <= idx < clip_count:
+            return idx
+    # M:SS / UUID / other — default to first clip so the fix still applies
+    return 0
+
+
+def _apply_window_fixes(
+    clips: tuple[ShortClip, ...],
+    fixes: list,
+    *,
+    asset_path: str,
+    out_dir: Path,
+    iteration: int,
+) -> tuple[tuple[ShortClip, ...], int]:
+    """Apply every window-shift fix to its target clip. Returns the new
+    tuple of ShortClips + count of fixes actually applied.
+
+    Non-window fixes (apply_zoom, remove_clip, ...) are silently skipped
+    at the caller level; this function only sees `_WINDOW_FIX_TYPES`.
+    """
+    clip_list = list(clips)
+    applied = 0
+    for fix in fixes:
+        if fix.fix not in _WINDOW_FIX_TYPES:
+            continue
+        idx = _resolve_clip_ref(fix.clip_ref, len(clip_list))
+        new_clip = _apply_window_fix_to_clip(
+            clip_list[idx], fix, asset_path, out_dir, iteration
+        )
+        if new_clip is None:
+            continue
+        clip_list[idx] = new_clip
+        applied += 1
+    return tuple(clip_list), applied
+
+
+def _render_and_refine(
+    plan: ShortPlan,
+    out_path: Path,
+    *,
+    mode: str,
+    asset: dict,
+    music_path: str | None,
+    run_vlm_check: bool,
+    max_iter: int,
+) -> RenderResult:
+    """Render → VLM whole-comp review → refine loop.
+
+    Loop terminates when any of these hit:
+      1. VLM says `is_cohesive: True` (short looks good)
+      2. VLM returns no actionable window fixes (verdict stands)
+      3. `max_iter` iterations reached (cap hit, verdict recorded)
+      4. `run_vlm_check` is False or `settings.vlm_enabled` is False
+
+    Each iteration re-cuts the plan's underlying clips from the SOURCE
+    asset with adjusted windows. Refined clip files land in a
+    `_refined/` sidecar next to the short output (kept for debugging;
+    ~few MB each and only for shorts that actually needed refinement).
+    """
+    current_plan = plan
+    refine_dir = out_path.parent / "_refined"
+    music_out = music_path if mode == "montage" else None
+    last_verdict: str | None = None
+    last_why: str | None = None
+    refinements_applied: list[str] = []
+
+    for iteration in range(max_iter + 1):
+        ok, err = render_short(
+            current_plan, out_path, mode=mode, music_path=music_path
+        )
+        if not ok:
+            return RenderResult(
+                plan=current_plan,
+                out_path=out_path,
+                ok=False,
+                error=err,
+                vlm_verdict=last_verdict,
+                vlm_why=last_why,
+                music_path=music_out,
+                extras={
+                    "refine_iterations": iteration,
+                    "refinements_applied": refinements_applied,
+                },
+            )
+
+        if not run_vlm_check or not settings.vlm_enabled:
+            return RenderResult(
+                plan=current_plan,
+                out_path=out_path,
+                ok=True,
+                music_path=music_out,
+                extras={"refine_iterations": iteration},
+            )
+
+        review = _run_vlm_review(current_plan, out_path, asset.get("game"))
+        if review is None:
+            # VLM unreachable / crashed — accept current render
+            return RenderResult(
+                plan=current_plan,
+                out_path=out_path,
+                ok=True,
+                music_path=music_out,
+                extras={
+                    "refine_iterations": iteration,
+                    "refine_stopped": "vlm_unavailable",
+                    "refinements_applied": refinements_applied,
+                },
+            )
+
+        last_verdict = "pass" if review.is_cohesive else "needs_review"
+        last_why = (
+            "; ".join(f.issue for f in review.fixes[:2]) if review.fixes else None
+        )
+
+        if review.is_cohesive:
+            return RenderResult(
+                plan=current_plan,
+                out_path=out_path,
+                ok=True,
+                vlm_verdict="pass",
+                vlm_why=last_why,
+                music_path=music_out,
+                extras={
+                    "refine_iterations": iteration,
+                    "refinements_applied": refinements_applied,
+                },
+            )
+
+        if iteration >= max_iter:
+            return RenderResult(
+                plan=current_plan,
+                out_path=out_path,
+                ok=True,
+                vlm_verdict=last_verdict,
+                vlm_why=last_why,
+                music_path=music_out,
+                extras={
+                    "refine_iterations": iteration,
+                    "refine_stopped": "cap_reached",
+                    "refinements_applied": refinements_applied,
+                },
+            )
+
+        window_fixes = [f for f in review.fixes if f.fix in _WINDOW_FIX_TYPES]
+        if not window_fixes:
+            return RenderResult(
+                plan=current_plan,
+                out_path=out_path,
+                ok=True,
+                vlm_verdict=last_verdict,
+                vlm_why=last_why,
+                music_path=music_out,
+                extras={
+                    "refine_iterations": iteration,
+                    "refine_stopped": "no_window_fixes",
+                    "refinements_applied": refinements_applied,
+                    "unapplied_fix_types": sorted({f.fix for f in review.fixes}),
+                },
+            )
+
+        refine_dir.mkdir(parents=True, exist_ok=True)
+        new_clips, applied = _apply_window_fixes(
+            current_plan.clips,
+            window_fixes,
+            asset_path=asset["path"],
+            out_dir=refine_dir,
+            iteration=iteration + 1,
+        )
+        if applied == 0:
+            # Nothing landed on disk — give up rather than spin
+            return RenderResult(
+                plan=current_plan,
+                out_path=out_path,
+                ok=True,
+                vlm_verdict=last_verdict,
+                vlm_why=last_why,
+                music_path=music_out,
+                extras={
+                    "refine_iterations": iteration,
+                    "refine_stopped": "all_fixes_failed",
+                    "refinements_applied": refinements_applied,
+                },
+            )
+        refinements_applied.append(
+            f"iter{iteration + 1}: "
+            + ", ".join(
+                f"{f.fix}({f.fix_seconds}s)@{f.clip_ref}" for f in window_fixes
+            )
+        )
+        current_plan = ShortPlan(
+            bucket=current_plan.bucket,
+            clips=new_clips,
+            title=current_plan.title,
+            vo_prompt=current_plan.vo_prompt,
+            index=current_plan.index,
+        )
+
+    # Shouldn't reach here (loop always returns) — belt & suspenders.
+    return RenderResult(
+        plan=current_plan, out_path=out_path, ok=True, music_path=music_out
+    )
+
+
+def _run_vlm_review(plan: ShortPlan, short_path: Path, game: str | None):
+    """Single VLM whole-comp review call. Returns None on any failure
+    so the caller can degrade gracefully."""
     try:
         from .candidates.probe import get_duration_seconds
         from .vlm.validator import validate_compilation
 
-        duration = get_duration_seconds(str(result.out_path))
+        duration = get_duration_seconds(str(short_path))
         if duration <= 0:
-            return
-        review = validate_compilation(
-            result.out_path,
+            return None
+        return validate_compilation(
+            short_path,
             game=game,
-            clip_count=len(result.plan.clips),
+            clip_count=len(plan.clips),
             total_duration_seconds=duration,
-            n_frames=min(24, max(8, len(result.plan.clips) * 4)),
+            n_frames=min(24, max(8, len(plan.clips) * 4)),
         )
-        result.vlm_verdict = "pass" if review.is_cohesive else "needs_review"
-        if review.fixes:
-            result.vlm_why = "; ".join(f.issue for f in review.fixes[:2])
-    except Exception as exc:  # never let the check break a compile
-        _log.info("shorts vlm coherence check skipped: %s", exc)
+    except Exception as exc:
+        _log.info("shorts vlm review skipped: %s", exc)
+        return None
 
 
 # ---------------------------------------------------------------------
