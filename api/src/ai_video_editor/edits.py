@@ -98,6 +98,16 @@ def cropped_hud_9x16(zoom_out: float | None = None) -> str:
     # crop_w = ih * (9/16) * factor — expressed at ffmpeg-eval time so
     # the filter graph stays source-resolution-independent.
     crop_w = f"ih*9/16*{factor:.4f}"
+
+    # Position the scoreline strip so its bottom edge sits just above
+    # the sharp play area (i.e. IN the blurred letterbox, hugging the
+    # top of the main image). At zoom_out=F the letterbox top height =
+    # 640 * (1 - 1/F). Scoreline is 320-wide x ~82 tall; leave 4px gap.
+    # When zoom_out is small the letterbox is too thin to hold the
+    # strip — clamp to y=4 (overlaps top of play area slightly).
+    scoreline_height_px = 82  # ROI 422x108 scaled to width 320
+    letterbox_top = 640.0 * (1.0 - 1.0 / factor) if factor > 0 else 0.0
+    scoreline_y = max(4, round(letterbox_top - scoreline_height_px - 4))
     return (
         # Split the source four ways: main sharp crop, blurred fill,
         # scoreline strip (top-right HUD), minimap square.
@@ -122,9 +132,9 @@ def cropped_hud_9x16(zoom_out: float | None = None) -> str:
         # Minimap: ROI = `_ROI_PRESETS['minimap_lol']`. Square, 240px.
         "[mm]crop=ih*0.22:ih*0.22:iw-ih*0.23:ih*0.77,"
         "scale=240:240:flags=lanczos,setsar=1[mms];"
-        # Scoreline overlay top-right (16px right margin, 20px from top
-        # since the strip is thin and doesn't fight the title drawtext).
-        "[main_composed][sls]overlay=W-w-16:20[step1];"
+        # Scoreline overlay: right-aligned, y computed above so it hugs
+        # the top of the sharp play area from inside the blurred letterbox.
+        f"[main_composed][sls]overlay=W-w-16:{scoreline_y}[step1];"
         # Minimap bottom-right.
         "[step1][mms]overlay=W-w-16:H-h-40[out]"
     )
