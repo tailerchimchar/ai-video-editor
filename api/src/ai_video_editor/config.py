@@ -265,8 +265,12 @@ class Settings(BaseSettings):
     shorts_beat_sync_strategy: str = "kill_on_beat"
     shorts_beat_sync_tolerance_seconds: float = 0.5
     shorts_beat_flash_enabled: bool = False
-    shorts_beat_flash_intensity: float = 0.3
-    shorts_beat_flash_duration_seconds: float = 0.08
+    # `kills` = flash on each clip's payoff moment (default, tastefully rare).
+    # `downbeats` = every 4th beat (~one per bar). `beats` = every beat
+    # (hyperactive; use for high-energy EDM montages only).
+    shorts_beat_flash_source: str = "kills"
+    shorts_beat_flash_intensity: float = 0.2
+    shorts_beat_flash_duration_seconds: float = 0.10
 
     model_config = {
         "env_file": ".env",

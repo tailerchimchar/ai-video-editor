@@ -1273,6 +1273,7 @@ def compile_shorts(
     music_path: str | None = None,
     layout: str | None = None,
     beat_flash: bool | None = None,
+    beat_flash_source: str | None = None,
 ) -> dict:
     """Render YouTube Shorts / TikTok / Reels-ready 9:16 videos from a
     game's highlights folder. Requires the asset to already have been
@@ -1325,6 +1326,8 @@ def compile_shorts(
         body["layout"] = layout
     if beat_flash is not None:
         body["beat_flash"] = beat_flash
+    if beat_flash_source:
+        body["beat_flash_source"] = beat_flash_source
     with _client() as c:
         job_id = c.post(f"{API}/assets/{asset_id}/shorts", json=body).json()["job_id"]
         return _wait_for_job(c, job_id)
@@ -1395,6 +1398,7 @@ def compile_cross_asset_montage(
     music_path: str | None = None,
     layout: str | None = None,
     beat_flash: bool | None = None,
+    beat_flash_source: str | None = None,
 ) -> dict:
     """Compile ONE "best of" montage short from your top multikill
     plays across EVERY session for `game` — not just one recording.
@@ -1440,6 +1444,8 @@ def compile_cross_asset_montage(
         body["layout"] = layout
     if beat_flash is not None:
         body["beat_flash"] = beat_flash
+    if beat_flash_source:
+        body["beat_flash_source"] = beat_flash_source
     with _client() as c:
         job_id = c.post(f"{API}/shorts/cross_asset_montage", json=body).json()[
             "job_id"

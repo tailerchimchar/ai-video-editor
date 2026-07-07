@@ -89,9 +89,17 @@ class CompileShortsBody(BaseModel):
     beat_flash: bool | None = Field(
         default=None,
         description=(
-            "Overlay a subtle white pulse on each beat of the music "
-            "track. Requires music_path (montage only). Defaults to "
-            "config `SHORTS_BEAT_FLASH_ENABLED`."
+            "Overlay a subtle white pulse. Requires montage mode. "
+            "Defaults to config `SHORTS_BEAT_FLASH_ENABLED`."
+        ),
+    )
+    beat_flash_source: str | None = Field(
+        default=None,
+        description=(
+            "What to flash on: `kills` (default, on each clip's payoff "
+            "moment — tastefully rare, no music needed), `downbeats` "
+            "(every 4th music beat, needs music), or `beats` (every "
+            "music beat — hyperactive)."
         ),
     )
 
@@ -129,6 +137,7 @@ async def _run_shorts_job(
             music_path=body.music_path,
             layout=body.layout,
             beat_flash=body.beat_flash,
+            beat_flash_source=body.beat_flash_source,
         )
         if not result.get("ok"):
             await _finish_job(
@@ -237,9 +246,13 @@ class CrossAssetMontageBody(BaseModel):
     )
     beat_flash: bool | None = Field(
         default=None,
+        description="Overlay a subtle white pulse. Defaults to config.",
+    )
+    beat_flash_source: str | None = Field(
+        default=None,
         description=(
-            "Overlay a subtle white pulse on each music beat. "
-            "Requires music_path. Defaults to config."
+            "`kills` (default; on each clip's payoff), `downbeats` "
+            "(every 4th music beat), or `beats` (every music beat)."
         ),
     )
 
@@ -263,6 +276,7 @@ async def _run_cross_asset_job(
             music_path=body.music_path,
             layout=body.layout,
             beat_flash=body.beat_flash,
+            beat_flash_source=body.beat_flash_source,
         )
         if not result.get("ok"):
             await _finish_job(

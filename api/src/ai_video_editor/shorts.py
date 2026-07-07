@@ -701,35 +701,82 @@ def _build_filter_complex(
     return ";".join(parts)
 
 
+def _kill_times_in_montage(plan: ShortPlan) -> tuple[float, ...]:
+    """Absolute times (from t=0 of the montage output) at which each
+    clip's kill-moment plays. Assumes clips concat back-to-back and
+    the kill sits at each clip's midpoint (matches how highlights are
+    cut — anchor centered in the window)."""
+    times: list[float] = []
+    montage_t = 0.0
+    for clip in plan.clips:
+        duration = clip.end_seconds - clip.start_seconds
+        times.append(montage_t + duration / 2.0)
+        montage_t += duration
+    return tuple(times)
+
+
+_FLASH_SOURCES = frozenset({"kills", "downbeats", "beats"})
+
+
+def _flash_times(
+    plan: ShortPlan,
+    music_path: str,
+    source: str,
+    max_t: float,
+) -> tuple[float, ...]:
+    """Pick the timestamps (in montage time) to fire flashes at.
+
+    Sources:
+      kills     -> once per clip at its kill midpoint (default, 3-5
+                   flashes; tastefully rare)
+      downbeats -> every 4th detected beat (~one per bar)
+      beats     -> every detected beat (hyperactive)
+    """
+    if source not in _FLASH_SOURCES:
+        raise ValueError(
+            f"unknown beat_flash_source {source!r}; "
+            f"expected one of {sorted(_FLASH_SOURCES)}"
+        )
+    if source == "kills":
+        return tuple(t for t in _kill_times_in_montage(plan) if t <= max_t)
+    # Beat-based sources need actual beat detection
+    from .music import detect_beats
+
+    track = detect_beats(music_path)
+    if not track.beats:
+        return ()
+    beats = tuple(b for b in track.beats if b <= max_t)
+    if source == "downbeats":
+        return beats[::4]
+    return beats  # source == "beats"
+
+
 def _compute_beat_flash_filter(
+    plan: ShortPlan,
     music_path: str | None,
     beat_flash_enabled: bool,
+    source: str | None = None,
 ) -> str | None:
-    """Detect beats + build the flash filter fragment. Returns None if
-    no music (nothing to sync to), the flag is off, or beat detection
-    fails — flash degrades gracefully to "no flash."
-    """
-    if not (beat_flash_enabled and music_path):
+    """Build the flash filter fragment. Returns None if flag off or no
+    flash times could be computed. Never aborts the render on failure."""
+    if not beat_flash_enabled:
+        return None
+    resolved_source = source or settings.shorts_beat_flash_source
+    # Beat-based sources need music; kills doesn't.
+    if resolved_source != "kills" and not music_path:
         return None
     try:
-        from .music import build_beat_effect_filter, detect_beats
+        from .music import build_beat_effect_filter
 
-        track = detect_beats(music_path)
-        if not track.beats:
-            return None
-        # Clip to the montage duration so the ffmpeg expression stays
-        # small on 3-minute songs (~350 beats -> ~60). ffmpeg's
-        # `enable=` is memory-bound; hundreds of OR'd `between()`
-        # clauses crash the filter graph init.
         max_t = settings.shorts_max_duration_seconds
-        beats_in_range = tuple(b for b in track.beats if b <= max_t)
-        if not beats_in_range:
+        times = _flash_times(plan, music_path or "", resolved_source, max_t)
+        if not times:
             return None
         return build_beat_effect_filter(
             "flash",
             "vcat",
             "vflashed",
-            beats_in_range,
+            times,
             intensity=settings.shorts_beat_flash_intensity,
             duration_seconds=settings.shorts_beat_flash_duration_seconds,
         )
@@ -749,6 +796,7 @@ def render_short(
     music_path: str | None = None,
     layout: str | None = None,
     beat_flash: bool | None = None,
+    beat_flash_source: str | None = None,
 ) -> tuple[bool, str | None]:
     """Render one short from its plan. Returns (ok, error_message_or_none).
 
@@ -757,8 +805,9 @@ def render_short(
     error message readable.
 
     `beat_flash` (default: config `shorts_beat_flash_enabled`) overlays
-    a subtle white pulse on each beat of `music_path`. No-op when
-    `music_path` is None or `mode != "montage"`.
+    a subtle white pulse. `beat_flash_source` selects what to flash on:
+    `kills` (default), `downbeats`, or `beats`. `kills` doesn't need
+    music; the others do.
     """
     if not plan.clips:
         return False, "empty plan"
@@ -781,8 +830,10 @@ def render_short(
         settings.shorts_beat_flash_enabled if beat_flash is None else beat_flash
     )
     beat_flash_filter = _compute_beat_flash_filter(
+        plan,
         music_path if mode == "montage" else None,
         beat_flash_resolved,
+        source=beat_flash_source,
     )
 
     filter_complex = _build_filter_complex(
@@ -929,6 +980,7 @@ def build_shorts(
     music_path: str | None = None,
     layout: str | None = None,
     beat_flash: bool | None = None,
+    beat_flash_source: str | None = None,
     run_vlm_check: bool = True,
 ) -> dict:
     """Top-level entry: bucket -> plan -> render -> VLM check -> index.md.
@@ -1009,6 +1061,7 @@ def build_shorts(
             max_iter=max_iter,
             layout=layout,
             beat_flash=beat_flash,
+            beat_flash_source=beat_flash_source,
         )
         results.append(result)
 
@@ -1174,6 +1227,7 @@ def _render_and_refine(
     max_iter: int,
     layout: str | None = None,
     beat_flash: bool | None = None,
+    beat_flash_source: str | None = None,
 ) -> RenderResult:
     """Render → VLM whole-comp review → refine loop.
 
@@ -1203,6 +1257,7 @@ def _render_and_refine(
             music_path=music_path,
             layout=layout,
             beat_flash=beat_flash,
+            beat_flash_source=beat_flash_source,
         )
         if not ok:
             return RenderResult(
@@ -1672,6 +1727,7 @@ def build_cross_asset_montage(
     music_path: str | None = None,
     layout: str | None = None,
     beat_flash: bool | None = None,
+    beat_flash_source: str | None = None,
     today: date | None = None,
     max_clips: int | None = None,
     run_vlm_check: bool = True,
@@ -1787,6 +1843,7 @@ def build_cross_asset_montage(
         max_iter=0,
         layout=layout,
         beat_flash=beat_flash,
+        beat_flash_source=beat_flash_source,
     )
 
     _write_cross_asset_index_md(
