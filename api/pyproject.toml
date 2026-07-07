@@ -20,6 +20,8 @@ dependencies = [
     "fastembed>=0.4.2",
     "rapidfuzz>=3.14.0",
     "vadersentiment>=3.3.2",
+    "librosa>=0.10.2",
+    "yt-dlp>=2025.1.15",
 ]
 
 [project.scripts]

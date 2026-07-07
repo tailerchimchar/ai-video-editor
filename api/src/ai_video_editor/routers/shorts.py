@@ -86,6 +86,14 @@ class CompileShortsBody(BaseModel):
             "preserves the full 16:9 in a thin center strip."
         ),
     )
+    beat_flash: bool | None = Field(
+        default=None,
+        description=(
+            "Overlay a subtle white pulse on each beat of the music "
+            "track. Requires music_path (montage only). Defaults to "
+            "config `SHORTS_BEAT_FLASH_ENABLED`."
+        ),
+    )
 
 
 async def _load_candidates(db, asset_id: str) -> list[dict]:
@@ -120,6 +128,7 @@ async def _run_shorts_job(
             topic=body.topic,
             music_path=body.music_path,
             layout=body.layout,
+            beat_flash=body.beat_flash,
         )
         if not result.get("ok"):
             await _finish_job(
@@ -226,6 +235,13 @@ class CrossAssetMontageBody(BaseModel):
         default=None,
         description="`cropped_hud` (default) or `blur_fill`.",
     )
+    beat_flash: bool | None = Field(
+        default=None,
+        description=(
+            "Overlay a subtle white pulse on each music beat. "
+            "Requires music_path. Defaults to config."
+        ),
+    )
 
 
 async def _run_cross_asset_job(
@@ -246,6 +262,7 @@ async def _run_cross_asset_job(
             window=body.window,
             music_path=body.music_path,
             layout=body.layout,
+            beat_flash=body.beat_flash,
         )
         if not result.get("ok"):
             await _finish_job(
@@ -305,6 +322,46 @@ async def list_cross_asset(game: str | None = None):
     Read-only — never triggers a render.
     """
     return list_cross_asset_shorts(game=game)
+
+
+class DownloadMusicBody(BaseModel):
+    """Payload for `POST /shorts/music`."""
+
+    url: str = Field(
+        ...,
+        description="YouTube URL or local file path. Cached by URL hash.",
+    )
+    name: str | None = Field(
+        default=None,
+        description=(
+            "Optional filename stem (e.g. 'beat_drop' -> 'beat_drop.mp3'). "
+            "Omit for hash-based auto name."
+        ),
+    )
+
+
+@router.post("/shorts/music")
+async def download_music_endpoint(body: DownloadMusicBody):
+    """Download a music track to `WORKSPACE/music/` and return its
+    local path. Idempotent — repeat calls return the cached file.
+    Use the returned path as `music_path` in a subsequent compile call.
+    """
+    from ..music import download_music
+
+    try:
+        path = await asyncio.to_thread(
+            download_music, body.url, name=body.name
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(500, f"music download failed: {exc}") from exc
+    return {
+        "ok": True,
+        "path": path.as_posix(),
+        "name": path.name,
+        "size_bytes": path.stat().st_size if path.is_file() else 0,
+    }
 
 
 @router.get("/shorts/cross_asset_montage/preview")

@@ -644,16 +644,21 @@ def _build_filter_complex(
     duck_volume: float,
     music_volume: float,
     layout: str = "cropped_hud",
+    beat_flash_filter: str | None = None,
 ) -> str:
     """Assemble the full `-filter_complex` string.
 
     Video path:
       For each source video, apply the layout chain (`blur_fill` or
-      `cropped_hud`) yielding `[vN]`, concat all into `[vcat]`, then
-      draw the title.
+      `cropped_hud`) yielding `[vN]`, concat all into `[vcat]`, optionally
+      apply a beat-flash effect, then draw the title.
     Audio path:
       Concat source audio -> `[asrc]`. If VO mode: volume=duck.
       If montage + music present: amix with the music track.
+
+    `beat_flash_filter` is an already-built ffmpeg filter fragment from
+    `music.build_beat_effect_filter` reading `[vcat]` and writing
+    `[vflashed]`. When None, the title overlays directly on `[vcat]`.
 
     Result: `[vout][aout]`.
     """
@@ -665,8 +670,15 @@ def _build_filter_complex(
     concat_v_ins = "".join(f"[v{i}]" for i in range(n_video_inputs))
     parts.append(f"{concat_v_ins}concat=n={n_video_inputs}:v=1:a=0[vcat]")
 
-    # Title overlay on the concatenated video
-    parts.append(f"[vcat]{_title_drawtext(title)}[vout]")
+    # Optional beat-flash between concat and title. Reads [vcat],
+    # writes [vflashed] which becomes the input to drawtext.
+    video_pre_title = "vcat"
+    if beat_flash_filter is not None:
+        parts.append(beat_flash_filter)
+        video_pre_title = "vflashed"
+
+    # Title overlay on the (possibly flashed) concatenated video
+    parts.append(f"[{video_pre_title}]{_title_drawtext(title)}[vout]")
 
     # Concat source audio
     concat_a_ins = "".join(f"[{i}:a]" for i in range(n_video_inputs))
@@ -689,6 +701,46 @@ def _build_filter_complex(
     return ";".join(parts)
 
 
+def _compute_beat_flash_filter(
+    music_path: str | None,
+    beat_flash_enabled: bool,
+) -> str | None:
+    """Detect beats + build the flash filter fragment. Returns None if
+    no music (nothing to sync to), the flag is off, or beat detection
+    fails — flash degrades gracefully to "no flash."
+    """
+    if not (beat_flash_enabled and music_path):
+        return None
+    try:
+        from .music import build_beat_effect_filter, detect_beats
+
+        track = detect_beats(music_path)
+        if not track.beats:
+            return None
+        # Clip to the montage duration so the ffmpeg expression stays
+        # small on 3-minute songs (~350 beats -> ~60). ffmpeg's
+        # `enable=` is memory-bound; hundreds of OR'd `between()`
+        # clauses crash the filter graph init.
+        max_t = settings.shorts_max_duration_seconds
+        beats_in_range = tuple(b for b in track.beats if b <= max_t)
+        if not beats_in_range:
+            return None
+        return build_beat_effect_filter(
+            "flash",
+            "vcat",
+            "vflashed",
+            beats_in_range,
+            intensity=settings.shorts_beat_flash_intensity,
+            duration_seconds=settings.shorts_beat_flash_duration_seconds,
+        )
+    except Exception as exc:
+        _log.warning(
+            "beat-flash setup failed (non-fatal, rendering without flash): %s",
+            exc,
+        )
+        return None
+
+
 def render_short(
     plan: ShortPlan,
     out_path: Path,
@@ -696,12 +748,17 @@ def render_short(
     mode: str,
     music_path: str | None = None,
     layout: str | None = None,
+    beat_flash: bool | None = None,
 ) -> tuple[bool, str | None]:
     """Render one short from its plan. Returns (ok, error_message_or_none).
 
     Uses ffmpeg with `-filter_complex`. Re-encodes (H.264 + AAC) because
     the blur-fill filter chain requires it. Bounded stderr keeps the
     error message readable.
+
+    `beat_flash` (default: config `shorts_beat_flash_enabled`) overlays
+    a subtle white pulse on each beat of `music_path`. No-op when
+    `music_path` is None or `mode != "montage"`.
     """
     if not plan.clips:
         return False, "empty plan"
@@ -720,6 +777,14 @@ def render_short(
         input_args.extend(["-i", music_path])
         music_input_index = len(plan.clips)
 
+    beat_flash_resolved = (
+        settings.shorts_beat_flash_enabled if beat_flash is None else beat_flash
+    )
+    beat_flash_filter = _compute_beat_flash_filter(
+        music_path if mode == "montage" else None,
+        beat_flash_resolved,
+    )
+
     filter_complex = _build_filter_complex(
         n_video_inputs=len(plan.clips),
         title=plan.title,
@@ -728,6 +793,7 @@ def render_short(
         duck_volume=duck,
         music_volume=music_vol,
         layout=layout or settings.shorts_layout,
+        beat_flash_filter=beat_flash_filter,
     )
 
     cmd = [
@@ -862,6 +928,7 @@ def build_shorts(
     topic: str | None = None,
     music_path: str | None = None,
     layout: str | None = None,
+    beat_flash: bool | None = None,
     run_vlm_check: bool = True,
 ) -> dict:
     """Top-level entry: bucket -> plan -> render -> VLM check -> index.md.
@@ -941,6 +1008,7 @@ def build_shorts(
             run_vlm_check=run_vlm_check,
             max_iter=max_iter,
             layout=layout,
+            beat_flash=beat_flash,
         )
         results.append(result)
 
@@ -1105,6 +1173,7 @@ def _render_and_refine(
     run_vlm_check: bool,
     max_iter: int,
     layout: str | None = None,
+    beat_flash: bool | None = None,
 ) -> RenderResult:
     """Render → VLM whole-comp review → refine loop.
 
@@ -1133,6 +1202,7 @@ def _render_and_refine(
             mode=mode,
             music_path=music_path,
             layout=layout,
+            beat_flash=beat_flash,
         )
         if not ok:
             return RenderResult(
@@ -1601,6 +1671,7 @@ def build_cross_asset_montage(
     window: str = "week",
     music_path: str | None = None,
     layout: str | None = None,
+    beat_flash: bool | None = None,
     today: date | None = None,
     max_clips: int | None = None,
     run_vlm_check: bool = True,
@@ -1715,6 +1786,7 @@ def build_cross_asset_montage(
         run_vlm_check=run_vlm_check,
         max_iter=0,
         layout=layout,
+        beat_flash=beat_flash,
     )
 
     _write_cross_asset_index_md(

@@ -259,6 +259,14 @@ class Settings(BaseSettings):
     # (last 7 days) but `day` / `all` are supported too.
     shorts_cross_asset_max_clips: int = 5
     shorts_cross_asset_default_window: str = "week"
+    # Beat-sync + beat-flash — opt-in per compile via a param, but the
+    # defaults here set the "when enabled" behavior.
+    shorts_beat_sync_enabled: bool = False
+    shorts_beat_sync_strategy: str = "kill_on_beat"
+    shorts_beat_sync_tolerance_seconds: float = 0.5
+    shorts_beat_flash_enabled: bool = False
+    shorts_beat_flash_intensity: float = 0.3
+    shorts_beat_flash_duration_seconds: float = 0.08
 
     model_config = {
         "env_file": ".env",

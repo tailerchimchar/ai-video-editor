@@ -1272,6 +1272,7 @@ def compile_shorts(
     topic: str | None = None,
     music_path: str | None = None,
     layout: str | None = None,
+    beat_flash: bool | None = None,
 ) -> dict:
     """Render YouTube Shorts / TikTok / Reels-ready 9:16 videos from a
     game's highlights folder. Requires the asset to already have been
@@ -1322,6 +1323,8 @@ def compile_shorts(
         body["music_path"] = music_path
     if layout:
         body["layout"] = layout
+    if beat_flash is not None:
+        body["beat_flash"] = beat_flash
     with _client() as c:
         job_id = c.post(f"{API}/assets/{asset_id}/shorts", json=body).json()["job_id"]
         return _wait_for_job(c, job_id)
@@ -1362,11 +1365,36 @@ def list_shorts_topics(asset_id: str) -> dict:
 
 
 @mcp.tool()
+def download_music(url: str, name: str | None = None) -> dict:
+    """Download a music track from a URL (YouTube supported) into
+    `WORKSPACE/music/` and return its local path.
+
+    Use the returned `path` as the `music_path` argument to
+    `compile_shorts` or `compile_cross_asset_montage` for a montage
+    with a music bed. Optionally enable `beat_flash=True` on those
+    compile calls to overlay a subtle pulse on each beat.
+
+    Idempotent: repeat calls with the same URL return the cached file
+    (hashed by URL). `name` optionally overrides the filename stem
+    (e.g. `name="beat_drop"` -> `beat_drop.mp3`).
+
+    Local paths (already a file) are returned verbatim — safe to pass
+    an already-downloaded file's path.
+    """
+    body: dict = {"url": url}
+    if name:
+        body["name"] = name
+    with _client() as c:
+        return c.post(f"{API}/shorts/music", json=body).json()
+
+
+@mcp.tool()
 def compile_cross_asset_montage(
     game: str,
     window: str = "week",
     music_path: str | None = None,
     layout: str | None = None,
+    beat_flash: bool | None = None,
 ) -> dict:
     """Compile ONE "best of" montage short from your top multikill
     plays across EVERY session for `game` — not just one recording.
@@ -1395,6 +1423,11 @@ def compile_cross_asset_montage(
     Requires each source session's `analyze_asset(cut=True)` to have
     already run (produces the highlights folder + clip files).
 
+    For a music bed, first call `download_music(url)` to get a local
+    path, then pass it as `music_path`. Enable `beat_flash=True` to
+    overlay a subtle white pulse on each beat — makes the montage
+    feel much more hype for basically free.
+
     Poll internally — the tool waits for completion (typically
     2-5 minutes depending on clip count).
     """
@@ -1405,6 +1438,8 @@ def compile_cross_asset_montage(
         body["music_path"] = music_path
     if layout:
         body["layout"] = layout
+    if beat_flash is not None:
+        body["beat_flash"] = beat_flash
     with _client() as c:
         job_id = c.post(f"{API}/shorts/cross_asset_montage", json=body).json()[
             "job_id"
