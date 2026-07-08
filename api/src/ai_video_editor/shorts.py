@@ -2265,6 +2265,381 @@ def list_outplayed_shorts(game: str | None = None) -> dict:
     return {"folders": folders}
 
 
+# ---------------------------------------------------------------------
+# Browse helpers — expose what's available for hand-picking without
+# committing to a compile. Read-only surface over both source
+# locations: raw Outplayed clips AND analyzed highlights folders.
+# ---------------------------------------------------------------------
+
+
+def list_outplayed_clips(
+    game: str,
+    *,
+    since_days: int | None = None,
+    limit: int | None = None,
+    now: datetime | None = None,
+) -> dict:
+    """Enumerate short Outplayed auto-cut clips for `game`.
+
+    Same scanner as `preview_outplayed_montage` — walks
+    `OUTPLAYED_MEDIA_DIR/<game>/`, filters to `<=120s` files, sorts
+    by mtime DESC. Optional `since_days` restricts to recent, `limit`
+    caps the list length.
+    """
+    scanned = _scan_outplayed_clips(game)
+    filtered = _filter_by_since(scanned, since_days, now)
+    if limit is not None:
+        filtered = filtered[:limit]
+    return {
+        "ok": True,
+        "game": game,
+        "since_days": since_days,
+        "clips_total": len(scanned),
+        "clips_returned": len(filtered),
+        "clips": [
+            {
+                "path": ref.path.as_posix(),
+                "session": ref.path.parent.name,
+                "filename": ref.path.name,
+                "duration_seconds": ref.duration_seconds,
+                "mtime": datetime.fromtimestamp(ref.mtime_epoch).isoformat(),
+            }
+            for ref in filtered
+        ],
+    }
+
+
+def list_highlights_sessions(game: str | None = None) -> dict:
+    """Enumerate analyzed session folders under
+    `WORKSPACE/highlights/<game>/`.
+
+    Each entry is a session folder produced by `analyze_asset(cut=True)`
+    or `batch_highlights`. Filter by `game` (exact name); omit to list
+    every game in the workspace.
+    """
+    from .highlights import _safe
+
+    root = settings.workspace_dir / "highlights"
+    if not root.is_dir():
+        return {"games": []}
+    target_dirs = (
+        [root / _safe(game)]
+        if game
+        else sorted(p for p in root.iterdir() if p.is_dir())
+    )
+    games: list[dict] = []
+    for game_dir in target_dirs:
+        if not game_dir.is_dir():
+            continue
+        sessions: list[dict] = []
+        for entry in sorted(game_dir.iterdir()):
+            if not entry.is_dir():
+                continue
+            idx = entry / "index.json"
+            date_obj = _parse_session_date(entry.name)
+            sessions.append(
+                {
+                    "folder": entry.name,
+                    "path": entry.as_posix(),
+                    "date": date_obj.isoformat() if date_obj else None,
+                    "index_json_present": idx.is_file(),
+                }
+            )
+        games.append(
+            {
+                "game": game_dir.name,
+                "session_count": len(sessions),
+                "sessions": sessions,
+            }
+        )
+    return {"games": games}
+
+
+def list_highlights_clips(
+    session_folder: str, *, game: str | None = None
+) -> dict:
+    """Enumerate clips inside one analyzed highlights session folder.
+
+    `session_folder` is the folder name (e.g. `07-04-2026_15h15`).
+    Reads its `index.json` for per-clip metadata. If `game` is
+    omitted, the folder is searched across all games.
+    """
+    from .highlights import _safe
+
+    root = settings.workspace_dir / "highlights"
+    if not root.is_dir():
+        return {"ok": False, "error": "no highlights folder in workspace"}
+    game_dirs = (
+        [root / _safe(game)]
+        if game
+        else [p for p in root.iterdir() if p.is_dir()]
+    )
+    for game_dir in game_dirs:
+        target = game_dir / session_folder
+        if target.is_dir():
+            clips = load_clips(target)
+            return {
+                "ok": True,
+                "game": game_dir.name,
+                "session_folder": session_folder,
+                "session_path": target.as_posix(),
+                "clip_count": len(clips),
+                "clips": [
+                    {
+                        "file": c.file,
+                        "path": c.path.as_posix(),
+                        "event_type": c.event_type,
+                        "start_seconds": c.start_seconds,
+                        "end_seconds": c.end_seconds,
+                        "hype_score": c.hype_score,
+                        "reason": c.reason,
+                    }
+                    for c in clips
+                ],
+            }
+    return {
+        "ok": False,
+        "error": f"session_folder {session_folder!r} not found",
+    }
+
+
+# ---------------------------------------------------------------------
+# Custom montage — hand-pick clip paths from anywhere, stitch them.
+# Complements (does not replace) the analyzer/outplayed compilers.
+# ---------------------------------------------------------------------
+
+
+_CUSTOM_BUCKET = "custom"
+
+
+def _resolve_clip_path_for_custom(
+    path_str: str,
+) -> tuple[Path, float] | None:
+    """Coerce a user-supplied path to (Path, duration_seconds).
+
+    Accepts any existing `.mp4` file — no game/folder restriction,
+    because the whole point of custom is "grab from anywhere." Returns
+    None if the file doesn't exist or ffprobe fails.
+    """
+    p = Path(path_str)
+    if not p.is_file():
+        _log.warning("custom compile: file not found: %s", p)
+        return None
+    try:
+        from .candidates.probe import get_duration_seconds
+
+        duration = get_duration_seconds(str(p))
+    except Exception as exc:
+        _log.warning("custom compile: ffprobe failed on %s: %s", p, exc)
+        return None
+    if duration <= 0:
+        return None
+    return p, duration
+
+
+def _custom_output_folder(name: str) -> Path:
+    """`WORKSPACE/shorts/_custom/<safe-name>/`"""
+    from .highlights import _safe
+
+    return settings.workspace_dir / "shorts" / "_custom" / _safe(name)
+
+
+def _write_custom_index_md(
+    folder: Path,
+    *,
+    name: str,
+    picked: list[tuple[Path, float]],
+    result: RenderResult | None,
+    music_path: str | None,
+    beat_flash_source: str | None,
+) -> None:
+    lines: list[str] = []
+    lines.append(f"# Custom montage: {name}")
+    lines.append(f"Generated: {datetime.now(timezone.utc).isoformat()}")
+    lines.append("")
+    lines.append(f"## Clips ({len(picked)})")
+    for i, (path, duration) in enumerate(picked, 1):
+        lines.append(f"{i:02d}. {duration:.1f}s  {path.as_posix()}")
+    lines.append("")
+    if result is not None:
+        status = "OK" if result.ok else "FAILED"
+        lines.append(f"## Render  [{status}]")
+        lines.append(f"Output: {result.out_path.name}")
+        if music_path:
+            lines.append(f"Music: {music_path}")
+        if beat_flash_source:
+            lines.append(f"Flash source: {beat_flash_source}")
+        if result.vlm_verdict:
+            lines.append(f"VLM: {result.vlm_verdict} — {result.vlm_why or ''}")
+        if not result.ok:
+            lines.append(f"Error: {result.error}")
+    (folder / "index.md").write_text("\n".join(lines), encoding="utf-8")
+
+
+def build_custom_montage(
+    *,
+    clip_paths: list[str],
+    name: str | None = None,
+    music_path: str | None = None,
+    layout: str | None = None,
+    beat_flash: bool | None = None,
+    beat_flash_source: str | None = None,
+    run_vlm_check: bool = True,
+) -> dict:
+    """Compile ONE montage from an EXPLICIT list of clip paths — no
+    scanning, no ranking, no bucketing. Clips can come from anywhere:
+    the Outplayed folder, a highlights folder, the finalized
+    compilations folder, or an ad-hoc directory the user drops files
+    in. Order in the input list = order in the output.
+
+    Non-existent or unreadable paths are skipped with a warning; the
+    montage still renders with whatever survived.
+
+    `name` becomes the output folder + filename stem. When omitted, a
+    timestamp is used.
+
+    Output: `WORKSPACE/shorts/_custom/<name>/<name>.mp4` + `index.md`.
+    """
+    if not clip_paths:
+        return {
+            "ok": False,
+            "error": "clip_paths is empty",
+            "shorts_written": 0,
+            "shorts": [],
+        }
+
+    resolved: list[tuple[Path, float]] = []
+    skipped: list[str] = []
+    for raw in clip_paths:
+        entry = _resolve_clip_path_for_custom(raw)
+        if entry is None:
+            skipped.append(raw)
+        else:
+            resolved.append(entry)
+    if not resolved:
+        return {
+            "ok": False,
+            "error": (
+                f"none of the {len(clip_paths)} clip_paths resolved to "
+                "readable video files"
+            ),
+            "skipped": skipped,
+            "shorts_written": 0,
+            "shorts": [],
+        }
+
+    resolved_name = name or f"custom_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+    tup = tuple(
+        ShortClip(
+            file=p.name,
+            path=p,
+            event_type="custom",
+            start_seconds=0.0,
+            end_seconds=duration,
+            hype_score=1.0,
+            funny_score=0.5,
+            story_score=0.5,
+            reason="user-supplied clip",
+        )
+        for p, duration in resolved
+    )
+    plan = ShortPlan(
+        bucket=_CUSTOM_BUCKET,
+        clips=tup,
+        title=resolved_name.upper()[:40],
+        vo_prompt="",
+        index=1,
+    )
+
+    resolved_music: str | None = (
+        music_path or settings.shorts_default_music_path or None
+    )
+    if resolved_music and not Path(resolved_music).is_file():
+        _log.warning(
+            "custom compile: music path %r not found — proceeding without",
+            resolved_music,
+        )
+        resolved_music = None
+
+    out_folder = _custom_output_folder(resolved_name)
+    out_folder.mkdir(parents=True, exist_ok=True)
+    for old in out_folder.glob("*.mp4"):
+        old.unlink(missing_ok=True)
+    out_path = out_folder / f"{resolved_name}.mp4"
+
+    fake_asset = {"path": str(resolved[0][0]), "game": None}
+    result = _render_and_refine(
+        plan,
+        out_path,
+        mode="montage",
+        asset=fake_asset,
+        music_path=resolved_music,
+        run_vlm_check=run_vlm_check,
+        max_iter=0,
+        layout=layout,
+        beat_flash=beat_flash,
+        beat_flash_source=beat_flash_source,
+    )
+
+    _write_custom_index_md(
+        out_folder,
+        name=resolved_name,
+        picked=resolved,
+        result=result,
+        music_path=resolved_music,
+        beat_flash_source=beat_flash_source,
+    )
+
+    return {
+        "ok": True,
+        "folder": out_folder.as_posix(),
+        "shorts_written": 1 if result.ok else 0,
+        "shorts_total": 1,
+        "clips_resolved": len(resolved),
+        "clips_skipped": len(skipped),
+        "skipped": skipped,
+        "shorts": [
+            {
+                "file": result.out_path.name,
+                "bucket": _CUSTOM_BUCKET,
+                "title": plan.title,
+                "clip_count": len(plan.clips),
+                "ok": result.ok,
+                "error": result.error,
+                "vlm_verdict": result.vlm_verdict,
+                "vlm_why": result.vlm_why,
+                "sources": [
+                    {"path": p.as_posix(), "duration_seconds": d}
+                    for p, d in resolved
+                ],
+            }
+        ],
+    }
+
+
+def list_custom_shorts() -> dict:
+    """Enumerate custom-compile outputs under
+    `WORKSPACE/shorts/_custom/`. Read-only."""
+    root = settings.workspace_dir / "shorts" / "_custom"
+    if not root.is_dir():
+        return {"folders": []}
+    folders: list[dict] = []
+    for entry in sorted(root.iterdir()):
+        if not entry.is_dir():
+            continue
+        shorts = sorted(p.name for p in entry.glob("*.mp4"))
+        folders.append(
+            {
+                "folder": entry.as_posix(),
+                "name": entry.name,
+                "shorts": shorts,
+                "index_md_present": (entry / "index.md").is_file(),
+            }
+        )
+    return {"folders": folders}
+
+
 def list_cross_asset_shorts(game: str | None = None) -> dict:
     """Enumerate cross-asset shorts on disk under
     `WORKSPACE/shorts/_cross_asset/`. Read-only. Optionally filter by

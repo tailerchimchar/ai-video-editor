@@ -29,9 +29,14 @@ from ..models import RankResponse
 from ..shorts import (
     _shorts_folder,
     build_cross_asset_montage,
+    build_custom_montage,
     build_outplayed_montage,
     build_shorts,
     list_cross_asset_shorts,
+    list_custom_shorts,
+    list_highlights_clips,
+    list_highlights_sessions,
+    list_outplayed_clips,
     list_outplayed_shorts,
     preview_buckets,
     preview_cross_asset_montage,
@@ -489,6 +494,133 @@ async def preview_outplayed(
     return preview_outplayed_montage(
         game=game, limit=limit, since_days=since_days
     )
+
+
+# ---------------------------------------------------------------------
+# Browse — list what's available in each source location
+# ---------------------------------------------------------------------
+
+
+@router.get("/shorts/browse/outplayed")
+async def browse_outplayed(
+    game: str,
+    since_days: int | None = None,
+    limit: int | None = None,
+):
+    """List Outplayed auto-cut clips for `game`. Read-only."""
+    return list_outplayed_clips(
+        game, since_days=since_days, limit=limit
+    )
+
+
+@router.get("/shorts/browse/highlights")
+async def browse_highlights(game: str | None = None):
+    """List analyzed session folders under WORKSPACE/highlights/."""
+    return list_highlights_sessions(game)
+
+
+@router.get("/shorts/browse/highlights/{session_folder}")
+async def browse_highlights_session(
+    session_folder: str, game: str | None = None
+):
+    """List clips inside one analyzed highlights session folder."""
+    return list_highlights_clips(session_folder, game=game)
+
+
+# ---------------------------------------------------------------------
+# Custom montage — stitch an explicit list of paths from anywhere
+# ---------------------------------------------------------------------
+
+
+class CustomMontageBody(BaseModel):
+    """Payload for `POST /shorts/custom_montage`."""
+
+    clip_paths: list[str] = Field(
+        ...,
+        description=(
+            "Ordered list of clip file paths. Any existing `.mp4` "
+            "works — Outplayed folder, highlights folder, wherever."
+        ),
+    )
+    name: str | None = Field(
+        default=None,
+        description="Output folder + filename stem. Omit for timestamp.",
+    )
+    music_path: str | None = Field(default=None)
+    layout: str | None = Field(default=None)
+    beat_flash: bool | None = Field(default=None)
+    beat_flash_source: str | None = Field(default=None)
+
+
+async def _run_custom_job(job_id: str, body: CustomMontageBody) -> None:
+    """Background worker for custom montage compile."""
+    db = await get_db()
+    try:
+        await db.execute(
+            "UPDATE jobs SET status = 'running' WHERE id = ?", (job_id,)
+        )
+        await db.commit()
+
+        result = await asyncio.to_thread(
+            build_custom_montage,
+            clip_paths=body.clip_paths,
+            name=body.name,
+            music_path=body.music_path,
+            layout=body.layout,
+            beat_flash=body.beat_flash,
+            beat_flash_source=body.beat_flash_source,
+        )
+        if not result.get("ok"):
+            await _finish_job(
+                db,
+                job_id,
+                error=str(result.get("error") or "custom render failed"),
+            )
+            return
+        await _finish_job(
+            db,
+            job_id,
+            output_path=(
+                f"{result.get('shorts_written', 0)}/"
+                f"{result.get('shorts_total', 0)} -> {result.get('folder', '?')}"
+            ),
+        )
+    except Exception as exc:
+        with contextlib.suppress(Exception):
+            await _finish_job(db, job_id, error=str(exc)[:1500])
+    finally:
+        await db.close()
+
+
+@router.post("/shorts/custom_montage", response_model=RankResponse)
+async def compile_custom_montage_endpoint(body: CustomMontageBody):
+    """Compile a montage from an EXPLICIT list of clip paths. Any
+    existing `.mp4` works — mix Outplayed clips, highlights clips,
+    anything on disk."""
+    if not body.clip_paths:
+        raise HTTPException(400, "clip_paths cannot be empty")
+    db = await get_db()
+    try:
+        job_id = str(uuid.uuid4())
+        await db.execute(
+            "INSERT INTO jobs (id, project_id, type, status, created_at) "
+            "VALUES (?, NULL, 'custom_shorts', 'pending', ?)",
+            (job_id, datetime.now(timezone.utc).isoformat()),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+    _track(_run_custom_job(job_id, body))
+    return RankResponse(job_id=job_id)
+
+
+@router.get("/shorts/custom_montage")
+async def list_custom(game: str | None = None):
+    """List custom-compile outputs. `game` param ignored (kept for
+    symmetry with other list endpoints)."""
+    _ = game
+    return list_custom_shorts()
 
 
 @router.get("/assets/{asset_id}/shorts/topics")

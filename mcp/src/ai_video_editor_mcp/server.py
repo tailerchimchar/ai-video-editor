@@ -1577,6 +1577,146 @@ def list_outplayed_shorts(game: str | None = None) -> dict:
         return c.get(f"{API}/shorts/outplayed_montage{params}").json()
 
 
+# ---------------------------------------------------------------------
+# Browse both source locations (Outplayed folder + workspace highlights)
+# — so you can hand-pick clip paths before calling compile_custom_montage.
+# ---------------------------------------------------------------------
+
+
+@mcp.tool()
+def list_outplayed_clips(
+    game: str,
+    since_days: int | None = None,
+    limit: int | None = None,
+) -> dict:
+    """Browse Outplayed's auto-cut event clips for `game`.
+
+    Walks `OUTPLAYED_MEDIA_DIR/<game>/`, returns each short clip
+    (<=120s) with its path, source session folder, duration, and
+    modification time. Most recent first.
+
+    Use to see what's available before calling
+    `compile_custom_montage(clip_paths=[...])` with hand-picked paths.
+    Or pass `since_days=1` to see just today's clips.
+    """
+    params = [f"game={game}"]
+    if since_days is not None:
+        params.append(f"since_days={since_days}")
+    if limit is not None:
+        params.append(f"limit={limit}")
+    with _client() as c:
+        return c.get(
+            f"{API}/shorts/browse/outplayed?{'&'.join(params)}"
+        ).json()
+
+
+@mcp.tool()
+def list_highlights_sessions(game: str | None = None) -> dict:
+    """Browse analyzed session folders under
+    `WORKSPACE/highlights/<game>/`. Each folder is a game session
+    that went through `analyze_asset(cut=True)` — its clips are
+    already ranked + cut into short mp4s.
+
+    Filter by `game` (exact name); omit for every game in the
+    workspace. Use with `list_highlights_clips(session_folder)` to
+    see what's inside a specific session.
+    """
+    params = f"?game={game}" if game else ""
+    with _client() as c:
+        return c.get(f"{API}/shorts/browse/highlights{params}").json()
+
+
+@mcp.tool()
+def list_highlights_clips(
+    session_folder: str, game: str | None = None
+) -> dict:
+    """List clips inside one analyzed highlights session folder.
+
+    `session_folder` is the folder name (e.g. `07-04-2026_15h15`,
+    from `list_highlights_sessions`). Returns each clip's path,
+    event type, timing, hype score, and the ranker's reason string.
+
+    Use these paths as inputs to `compile_custom_montage`.
+    """
+    params = f"?game={game}" if game else ""
+    with _client() as c:
+        return c.get(
+            f"{API}/shorts/browse/highlights/{session_folder}{params}"
+        ).json()
+
+
+# ---------------------------------------------------------------------
+# Custom montage — stitch a hand-picked list of paths from anywhere.
+# ---------------------------------------------------------------------
+
+
+@mcp.tool()
+def compile_custom_montage(
+    clip_paths: list[str],
+    name: str | None = None,
+    music_path: str | None = None,
+    layout: str | None = None,
+    beat_flash: bool | None = None,
+    beat_flash_source: str | None = None,
+) -> dict:
+    """Compile ONE montage from an EXPLICIT list of clip paths — mix
+    from ANYWHERE: Outplayed folder, analyzed highlights folders,
+    ad-hoc directories. Order in the list = order in the output.
+
+    This is the "hey, take these specific clips and put them together"
+    flow — complements (does not replace) the automated
+    `compile_shorts` / `compile_outplayed_montage` /
+    `compile_cross_asset_montage` flows.
+
+    Typical workflow:
+      1. Browse: `list_outplayed_clips("Valorant")` or
+         `list_highlights_sessions("League of Legends")` +
+         `list_highlights_clips(session)` to see what's available
+      2. Pick clip paths you want
+      3. `compile_custom_montage(clip_paths=[...], music_path="...",
+         beat_flash=True)` — renders one 9:16 montage.
+
+    Args:
+      - `clip_paths`: list of file paths (any existing `.mp4` works)
+      - `name`: output folder + filename stem. Omit for timestamp.
+      - `music_path`: pass a local path (call `download_music(url)`
+        first to fetch from YouTube)
+      - `beat_flash` + `beat_flash_source`: same as other compile
+        tools — `kills` default, `downbeats` / `beats` also available
+
+    Output: `WORKSPACE/shorts/_custom/<name>/<name>.mp4` + `index.md`.
+    Missing / unreadable paths are skipped with a warning; the montage
+    still renders with whatever survived.
+    """
+    if not clip_paths:
+        return {"status": "failed", "error": "clip_paths cannot be empty"}
+    body: dict = {"clip_paths": clip_paths}
+    if name:
+        body["name"] = name
+    if music_path:
+        body["music_path"] = music_path
+    if layout:
+        body["layout"] = layout
+    if beat_flash is not None:
+        body["beat_flash"] = beat_flash
+    if beat_flash_source:
+        body["beat_flash_source"] = beat_flash_source
+    with _client() as c:
+        job_id = c.post(f"{API}/shorts/custom_montage", json=body).json()[
+            "job_id"
+        ]
+        return _wait_for_job(c, job_id)
+
+
+@mcp.tool()
+def list_custom_shorts() -> dict:
+    """List custom-compile montages already rendered under
+    `WORKSPACE/shorts/_custom/`. Read-only.
+    """
+    with _client() as c:
+        return c.get(f"{API}/shorts/custom_montage").json()
+
+
 @mcp.tool()
 def vlm_review_compilation(
     compilation_id: str,
