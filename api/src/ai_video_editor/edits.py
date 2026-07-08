@@ -147,11 +147,15 @@ def _cropped_hud_lol(zoom_out: float | None) -> str:
 
 
 def _cropped_hud_valorant(zoom_out: float | None) -> str:
-    """Valorant variant — killfeed top-right + minimap top-left.
+    """Valorant variant — killfeed top-right (BIG + readable) +
+    minimap top-left.
 
     Val's HUD is very different from LoL's:
-      - Killfeed sits top-right (Val's kill announcements)
-      - Minimap sits top-LEFT (Val convention — mirrors valorant.toml)
+      - Killfeed top-right, sized big enough that player names are
+        legible (that's how the viewer knows the user got the kill).
+        Positioned lower so it bleeds into the sharp play area a bit
+        — better than losing it in the blurred letterbox.
+      - Minimap top-LEFT (Val convention — mirrors valorant.toml).
       - We skip a separate scoreboard overlay for MVP — the top-center
         Val score/timer is thin and would clash with the killfeed on
         the same row.
@@ -165,16 +169,13 @@ def _cropped_hud_valorant(zoom_out: float | None) -> str:
     )
     crop_w = f"ih*9/16*{factor:.4f}"
 
-    # Killfeed strip: taller than LoL's scoreline (Val kill entries
-    # stack vertically as rows), narrower height allowed. Scale to
-    # 320 wide → target height ~408 to preserve aspect. We ANCHOR the
-    # killfeed at the top-right of the SHARP play area (not the
-    # letterbox strip like LoL scoreline) since Val kills appear
-    # over time and the letterbox is too thin for a stacked feed.
-    killfeed_y = 12  # small margin from the true top of the frame
+    # Killfeed strip position:
+    # Move it DOWN into the sharp play area so the names are legible
+    # over gameplay (rather than getting lost in the blurred letterbox
+    # at the very top). Lower + slightly right-of-edge margin.
+    killfeed_y = 110  # ~1/12 down the 1280 vertical
 
-    # Minimap: TOP-LEFT for Valorant. Scale to 200 wide (smaller than
-    # LoL's minimap since Val's is rectangular / bigger natively).
+    # Minimap: TOP-LEFT for Valorant. Scale to 200 wide.
     minimap_x = 12
     minimap_y = 12
     return (
@@ -187,15 +188,17 @@ def _cropped_hud_valorant(zoom_out: float | None) -> str:
         "flags=lanczos,crop=720:1280,boxblur=luma_radius=25:luma_power=2,"
         "setsar=1[bg];"
         "[bg][fg]overlay=(W-w)/2:(H-h)/2[main_composed];"
-        # Killfeed strip — Val's killfeed ROI (top-right, tall).
-        # Crop from source then scale to 320 wide (~360 tall preserved).
-        "[kf]crop=iw*0.22:ih*0.28:iw*0.78:ih*0.08,"
-        "scale=320:-1:flags=lanczos,setsar=1[kfs];"
+        # Killfeed strip — tighter crop of the source (top 2-3 rows
+        # only, h=0.12 vs the full 0.28 ROI) so the killfeed feed shows
+        # just the freshest kills. Scale to 420 wide (was 320) for
+        # readable player names — height auto-preserves aspect.
+        "[kf]crop=iw*0.22:ih*0.12:iw*0.78:ih*0.08,"
+        "scale=420:-1:flags=lanczos,setsar=1[kfs];"
         # Minimap — Val's minimap ROI (top-left, rectangular).
-        # Scale to 200 wide preserving aspect (~300 tall).
         "[mm]crop=iw*0.20:ih*0.30:iw*0.01:ih*0.02,"
         "scale=200:-1:flags=lanczos,setsar=1[mms];"
-        # Killfeed top-right of the vertical output.
+        # Killfeed top-right of the vertical output, positioned lower
+        # so it overlays a bit onto the sharp play area (names legible).
         f"[main_composed][kfs]overlay=W-w-16:{killfeed_y}[step1];"
         # Minimap top-left.
         f"[step1][mms]overlay={minimap_x}:{minimap_y}[out]"

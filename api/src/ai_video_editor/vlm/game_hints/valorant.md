@@ -1,4 +1,4 @@
-<!-- PROMPT_VERSION: 3 -->
+<!-- PROMPT_VERSION: 4 -->
 # Valorant editing hints
 
 Your primary job when analyzing a Valorant clip is **sequencing
@@ -6,6 +6,14 @@ quality**: pick a trim window that gives the right amount of context
 before the payoff and cuts cleanly after. Not too little (payoff
 feels random), not too much (dead air, walking, reloads kill the
 vibe).
+
+**MANY clips have MULTIPLE payoffs** — the user often manually
+clipped their own VODs so the clip has a kill near the beginning
+AND another one near the end. When you see 2+ kills BY THE USER in
+the clip, list them ALL in the `additional_moments` array. The
+compile will render each moment as its own sub-clip in the montage
+— splitting one long padded clip into several tight hype moments
+is much better than trying to compress it into one window.
 
 ## The payoff (the "anchor" moment)
 
@@ -22,22 +30,31 @@ priority order:
 7. **Plant / defuse under pressure** — bomb interaction while enemies
    are alive nearby
 
-## When the user did NOT get the kill — HARD RULE
+## Deaths — nuanced rule
 
-If the sampled frames show the USER dying (their screen goes to a
-death cam / spectator view / greyed out) and there is NO visible
-kill BY THE USER before the death, this clip is a false positive:
+The user's death by itself is NOT a highlight. But dying AFTER
+getting kills IS a highlight — a multi-kill trade, a heroic 1vX
+that fell just short, or a clutch attempt that got the majority
+of the round.
 
-- Set `payoff_type = "other"`
-- Set `confidence <= 0.3`
+**Drop rule** (set `payoff_type = "other"` + `confidence <= 0.3`):
+- The clip shows ONLY the user dying with NO visible kills BY THEM
+- OR the clip is buy phase / agent select / spectator downtime
 
-The user does NOT want death clips in their highlight reel, ever.
-Outplayed cuts on ANY event (kill OR death), so many clips are
-death clips. Reject them.
+**Keep rule** — this IS a valid highlight:
+- User got 1+ kills, then died — use `outplay` if the trade felt
+  earned (1v2, 1v3 attempt that landed some), or `kill` /
+  `multi_kill` normally
+- User dies AFTER the payoff moment as part of the sequence
+  (traded death post-multi-kill is a hype moment)
 
-Exception: if the user got at least ONE kill visible in the frames
-BEFORE dying (e.g. multi-kill trade), that IS a valid highlight —
-use `outplay` or `kill` type, confidence normally.
+When user dies MID-CLIP but there are more payoffs (kills)
+BEFORE the death, list all pre-death kills in `additional_moments`
+and cut the `resolution_end` right around the death (don't linger
+on the death cam / spectator view).
+
+Trust the killfeed and the crosshair-on-target — those are your
+kill signals, not "the player didn't die."
 
 ## Buildup — what MUST be preserved before the payoff
 
@@ -127,8 +144,48 @@ audio quiet (since you can't hear):
 - **Player death** — full-screen colored overlay + spectator UI
   (you're now watching a teammate). If you see this, the user died.
 
+## Multi-payoff clips (VERY COMMON — read this carefully)
+
+The user often pre-clips their own VOD to keep the "hype" bits.
+That means a single clip you're looking at often has 2 or 3 kills
+by the user, spread across the clip's duration.
+
+**When you see multiple kills by the user in the sampled frames:**
+
+1. Pick the SINGLE most impactful moment as the primary payoff
+   (fill the top-level `payoff_anchor_seconds`, `buildup_start_seconds`,
+   `resolution_end_seconds`, `payoff_type`).
+2. List EVERY OTHER kill moment in `additional_moments`, each as a
+   full `{buildup_start, payoff_anchor, resolution_end,
+   payoff_type, description, confidence}` object.
+
+Each additional moment's trim window follows the same rules as the
+primary — 2s pre for snap kills, 4-8s pre for OP holds, 2-3s post.
+Windows may NOT overlap; if two kills are within 4 seconds of each
+other, MERGE them into one wider window with a single anchor at
+the more impactful kill.
+
+Concrete example: Outplayed clip is 40 seconds. User gets:
+- t=3s: snap kill on entry
+- t=17s: OP hold → one-tap
+- t=34s: multi-kill on retake
+
+You'd return:
+- Primary (highest impact — the multi-kill): buildup=30, anchor=34, end=38
+- additional_moments = [
+    {buildup=1, anchor=3, end=6, type="kill"},
+    {buildup=12, anchor=17, end=21, type="kill"},
+  ]
+
+The compile then renders 3 tight sub-clips from that single source
+file. Total: ~13 seconds of hype vs 40s of padding.
+
 ## Rubric changelog (for reference — do not use as rules)
 
 - v2 → v3: hard-drop death clips (`payoff_type="other"` + low
   confidence); snap-kill buildup 3s → 2s; ceiling 15s → 12s;
   err longer for OP holds when unsure.
+- v3 → v4: soften death rule (kills-before-death is valid); add
+  `additional_moments` array for multi-payoff clips (user pre-clips
+  their own VOD so most clips have 2+ kills); tighter guidance on
+  merging close-together kills.

@@ -92,47 +92,58 @@ PayoffType = Literal[
 ]
 
 
+class PayoffMoment(BaseModel):
+    """One trim-window recommendation inside a clip.
+
+    All times are seconds from clip start (offset within the clip
+    file, NOT the source recording).
+    """
+
+    payoff_anchor_seconds: float = Field(ge=0.0)
+    buildup_start_seconds: float = Field(ge=0.0)
+    resolution_end_seconds: float = Field(ge=0.0)
+    payoff_type: PayoffType = Field(default="other")
+    description: str = Field(default="")
+    confidence: float = Field(ge=0.0, le=1.0, default=0.5)
+
+
 class ClipAnalysis(BaseModel):
     """Per-clip source-analyzer response.
 
-    VLM watches an unfiltered source clip (e.g. a raw Outplayed clip up
-    to 60s) and returns a trim recommendation: WHERE the payoff moment
-    is + WHAT window of buildup + resolution to keep. The compile then
-    re-cuts the clip to that window using ffmpeg `-ss` / `-t`.
+    Contains the PRIMARY payoff (top-level fields) plus optional
+    `additional_moments` for clips where the user got multiple kills.
+    The compile treats each moment as its own sub-clip in the final
+    montage — a 40s Outplayed clip with 3 kills becomes 3 tight
+    ~5s sub-clips.
 
-    All times are seconds from clip start (offset within the clip
-    file itself, NOT the source recording).
+    Backward compat: pre-v4 sidecars don't have `additional_moments`;
+    they still deserialize (Pydantic defaults it to []).
     """
 
+    # PRIMARY moment (backward-compat top-level fields)
     payoff_anchor_seconds: float = Field(
         ge=0.0,
         description=(
-            "The single frame that IS the highlight (kill, plant, "
-            "defuse, clutch shot). If nothing worth highlighting is "
-            "in the clip, put the midpoint here and set confidence low."
+            "The single most impactful payoff frame. If nothing worth "
+            "highlighting is in the clip, put the midpoint here and "
+            "set confidence low."
         ),
     )
     buildup_start_seconds: float = Field(
         ge=0.0,
         description=(
-            "Where meaningful engagement begins. This becomes the new "
-            "clip start. Preserve OP holds / ability setups / peek "
-            "prep. Cut walking / buy phase / dead map view."
+            "Where meaningful engagement begins for the primary payoff."
         ),
     )
     resolution_end_seconds: float = Field(
         ge=0.0,
         description=(
-            "Where the aftermath resolves. This becomes the new clip "
-            "end. Cut before reload / repeated pauses / next round buy."
+            "Where the aftermath of the primary payoff resolves."
         ),
     )
     payoff_type: PayoffType = Field(
         default="other",
-        description=(
-            "Category of the payoff. Used for title overlays and to "
-            "flag high-priority montage picks (ace / clutch / multi_kill)."
-        ),
+        description="Category of the primary payoff.",
     )
     description: str = Field(
         description="One-sentence account of what happens in the clip."
@@ -141,11 +152,38 @@ class ClipAnalysis(BaseModel):
         ge=0.0,
         le=1.0,
         description=(
-            "0..1 self-reported confidence in the anchor + trim window. "
+            "0..1 confidence in the primary payoff + its trim window. "
             "Below `vlm_clip_analyzer_min_confidence` the compile "
             "ignores the trim and uses the full clip as fallback."
         ),
     )
+
+    # OPTIONAL additional payoffs (v4+)
+    additional_moments: list[PayoffMoment] = Field(
+        default_factory=list,
+        description=(
+            "Extra payoffs in the same clip (kills at the beginning "
+            "AND end, common when the user pre-clipped their own VOD). "
+            "Each moment gets rendered as its own sub-clip in the "
+            "montage. Windows may NOT overlap with the primary or each "
+            "other."
+        ),
+    )
+
+    @property
+    def all_moments(self) -> list[PayoffMoment]:
+        """Primary + additional, in chronological order by anchor."""
+        primary = PayoffMoment(
+            payoff_anchor_seconds=self.payoff_anchor_seconds,
+            buildup_start_seconds=self.buildup_start_seconds,
+            resolution_end_seconds=self.resolution_end_seconds,
+            payoff_type=self.payoff_type,
+            description=self.description,
+            confidence=self.confidence,
+        )
+        moments = [primary, *self.additional_moments]
+        moments.sort(key=lambda m: m.payoff_anchor_seconds)
+        return moments
 
 
 # ---------------------------------------------------------------------
@@ -374,28 +412,27 @@ kill the vibe).
 Return exactly one JSON object with these fields:
 
 - `payoff_anchor_seconds` — the frame that IS the highlight moment
-  (the kill, plant, defuse, clutch shot). If nothing worth
-  highlighting is visible, put the clip midpoint here and mark
-  `confidence` low.
-- `buildup_start_seconds` — where meaningful engagement begins.
-  Becomes the new clip START. Preserve buildup that adds tension
-  (OP holds, ability setups, peek prep) but cut dead time (walking,
-  buy phase, empty map).
-- `resolution_end_seconds` — where the aftermath resolves. Becomes
-  the new clip END. Cut before reload / repeated pauses / next round
-  buy screens.
+  (the single MOST impactful payoff — kill, plant, clutch shot).
+  If nothing worth highlighting is visible, put the clip midpoint
+  here and mark `confidence` low.
+- `buildup_start_seconds` — where meaningful engagement begins for
+  the PRIMARY payoff. Becomes the new clip START.
+- `resolution_end_seconds` — where the aftermath of the PRIMARY
+  payoff resolves.
 - `payoff_type` — one of: "kill", "multi_kill", "ace", "clutch",
-  "plant", "defuse", "save", "outplay", "other". Use "other" when
-  nothing highlight-worthy is visible.
-- `description` — one sentence: what happens in the clip.
-- `confidence` — 0..1. Mark below 0.5 if you're unsure whether the
-  payoff really landed or whether the trim window is right.
+  "plant", "defuse", "save", "outplay", "other".
+- `description` — one sentence: what happens in the clip overall.
+- `confidence` — 0..1 confidence in the primary window.
+- `additional_moments` — LIST of extra payoffs in the SAME clip.
+  Empty list if this clip has only one payoff. See rubric for when
+  to use.
 
-Constraints:
+Constraints (apply to primary AND each additional_moments entry):
 - `buildup_start_seconds` <= `payoff_anchor_seconds` <= `resolution_end_seconds`
 - All three MUST be within [0, clip_duration_seconds]
-- The trim window (`resolution_end - buildup_start`) should generally
-  be 5-15 seconds. Very hard ceilings: minimum 3 seconds, maximum 30.
+- Each moment's trim window (`resolution_end - buildup_start`) should
+  generally be 4-12 seconds.
+- Windows across primary + additional_moments MUST NOT overlap.
 
 Return ONLY valid JSON matching the schema — no prose before or after:
 
@@ -405,7 +442,17 @@ Return ONLY valid JSON matching the schema — no prose before or after:
   "resolution_end_seconds": <number>,
   "payoff_type": "kill"|"multi_kill"|"ace"|"clutch"|"plant"|"defuse"|"save"|"outplay"|"other",
   "description": "<one sentence>",
-  "confidence": <0..1>
+  "confidence": <0..1>,
+  "additional_moments": [
+    {{
+      "payoff_anchor_seconds": <number>,
+      "buildup_start_seconds": <number>,
+      "resolution_end_seconds": <number>,
+      "payoff_type": "<same enum>",
+      "description": "<one sentence>",
+      "confidence": <0..1>
+    }}
+  ]
 }}
 
 ## Game-specific editing hints (apply these to your trim decision)

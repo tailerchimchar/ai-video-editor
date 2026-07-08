@@ -2090,6 +2090,11 @@ class _AnalyzedOutplayedClip:
     analysis_confidence: float
     analysis_description: str
     payoff_score: int
+    # Full analysis for multi-moment splitting downstream. None when
+    # the analyzer was disabled or failed — caller falls back to a
+    # single whole-clip window in that case.
+    analysis: object | None = None  # `ClipAnalysis | None` — kept as
+    # `object` to dodge a circular import at module load. Cast at use.
 
 
 def _analyze_pool(
@@ -2129,6 +2134,7 @@ def _analyze_pool(
                     analysis_confidence=0.5,
                     analysis_description="",
                     payoff_score=_PAYOFF_TYPE_SCORE["kill"],
+                    analysis=None,
                 )
             )
             continue
@@ -2141,6 +2147,7 @@ def _analyze_pool(
                 payoff_score=_PAYOFF_TYPE_SCORE.get(
                     analysis.payoff_type, 0
                 ),
+                analysis=analysis,
             )
         )
     return out
@@ -2198,12 +2205,10 @@ def _outplayed_clip_to_short_clip(
     game: str | None = None,
     use_analyzer: bool | None = None,
 ) -> ShortClip:
-    """Wrap an Outplayed clip as a `ShortClip`.
-
-    When the VLM analyzer is enabled and returns a confident window,
-    the clip's start/end and `anchor_offset_seconds` reflect the
-    trim; otherwise the whole file is used (current behavior).
-    """
+    """Legacy single-window wrapper. Kept for callers that only want
+    one clip per source (e.g. tests). Prefer
+    `_outplayed_ref_to_short_clips` which supports multi-moment
+    splitting when the analyzer detects several payoffs."""
     start, end, anchor_offset, description = _analyze_and_window(
         ref.path, ref.duration_seconds, game, use_analyzer=use_analyzer
     )
@@ -2222,6 +2227,99 @@ def _outplayed_clip_to_short_clip(
         reason=reason,
         anchor_offset_seconds=anchor_offset,
     )
+
+
+def _ref_to_short_clips_from_analysis(
+    ref: OutplayedClipRef,
+    analysis: object | None,
+) -> list[ShortClip]:
+    """Split ONE Outplayed source clip into 1..N ShortClips based on
+    the VLM analyzer's detected moments. When the analyzer is
+    unavailable / low-confidence, returns a single whole-clip ShortClip
+    (backward-compat with the pre-multi-moment behavior).
+
+    Each returned ShortClip carries its own trim window (via
+    start/end + `anchor_offset_seconds`) so the render pipeline
+    already handles them.
+    """
+    from .vlm.prompts import ClipAnalysis
+
+    if not isinstance(analysis, ClipAnalysis):
+        # No analysis — render the whole clip.
+        return [
+            ShortClip(
+                file=ref.path.name,
+                path=ref.path,
+                event_type="outplayed_clip",
+                start_seconds=0.0,
+                end_seconds=ref.duration_seconds,
+                hype_score=1.0,
+                funny_score=0.5,
+                story_score=0.5,
+                reason="Outplayed auto-cut event clip (pre-curated)",
+                anchor_offset_seconds=None,
+            )
+        ]
+    if analysis.confidence < settings.vlm_clip_analyzer_min_confidence:
+        # Below floor: keep the whole clip (matches _analyze_and_window
+        # fallback behavior).
+        return [
+            ShortClip(
+                file=ref.path.name,
+                path=ref.path,
+                event_type="outplayed_clip",
+                start_seconds=0.0,
+                end_seconds=ref.duration_seconds,
+                hype_score=1.0,
+                funny_score=0.5,
+                story_score=0.5,
+                reason=(
+                    "Outplayed auto-cut event clip "
+                    f"(low-confidence analysis: {analysis.description})"
+                ),
+                anchor_offset_seconds=None,
+            )
+        ]
+
+    moments = analysis.all_moments
+    clips: list[ShortClip] = []
+    for i, m in enumerate(moments, 1):
+        window = m.resolution_end_seconds - m.buildup_start_seconds
+        if window < 0.5:  # too tight; skip
+            continue
+        anchor_offset = m.payoff_anchor_seconds - m.buildup_start_seconds
+        reason = f"payoff {i}/{len(moments)} [{m.payoff_type}] — {m.description}"
+        clips.append(
+            ShortClip(
+                file=ref.path.name,
+                path=ref.path,
+                event_type=m.payoff_type or "outplayed_clip",
+                start_seconds=m.buildup_start_seconds,
+                end_seconds=m.resolution_end_seconds,
+                hype_score=m.confidence,
+                funny_score=0.5,
+                story_score=0.5,
+                reason=reason,
+                anchor_offset_seconds=anchor_offset,
+            )
+        )
+    if not clips:
+        # All moments were degenerate — fall back to whole clip
+        return [
+            ShortClip(
+                file=ref.path.name,
+                path=ref.path,
+                event_type="outplayed_clip",
+                start_seconds=0.0,
+                end_seconds=ref.duration_seconds,
+                hype_score=1.0,
+                funny_score=0.5,
+                story_score=0.5,
+                reason="Outplayed auto-cut event clip (pre-curated)",
+                anchor_offset_seconds=None,
+            )
+        ]
+    return clips
 
 
 def _outplayed_output_folder(game: str, today: date) -> Path:
@@ -2486,12 +2584,16 @@ def build_outplayed_montage(
         )
         resolved_music = None
 
-    tup = tuple(
-        _outplayed_clip_to_short_clip(
-            ref, game=game, use_analyzer=use_clip_analyzer
+    # Split source clips into sub-clips per detected payoff moment.
+    # A single Outplayed clip with 3 kills becomes 3 tight ShortClips
+    # in the montage. Analyzer results are already cached from the
+    # pool ranking above — reuse them here.
+    sub_clips: list[ShortClip] = []
+    for k in kept:
+        sub_clips.extend(
+            _ref_to_short_clips_from_analysis(k.ref, k.analysis)
         )
-        for ref in picked
-    )
+    tup = tuple(sub_clips)
     plan = ShortPlan(
         bucket=_OUTPLAYED_BUCKET,
         clips=tup,
@@ -2544,6 +2646,7 @@ def build_outplayed_montage(
         "clips_analyzed": len(analyzed),
         "clips_picked": len(picked),
         "clips_dropped": len(dropped_summary),
+        "sub_clips_rendered": len(plan.clips),
         "dropped": dropped_summary,
         "shorts": [
             {
@@ -2562,6 +2665,12 @@ def build_outplayed_montage(
                         "duration_seconds": k.ref.duration_seconds,
                         "payoff_type": k.analysis_payoff_type,
                         "confidence": k.analysis_confidence,
+                        "additional_moments": (
+                            len(k.analysis.additional_moments)
+                            if k.analysis is not None
+                            and hasattr(k.analysis, "additional_moments")
+                            else 0
+                        ),
                     }
                     for k in kept
                 ],
@@ -2867,27 +2976,60 @@ def build_custom_montage(
 
     resolved_name = name or f"custom_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
-    def _wrap(p: Path, duration: float) -> ShortClip:
-        start, end, anchor_offset, description = _analyze_and_window(
-            p, duration, game, use_analyzer=use_clip_analyzer
+    def _wrap_multi(p: Path, duration: float) -> list[ShortClip]:
+        """Run the analyzer directly + split into sub-clips per
+        moment. Reuses the same logic as the outplayed compile."""
+        enabled = (
+            settings.shorts_use_clip_analyzer
+            if use_clip_analyzer is None
+            else use_clip_analyzer
         )
-        reason = "user-supplied clip"
-        if description:
-            reason = f"{reason} — {description}"
-        return ShortClip(
-            file=p.name,
-            path=p,
-            event_type="custom",
-            start_seconds=start,
-            end_seconds=end,
-            hype_score=1.0,
-            funny_score=0.5,
-            story_score=0.5,
-            reason=reason,
-            anchor_offset_seconds=anchor_offset,
-        )
+        analysis = None
+        if enabled:
+            try:
+                from .vlm.clip_analyzer import analyze_source_clip
 
-    tup = tuple(_wrap(p, duration) for p, duration in resolved)
+                analysis = analyze_source_clip(
+                    p, game=game, clip_duration_seconds=duration
+                )
+            except Exception as exc:
+                _log.warning(
+                    "custom analyzer crashed on %s (non-fatal): %s", p.name, exc
+                )
+        # Fake an OutplayedClipRef so we can reuse the splitter.
+        pseudo_ref = OutplayedClipRef(
+            path=p, duration_seconds=duration, mtime_epoch=0.0
+        )
+        clips = _ref_to_short_clips_from_analysis(pseudo_ref, analysis)
+        # Retag event_type from "outplayed_clip" → "custom" for
+        # untrimmed fallbacks. The multi-moment splits already carry
+        # their payoff_type.
+        return [
+            (
+                c
+                if c.event_type != "outplayed_clip"
+                else ShortClip(
+                    file=c.file,
+                    path=c.path,
+                    event_type="custom",
+                    start_seconds=c.start_seconds,
+                    end_seconds=c.end_seconds,
+                    hype_score=c.hype_score,
+                    funny_score=c.funny_score,
+                    story_score=c.story_score,
+                    reason=c.reason.replace(
+                        "Outplayed auto-cut event clip", "user-supplied clip"
+                    ),
+                    anchor_offset_seconds=c.anchor_offset_seconds,
+                )
+            )
+            for c in clips
+        ]
+
+    sub_clips: list[ShortClip] = []
+    for p, duration in resolved:
+        sub_clips.extend(_wrap_multi(p, duration))
+    tup = tuple(sub_clips)
     plan = ShortPlan(
         bucket=_CUSTOM_BUCKET,
         clips=tup,

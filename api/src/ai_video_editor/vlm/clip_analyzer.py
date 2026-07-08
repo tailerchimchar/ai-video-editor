@@ -192,27 +192,72 @@ def analyze_source_clip(
     return clamped
 
 
-def _clamp(analysis: ClipAnalysis, clip_duration: float) -> ClipAnalysis:
-    """Enforce ordering + bounds without failing validation. VLMs
-    sometimes return `resolution_end > duration`; clamp rather than
-    reject so a mostly-good analysis still ships."""
-    duration = max(clip_duration, 0.0)
-    anchor = _bound(analysis.payoff_anchor_seconds, 0.0, duration)
-    start = _bound(analysis.buildup_start_seconds, 0.0, anchor)
-    end = _bound(analysis.resolution_end_seconds, anchor, duration)
+def _clamp_moment(
+    anchor: float, start: float, end: float, duration: float
+) -> tuple[float, float, float]:
+    """Return (start, anchor, end) clamped to [0, duration] with the
+    ordering invariant. Fills a degenerate window with a 5s bracket
+    around the anchor."""
+    anchor = _bound(anchor, 0.0, duration)
+    start = _bound(start, 0.0, anchor)
+    end = _bound(end, anchor, duration)
     if end <= start:
-        # Degenerate: analyzer thought the whole clip was junk. Fall
-        # back to a 5-second window around the anchor.
         half = 2.5
         start = max(0.0, anchor - half)
         end = min(duration, anchor + half)
+    return round(start, 3), round(anchor, 3), round(end, 3)
+
+
+def _clamp(analysis: ClipAnalysis, clip_duration: float) -> ClipAnalysis:
+    """Enforce ordering + bounds without failing validation. VLMs
+    sometimes return `resolution_end > duration`; clamp rather than
+    reject so a mostly-good analysis still ships. Also clamps every
+    entry in `additional_moments`."""
+    from .prompts import PayoffMoment  # local — avoid cycle
+
+    duration = max(clip_duration, 0.0)
+    p_start, p_anchor, p_end = _clamp_moment(
+        analysis.payoff_anchor_seconds,
+        analysis.buildup_start_seconds,
+        analysis.resolution_end_seconds,
+        duration,
+    )
+    extras: list[PayoffMoment] = []
+    for m in analysis.additional_moments:
+        s, a, e = _clamp_moment(
+            m.payoff_anchor_seconds,
+            m.buildup_start_seconds,
+            m.resolution_end_seconds,
+            duration,
+        )
+        extras.append(
+            PayoffMoment(
+                payoff_anchor_seconds=a,
+                buildup_start_seconds=s,
+                resolution_end_seconds=e,
+                payoff_type=m.payoff_type,
+                description=m.description,
+                confidence=m.confidence,
+            )
+        )
+    # Drop any additional moments whose window overlaps the primary
+    # (VLMs occasionally emit duplicate anchors). Rule: drop if a
+    # moment's window intersects the primary's window.
+    def _overlaps(m: PayoffMoment) -> bool:
+        return not (
+            m.resolution_end_seconds <= p_start
+            or m.buildup_start_seconds >= p_end
+        )
+
+    extras = [m for m in extras if not _overlaps(m)]
     return ClipAnalysis(
-        payoff_anchor_seconds=round(anchor, 3),
-        buildup_start_seconds=round(start, 3),
-        resolution_end_seconds=round(end, 3),
+        payoff_anchor_seconds=p_anchor,
+        buildup_start_seconds=p_start,
+        resolution_end_seconds=p_end,
         payoff_type=analysis.payoff_type,
         description=analysis.description,
         confidence=analysis.confidence,
+        additional_moments=extras,
     )
 
 
