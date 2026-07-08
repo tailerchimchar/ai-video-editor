@@ -388,9 +388,18 @@ def verify_anchor(
 ) -> VerifiedMoment:
     """Check `original_anchor` against the killfeed track.
 
-    If any killfeed kill is within `tolerance_seconds`, the moment is
-    verified and the anchor is snapped to the closest killfeed time.
-    Otherwise unverified; caller can drop or downgrade.
+    Shift-not-drop policy (2026-07-08): if the track has ANY kills at
+    all, we snap to the nearest one — even if it's beyond
+    `tolerance_seconds`. Rationale: the VLM guesses timing based on
+    30 sampled frames and is routinely 3-5 seconds off; the OCR knows
+    where the actual kill is. A big delta means "VLM was wrong about
+    timing," not "no kill exists." Only DROP the moment when the OCR
+    saw zero kills anywhere in the clip — that's the real
+    "VLM hallucinated" signal.
+
+    `tolerance_seconds` is kept as an argument for VerifiedMoment
+    metadata (tells caller how tight the match was) but no longer
+    gates dropping.
 
     When `track` is None (verifier disabled / OCR missing), returns a
     verified passthrough — we don't want a missing verifier to drop
@@ -401,6 +410,7 @@ def verify_anchor(
         if tolerance_seconds is None
         else tolerance_seconds
     )
+    _ = tol  # kept for future metadata surfacing; no longer gates drops
     if track is None:
         return VerifiedMoment(
             original_anchor=original_anchor,
@@ -408,23 +418,25 @@ def verify_anchor(
             snapped_anchor=original_anchor,
             matched_kill_time=None,
         )
+    if not track.kill_timestamps:
+        # OCR ran + saw zero kills in this clip. Real hallucination.
+        return VerifiedMoment(
+            original_anchor=original_anchor,
+            verified=False,
+            snapped_anchor=original_anchor,
+            matched_kill_time=None,
+        )
+    # OCR saw at least one kill — snap the anchor to the nearest.
     best_delta = float("inf")
-    best_time: float | None = None
+    best_time: float = track.kill_timestamps[0]
     for kt in track.kill_timestamps:
         delta = abs(kt - original_anchor)
         if delta < best_delta:
             best_delta = delta
             best_time = kt
-    if best_time is not None and best_delta <= tol:
-        return VerifiedMoment(
-            original_anchor=original_anchor,
-            verified=True,
-            snapped_anchor=best_time,
-            matched_kill_time=best_time,
-        )
     return VerifiedMoment(
         original_anchor=original_anchor,
-        verified=False,
-        snapped_anchor=original_anchor,
-        matched_kill_time=None,
+        verified=True,
+        snapped_anchor=best_time,
+        matched_kill_time=best_time,
     )

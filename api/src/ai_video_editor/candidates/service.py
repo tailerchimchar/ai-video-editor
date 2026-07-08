@@ -15,6 +15,7 @@ from ..league import is_league
 from ..league.orchestrator import gather_lol_candidates
 from .audio import energy_curve, peaks_from_energy
 from .cv_kda import detect_kda_events
+from .overwolf_events import detect_overwolf_events
 from .probe import get_duration_seconds
 from .transcript import detect_transcript_keywords
 
@@ -139,6 +140,27 @@ def compute_candidates(
             )
         )
 
+    # Overwolf game-events source — reads Outplayed's own log for the
+    # per-video event list (kill / death / assist / spike / victory).
+    # This is GROUND TRUTH — game-client-reported timestamps. Only
+    # fires when Outplayed dispatched this specific video (i.e. it's
+    # a fullMatch / fullSession recording, not a user-manually-clipped
+    # short). Confidence: 1.0. Runs cross-game because Overwolf
+    # supports many games via per-game event providers.
+    for ow in detect_overwolf_events(
+        video_path, duration, asset.get("game")
+    ):
+        rows.append(
+            _row(
+                "overwolf_game_event",
+                ow["start_seconds"],
+                ow["end_seconds"],
+                ow.get("event_type"),
+                ow.get("confidence"),
+                ow.get("metadata", {}),
+            )
+        )
+
     # Promote event_type on audio-derived candidates when a visible
     # kill/death/assist happened nearby. Without this, audio_peak clips
     # get shipped as event_type='audio_peak' even when they anticipate
@@ -152,10 +174,15 @@ def compute_candidates(
 
 
 _AUDIO_SOURCES = frozenset({"audio_peak", "transcript_keyword"})
-_VISIBLE_SOURCES = frozenset({"riot_api", "cv_kda"})
+# `overwolf_game_event` joins the visible-source set: game-client-
+# reported kill / death / assist / objective events are the strongest
+# visible-truth signal we have, stronger than cv_kda. Promoting audio
+# peaks near an Overwolf kill matches the LoL Riot pattern.
+_VISIBLE_SOURCES = frozenset({"riot_api", "cv_kda", "overwolf_game_event"})
 _VISIBLE_EVENTS = frozenset({"kill", "death", "assist", "ace", "pentakill",
                              "quadrakill", "doublekill", "teamfight",
-                             "baron", "dragon", "objective"})
+                             "baron", "dragon", "objective",
+                             "clutch", "victory"})
 
 
 # Seconds of slack around a visible event for the audio promoter to

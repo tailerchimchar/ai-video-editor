@@ -99,9 +99,12 @@ def test_verify_anchor_picks_nearest_kill() -> None:
     assert result.matched_kill_time == 20.0
 
 
-def test_verify_anchor_drops_when_no_kill_nearby() -> None:
-    """A VLM anchor with no killfeed kill within tolerance is NOT
-    verified — the moment gets dropped by the caller."""
+def test_verify_anchor_snaps_beyond_tolerance_when_track_has_kills() -> None:
+    """Shift-not-drop policy (2026-07-08): if OCR saw ANY kills, we
+    snap to the nearest one even if it's beyond the tolerance window.
+    Only drop when the track is empty — that's real VLM hallucination.
+    Rationale: VLM is routinely 3-5s off on timing; OCR is ground
+    truth."""
     track = KillfeedTrack(
         clip_path=Path("/tmp/x.mp4"),
         player_name="Noodlz",
@@ -110,8 +113,10 @@ def test_verify_anchor_drops_when_no_kill_nearby() -> None:
         frame_count=60,
     )
     result = verify_anchor(20.0, track, tolerance_seconds=2.5)
-    assert result.verified is False
-    assert result.matched_kill_time is None
+    # Nearest is 5.0 (delta 15) or 40.0 (delta 20). 5.0 wins.
+    assert result.verified is True
+    assert result.snapped_anchor == 5.0
+    assert result.matched_kill_time == 5.0
 
 
 def test_verify_anchor_drops_when_track_has_no_kills() -> None:

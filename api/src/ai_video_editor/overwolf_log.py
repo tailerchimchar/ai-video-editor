@@ -9,7 +9,7 @@ We parse those logs directly. Every kill / death / assist / headshot
 that fires in-game shows up as a `[StreamingCaptureService] Already
 capturing, adding bookmark {...}` line with a Unix ms timestamp
 (the `time` field). Correlation to Outplayed clip files is trivial:
-the clip's file mtime (Unix seconds × 1000) IS the wall-clock end of
+the clip's file mtime (Unix seconds x 1000) IS the wall-clock end of
 the clip. Query events between `mtime_ms - duration_ms` and
 `mtime_ms`.
 
@@ -38,8 +38,11 @@ from pathlib import Path
 _log = logging.getLogger(__name__)
 
 
-# Line shape we care about:
-# 2026-06-30 22:52:28,917 (INFO) </background.js> (:42228) - [StreamingCaptureService] Already capturing, adding bookmark {"type":"kill","time":1782877948916,"timing":{"past":15000,"future":5000},"data":"1"}
+# Line shape we care about (wrapped for readability):
+#   2026-06-30 22:52:28,917 (INFO) </background.js> (:42228) -
+#   [StreamingCaptureService] Already capturing, adding bookmark
+#   {"type":"kill","time":1782877948916,
+#    "timing":{"past":15000,"future":5000},"data":"1"}
 _BOOKMARK_RE = re.compile(
     r"\[StreamingCaptureService\] Already capturing, adding bookmark (\{.+\})\s*$"
 )
@@ -74,7 +77,7 @@ class OverwolfEvent:
 
     type: str
     time_ms: int
-    """Unix epoch milliseconds — matches clip file mtime × 1000."""
+    """Unix epoch milliseconds — matches clip file mtime x 1000."""
 
     data: str
     """Per-type sequential counter ('1', '2', ...) — useful for
@@ -262,6 +265,169 @@ def kills_for_clip(
         offsets.append(round(offset_from_start, 3))
     offsets.sort()
     return tuple(offsets)
+
+
+# ---------------------------------------------------------------------
+# Dispatch table — Outplayed writes one log entry per video file created,
+# with the FILE PATH + a full list of in-video event offsets. This is
+# ground-truth candidate data for the analyze_asset pipeline.
+# ---------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class DispatchedVideo:
+    """One video Outplayed wrote to disk, plus its embedded events.
+
+    `start_time_ms` and `duration_ms` describe the video's wall-clock
+    window (start = when recording began, end = start + duration).
+    Each entry in `events` has:
+      - type: kill / death / assist / headshot / spike_defused / …
+      - time_ms_in_video: offset from the video's start (already in
+        the video's own timeline — no clock math needed)
+      - data: sequential counter
+    """
+
+    path: Path
+    output_type: str
+    """`fullMatch` for per-match recordings, `fullSession` for
+    session-long, `event` for auto-clip highlights."""
+
+    start_time_ms: int
+    duration_ms: int
+    events: tuple[dict, ...]
+    """Each dict: {type, time_ms_in_video, data}"""
+
+
+_DISPATCH_RE = re.compile(
+    r"Dispatch new video created (\{.+\})\s*$"
+)
+
+
+def _load_dispatched(log_dir: Path) -> dict[str, DispatchedVideo]:
+    """Parse all `Dispatch new video created` lines from every log
+    file. Returns a dict keyed by normalized file path (lowercased,
+    posix-style so Windows path variations don't miss)."""
+    out: dict[str, DispatchedVideo] = {}
+    for f in sorted(log_dir.glob("background.html.*.log")):
+        try:
+            with open(f, encoding="utf-8", errors="ignore") as fp:
+                for line in fp:
+                    m = _DISPATCH_RE.search(line)
+                    if m is None:
+                        continue
+                    try:
+                        d = json.loads(m.group(1))
+                    except json.JSONDecodeError:
+                        continue
+                    raw_path = d.get("path")
+                    if not raw_path:
+                        continue
+                    events = []
+                    for e in d.get("events", []) or []:
+                        etype = e.get("type")
+                        etime = e.get("time")
+                        if not isinstance(etype, str) or not isinstance(
+                            etime, (int, float)
+                        ):
+                            continue
+                        events.append(
+                            {
+                                "type": etype,
+                                "time_ms_in_video": int(etime),
+                                "data": str(e.get("data", "")),
+                            }
+                        )
+                    key = str(Path(raw_path)).lower().replace("\\", "/")
+                    out[key] = DispatchedVideo(
+                        path=Path(raw_path),
+                        # `type` in the JSON is the OUTPUT type
+                        # (fullMatch / fullSession / event) — clashes
+                        # with the `format` field so we alias to
+                        # `output_type` on our dataclass.
+                        output_type=str(d.get("type", "unknown")),
+                        start_time_ms=int(d.get("startTime", 0)),
+                        duration_ms=int(d.get("duration", 0)),
+                        events=tuple(events),
+                    )
+        except OSError as exc:
+            _log.info("overwolf log read failed on %s: %s", f, exc)
+            continue
+    return out
+
+
+# Separate cache from the flat event cache — dispatch entries are a
+# different shape and it's worth iterating them once.
+_DISPATCH_CACHE_LOCK = threading.Lock()
+_DISPATCH_CACHE: dict[str, tuple[float, dict[str, DispatchedVideo]]] = {}
+
+
+def _get_dispatched_cached(log_dir: Path) -> dict[str, DispatchedVideo]:
+    key = log_dir.as_posix()
+    sig = _dir_signature(log_dir)
+    with _DISPATCH_CACHE_LOCK:
+        cached = _DISPATCH_CACHE.get(key)
+        if cached is not None and cached[0] >= sig:
+            return cached[1]
+    parsed = _load_dispatched(log_dir)
+    with _DISPATCH_CACHE_LOCK:
+        _DISPATCH_CACHE[key] = (sig, parsed)
+    _log.info(
+        "overwolf log: indexed %d dispatched video(s) in %s",
+        len(parsed),
+        log_dir.as_posix(),
+    )
+    return parsed
+
+
+def dispatched_video_for(
+    clip_path: Path | str,
+    log_dir: Path | None = None,
+) -> DispatchedVideo | None:
+    """Look up a video by its file path in the log's dispatch table.
+
+    Returns the `DispatchedVideo` if the log recorded a "Dispatch new
+    video created" entry for that exact path. Otherwise None (typical
+    for user-manually-clipped shorts, which Outplayed doesn't dispatch).
+
+    Path comparison is case-insensitive + separator-normalized so
+    Windows / vs \\ variations don't miss.
+    """
+    log_dir = log_dir or _default_log_dir()
+    if not log_dir.is_dir():
+        return None
+    dispatched = _get_dispatched_cached(log_dir)
+    key = str(Path(clip_path)).lower().replace("\\", "/")
+    return dispatched.get(key)
+
+
+def events_for_video(
+    clip_path: Path | str,
+    *,
+    log_dir: Path | None = None,
+    event_types: tuple[str, ...] | None = None,
+) -> tuple[dict, ...] | None:
+    """Return the events for `clip_path` from the log's dispatch table.
+
+    Each dict: `{type, time_ms_in_video, data}`. Times are OFFSETS from
+    the video's start, in ms — feed to
+    `metadata.anchor_seconds = time_ms_in_video / 1000`.
+
+    Returns `None` when the video isn't in the dispatch table (typical
+    for user-clipped shorts). Filter by `event_types` (default: all).
+    """
+    dv = dispatched_video_for(clip_path, log_dir=log_dir)
+    if dv is None:
+        return None
+    if event_types is None:
+        return dv.events
+    keep = frozenset(event_types)
+    return tuple(e for e in dv.events if e["type"] in keep)
+
+
+def clear_dispatch_cache() -> None:
+    """Testing / debug hook — force re-parse on next lookup."""
+    with _DISPATCH_CACHE_LOCK:
+        _DISPATCH_CACHE.clear()
 
 
 def player_identity(log_dir: Path | None = None) -> dict | None:
