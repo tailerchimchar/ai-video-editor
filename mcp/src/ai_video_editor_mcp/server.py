@@ -1490,6 +1490,94 @@ def list_cross_asset_shorts(game: str | None = None) -> dict:
 
 
 @mcp.tool()
+def compile_outplayed_montage(
+    game: str,
+    limit: int | None = None,
+    since_days: int | None = None,
+    music_path: str | None = None,
+    layout: str | None = None,
+    beat_flash: bool | None = None,
+    beat_flash_source: str | None = None,
+) -> dict:
+    """Compile ONE montage DIRECTLY from Outplayed's auto-cut clips
+    for `game` — no analysis or LLM ranking needed. Outplayed already
+    picked the good moments (each clip is a detected event), so we
+    just stitch the newest N together.
+
+    Best for:
+    - Valorant (no Riot API, but Outplayed detects kills/aces cleanly)
+    - Any game where you have a fresh session and want a quick
+      "here's what I hit tonight" montage
+
+    Args:
+      - `limit`: max clips (default 5)
+      - `since_days`: restrict to clips from the last N days. `1` = today
+        only. Omit for all-time.
+      - `music_path`: local music file (call `download_music(url)` first)
+      - `beat_flash`: True to overlay pulses; `beat_flash_source="kills"`
+        (default) fires on each clip's payoff moment
+
+    Output: `WORKSPACE/shorts/_outplayed/<game>_<YYYY-MM-DD>/
+    best_of_<YYYY-MM-DD>.mp4` + an `index.md` listing every clip picked.
+
+    Deterministic: same clip set on disk + same args → same output.
+    Poll internally; typically 30s-2min to render 5 clips.
+    """
+    body: dict = {"game": game}
+    if limit is not None:
+        body["limit"] = limit
+    if since_days is not None:
+        body["since_days"] = since_days
+    if music_path:
+        body["music_path"] = music_path
+    if layout:
+        body["layout"] = layout
+    if beat_flash is not None:
+        body["beat_flash"] = beat_flash
+    if beat_flash_source:
+        body["beat_flash_source"] = beat_flash_source
+    with _client() as c:
+        job_id = c.post(f"{API}/shorts/outplayed_montage", json=body).json()[
+            "job_id"
+        ]
+        return _wait_for_job(c, job_id)
+
+
+@mcp.tool()
+def preview_outplayed_montage(
+    game: str,
+    limit: int | None = None,
+    since_days: int | None = None,
+) -> dict:
+    """Dry-run: preview which Outplayed clips would be picked by
+    `compile_outplayed_montage`, without rendering.
+
+    Cheap (ffprobe only, no ffmpeg). Use to see which clips are
+    freshest before committing to a compile.
+    """
+    params = [f"game={game}"]
+    if limit is not None:
+        params.append(f"limit={limit}")
+    if since_days is not None:
+        params.append(f"since_days={since_days}")
+    with _client() as c:
+        return c.get(
+            f"{API}/shorts/outplayed_montage/preview?{'&'.join(params)}"
+        ).json()
+
+
+@mcp.tool()
+def list_outplayed_shorts(game: str | None = None) -> dict:
+    """List Outplayed direct-compile shorts already rendered under
+    `WORKSPACE/shorts/_outplayed/`. Read-only. Optionally filter by
+    game (substring on folder prefix).
+    """
+    params = f"?game={game}" if game else ""
+    with _client() as c:
+        return c.get(f"{API}/shorts/outplayed_montage{params}").json()
+
+
+@mcp.tool()
 def vlm_review_compilation(
     compilation_id: str,
     max_passes: int | None = None,

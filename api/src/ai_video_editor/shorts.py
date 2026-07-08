@@ -1893,6 +1893,378 @@ def build_cross_asset_montage(
     }
 
 
+# ---------------------------------------------------------------------
+# Outplayed direct compile — skip DB scan + analyzer; work straight
+# off the Outplayed folder for games with clean auto-cut event clips
+# (Valorant, no-Riot LoL, etc). Curation is Outplayed's; we just pick
+# the freshest N and stitch them.
+# ---------------------------------------------------------------------
+
+
+_OUTPLAYED_BUCKET = "outplayed_best_of"
+
+
+@dataclass(frozen=True)
+class OutplayedClipRef:
+    """One Outplayed auto-cut clip on disk, with mtime for ranking."""
+
+    path: Path
+    duration_seconds: float
+    mtime_epoch: float
+
+
+def _scan_outplayed_clips(
+    game: str,
+    *,
+    max_duration_seconds: float | None = None,
+    size_prefilter_mb: float = 500.0,
+) -> list[OutplayedClipRef]:
+    """Walk `OUTPLAYED_MEDIA_DIR/<game>/` recursively for `.mp4` files
+    that look like Outplayed's auto-cut event clips.
+
+    Two-stage filter (fast then precise):
+      1. Size prefilter — files > `size_prefilter_mb` are session VODs,
+         not clips. Skip without ffprobe (saves a lot of time on 100+
+         file libraries).
+      2. Duration check — clips must be > 0 and <=
+         `max_duration_seconds` (default: `outplayed_clip_max_seconds`
+         from config, currently 120s).
+
+    Returns sorted by mtime DESC (most recent first).
+    """
+    from .highlights import _safe
+
+    max_d = (
+        max_duration_seconds
+        if max_duration_seconds is not None
+        else settings.outplayed_clip_max_seconds
+    )
+    root = settings.outplayed_media_dir / _safe(game)
+    if not root.is_dir():
+        return []
+
+    from .candidates.probe import get_duration_seconds
+
+    max_bytes = int(size_prefilter_mb * 1024 * 1024)
+    candidates: list[OutplayedClipRef] = []
+    for p in root.rglob("*.mp4"):
+        try:
+            st = p.stat()
+        except OSError:
+            continue
+        if st.st_size > max_bytes:
+            continue
+        try:
+            duration = get_duration_seconds(str(p))
+        except Exception:
+            continue
+        if not (0 < duration <= max_d):
+            continue
+        candidates.append(
+            OutplayedClipRef(
+                path=p, duration_seconds=duration, mtime_epoch=st.st_mtime
+            )
+        )
+    candidates.sort(key=lambda c: (-c.mtime_epoch, c.path.as_posix()))
+    return candidates
+
+
+def _outplayed_clip_to_short_clip(ref: OutplayedClipRef) -> ShortClip:
+    """Wrap an Outplayed clip as a `ShortClip`. Anchor at midpoint;
+    hype=1.0 since Outplayed already curated it."""
+    return ShortClip(
+        file=ref.path.name,
+        path=ref.path,
+        event_type="outplayed_clip",
+        start_seconds=0.0,
+        end_seconds=ref.duration_seconds,
+        hype_score=1.0,
+        funny_score=0.5,
+        story_score=0.5,
+        reason="Outplayed auto-cut event clip (pre-curated)",
+    )
+
+
+def _outplayed_output_folder(game: str, today: date) -> Path:
+    """`WORKSPACE/shorts/_outplayed/<game>_<YYYY-MM-DD>/`"""
+    from .highlights import _safe
+
+    stem = f"{_safe(game)}_{today.isoformat()}"
+    return settings.workspace_dir / "shorts" / "_outplayed" / stem
+
+
+def _write_outplayed_index_md(
+    folder: Path,
+    *,
+    game: str,
+    today: date,
+    scanned: list[OutplayedClipRef],
+    picked: list[OutplayedClipRef],
+    since_days: int | None,
+    result: RenderResult | None,
+    music_path: str | None,
+) -> None:
+    lines: list[str] = []
+    lines.append(f"# Outplayed best-of for {game}")
+    lines.append(f"Generated: {datetime.now(timezone.utc).isoformat()}")
+    lines.append(f"Today: {today.isoformat()}")
+    lines.append(
+        f"Since: {'last ' + str(since_days) + ' days' if since_days else 'all-time'}"
+    )
+    lines.append(f"Clips scanned: {len(scanned)}")
+    lines.append("")
+    lines.append(f"## Picked clips ({len(picked)})")
+    for i, ref in enumerate(picked, 1):
+        mtime = datetime.fromtimestamp(ref.mtime_epoch).strftime("%Y-%m-%d %H:%M")
+        session = ref.path.parent.name
+        lines.append(
+            f"{i:02d}. {mtime}  {ref.duration_seconds:.1f}s  "
+            f"{session}/{ref.path.name}"
+        )
+    lines.append("")
+    if result is not None:
+        status = "OK" if result.ok else "FAILED"
+        lines.append(f"## Render  [{status}]")
+        lines.append(f"Output: {result.out_path.name}")
+        if music_path:
+            lines.append(f"Music: {music_path}")
+        if result.vlm_verdict:
+            lines.append(f"VLM: {result.vlm_verdict} — {result.vlm_why or ''}")
+        if not result.ok:
+            lines.append(f"Error: {result.error}")
+    (folder / "index.md").write_text("\n".join(lines), encoding="utf-8")
+
+
+def preview_outplayed_montage(
+    *,
+    game: str,
+    limit: int | None = None,
+    since_days: int | None = None,
+    now: datetime | None = None,
+) -> dict:
+    """Dry-run: scan Outplayed clips + return what would be picked,
+    without rendering. Cheap (ffprobe only; no ffmpeg)."""
+    lim = (
+        settings.shorts_cross_asset_max_clips if limit is None else limit
+    )
+    scanned = _scan_outplayed_clips(game)
+    filtered = _filter_by_since(scanned, since_days, now)
+    picked = filtered[:lim]
+    return {
+        "ok": True,
+        "game": game,
+        "since_days": since_days,
+        "clips_scanned": len(scanned),
+        "clips_after_since_filter": len(filtered),
+        "limit": lim,
+        "picks": [
+            {
+                "path": ref.path.as_posix(),
+                "session": ref.path.parent.name,
+                "duration_seconds": ref.duration_seconds,
+                "mtime": datetime.fromtimestamp(
+                    ref.mtime_epoch
+                ).isoformat(),
+            }
+            for ref in picked
+        ],
+    }
+
+
+def _filter_by_since(
+    clips: list[OutplayedClipRef],
+    since_days: int | None,
+    now: datetime | None,
+) -> list[OutplayedClipRef]:
+    if since_days is None:
+        return clips
+    reference = now or datetime.now()
+    cutoff = reference.timestamp() - since_days * 86400
+    return [c for c in clips if c.mtime_epoch >= cutoff]
+
+
+def build_outplayed_montage(
+    *,
+    game: str,
+    limit: int | None = None,
+    since_days: int | None = None,
+    music_path: str | None = None,
+    layout: str | None = None,
+    beat_flash: bool | None = None,
+    beat_flash_source: str | None = None,
+    now: datetime | None = None,
+    today: date | None = None,
+    run_vlm_check: bool = True,
+) -> dict:
+    """Compile ONE montage directly from Outplayed's auto-cut clips
+    for `game`.
+
+    Bypasses the whole analyzer/ranker pipeline. Outplayed already
+    curated each clip (every file is a detected event moment) so
+    ranking would just be a paid no-op.
+
+    Ordering: most recent first (by file mtime). `since_days`
+    optionally restricts to the last N days (e.g. `since_days=1` for
+    today's session).
+
+    Output: `WORKSPACE/shorts/_outplayed/<game>_<YYYY-MM-DD>/
+    best_of_<YYYY-MM-DD>.mp4` + `index.md`.
+    """
+    resolved_today = today or date.today()
+    lim = (
+        settings.shorts_cross_asset_max_clips if limit is None else limit
+    )
+
+    scanned = _scan_outplayed_clips(game)
+    if not scanned:
+        return {
+            "ok": True,
+            "shorts_written": 0,
+            "reason": (
+                f"no Outplayed clips (<= {settings.outplayed_clip_max_seconds}s) "
+                f"found for game={game!r} at {settings.outplayed_media_dir}"
+            ),
+            "clips_scanned": 0,
+            "shorts": [],
+        }
+
+    filtered = _filter_by_since(scanned, since_days, now)
+    picked = filtered[:lim]
+    if not picked:
+        out_folder = _outplayed_output_folder(game, resolved_today)
+        out_folder.mkdir(parents=True, exist_ok=True)
+        _write_outplayed_index_md(
+            out_folder,
+            game=game,
+            today=resolved_today,
+            scanned=scanned,
+            picked=[],
+            since_days=since_days,
+            result=None,
+            music_path=None,
+        )
+        return {
+            "ok": True,
+            "shorts_written": 0,
+            "reason": (
+                f"no clips in since_days={since_days} window "
+                f"({len(scanned)} scanned total)"
+            ),
+            "folder": out_folder.as_posix(),
+            "clips_scanned": len(scanned),
+            "shorts": [],
+        }
+
+    # Resolve music (same rule as build_shorts)
+    resolved_music: str | None = (
+        music_path or settings.shorts_default_music_path or None
+    )
+    if resolved_music and not Path(resolved_music).is_file():
+        _log.warning(
+            "outplayed music path %r not found — proceeding without music",
+            resolved_music,
+        )
+        resolved_music = None
+
+    tup = tuple(_outplayed_clip_to_short_clip(ref) for ref in picked)
+    plan = ShortPlan(
+        bucket=_OUTPLAYED_BUCKET,
+        clips=tup,
+        title="BEST OF",
+        vo_prompt="",
+        index=1,
+    )
+
+    out_folder = _outplayed_output_folder(game, resolved_today)
+    out_folder.mkdir(parents=True, exist_ok=True)
+    for old in out_folder.glob("*.mp4"):
+        old.unlink(missing_ok=True)
+
+    out_name = f"best_of_{resolved_today.isoformat()}.mp4"
+    out_path = out_folder / out_name
+
+    fake_asset = {"path": picked[0].path.as_posix(), "game": game}
+    result = _render_and_refine(
+        plan,
+        out_path,
+        mode="montage",
+        asset=fake_asset,
+        music_path=resolved_music,
+        run_vlm_check=run_vlm_check,
+        max_iter=0,
+        layout=layout,
+        beat_flash=beat_flash,
+        beat_flash_source=beat_flash_source,
+    )
+
+    _write_outplayed_index_md(
+        out_folder,
+        game=game,
+        today=resolved_today,
+        scanned=scanned,
+        picked=picked,
+        since_days=since_days,
+        result=result,
+        music_path=resolved_music,
+    )
+
+    return {
+        "ok": True,
+        "folder": out_folder.as_posix(),
+        "shorts_written": 1 if result.ok else 0,
+        "shorts_total": 1,
+        "clips_scanned": len(scanned),
+        "clips_picked": len(picked),
+        "shorts": [
+            {
+                "file": result.out_path.name,
+                "bucket": _OUTPLAYED_BUCKET,
+                "title": plan.title,
+                "clip_count": len(plan.clips),
+                "ok": result.ok,
+                "error": result.error,
+                "vlm_verdict": result.vlm_verdict,
+                "vlm_why": result.vlm_why,
+                "sources": [
+                    {
+                        "path": ref.path.as_posix(),
+                        "session": ref.path.parent.name,
+                        "duration_seconds": ref.duration_seconds,
+                    }
+                    for ref in picked
+                ],
+            }
+        ],
+    }
+
+
+def list_outplayed_shorts(game: str | None = None) -> dict:
+    """Enumerate Outplayed best-of shorts under
+    `WORKSPACE/shorts/_outplayed/`. Read-only."""
+    from .highlights import _safe
+
+    root = settings.workspace_dir / "shorts" / "_outplayed"
+    if not root.is_dir():
+        return {"folders": []}
+    prefix = _safe(game) + "_" if game else None
+    folders: list[dict] = []
+    for entry in sorted(root.iterdir()):
+        if not entry.is_dir():
+            continue
+        if prefix and not entry.name.startswith(prefix):
+            continue
+        shorts = sorted(p.name for p in entry.glob("*.mp4"))
+        folders.append(
+            {
+                "folder": entry.as_posix(),
+                "name": entry.name,
+                "shorts": shorts,
+                "index_md_present": (entry / "index.md").is_file(),
+            }
+        )
+    return {"folders": folders}
+
+
 def list_cross_asset_shorts(game: str | None = None) -> dict:
     """Enumerate cross-asset shorts on disk under
     `WORKSPACE/shorts/_cross_asset/`. Read-only. Optionally filter by

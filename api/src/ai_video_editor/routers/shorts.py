@@ -29,10 +29,13 @@ from ..models import RankResponse
 from ..shorts import (
     _shorts_folder,
     build_cross_asset_montage,
+    build_outplayed_montage,
     build_shorts,
     list_cross_asset_shorts,
+    list_outplayed_shorts,
     preview_buckets,
     preview_cross_asset_montage,
+    preview_outplayed_montage,
 )
 
 router = APIRouter(tags=["shorts"])
@@ -388,6 +391,104 @@ async def preview_cross_asset(game: str, window: str = "week"):
     if window not in ("day", "week", "all"):
         raise HTTPException(400, "window must be 'day', 'week', or 'all'")
     return preview_cross_asset_montage(game=game, window=window)
+
+
+class OutplayedMontageBody(BaseModel):
+    """Payload for `POST /shorts/outplayed_montage`."""
+
+    game: str = Field(..., description="Game name — e.g. 'Valorant'.")
+    limit: int | None = Field(
+        default=None, description="Max clips in the montage. Defaults to 5."
+    )
+    since_days: int | None = Field(
+        default=None,
+        description=(
+            "Only include clips modified within the last N days. "
+            "Omit for all-time. e.g. `1` = today's session only."
+        ),
+    )
+    music_path: str | None = Field(default=None)
+    layout: str | None = Field(default=None)
+    beat_flash: bool | None = Field(default=None)
+    beat_flash_source: str | None = Field(default=None)
+
+
+async def _run_outplayed_job(job_id: str, body: OutplayedMontageBody) -> None:
+    """Background worker for outplayed direct compile."""
+    db = await get_db()
+    try:
+        await db.execute(
+            "UPDATE jobs SET status = 'running' WHERE id = ?", (job_id,)
+        )
+        await db.commit()
+
+        result = await asyncio.to_thread(
+            build_outplayed_montage,
+            game=body.game,
+            limit=body.limit,
+            since_days=body.since_days,
+            music_path=body.music_path,
+            layout=body.layout,
+            beat_flash=body.beat_flash,
+            beat_flash_source=body.beat_flash_source,
+        )
+        if not result.get("ok"):
+            await _finish_job(
+                db, job_id, error=str(result.get("error") or "outplayed render failed")
+            )
+            return
+        await _finish_job(
+            db,
+            job_id,
+            output_path=(
+                f"{result.get('shorts_written', 0)}/"
+                f"{result.get('shorts_total', 0)} -> {result.get('folder', '?')}"
+            ),
+        )
+    except Exception as exc:
+        with contextlib.suppress(Exception):
+            await _finish_job(db, job_id, error=str(exc)[:1500])
+    finally:
+        await db.close()
+
+
+@router.post("/shorts/outplayed_montage", response_model=RankResponse)
+async def compile_outplayed_montage_endpoint(body: OutplayedMontageBody):
+    """Compile a montage DIRECTLY from Outplayed's auto-cut clips for
+    `game` — no DB scan or LLM ranking. Best for games where
+    Outplayed's event detection already picks clean clips (Valorant
+    especially).
+    """
+    db = await get_db()
+    try:
+        job_id = str(uuid.uuid4())
+        await db.execute(
+            "INSERT INTO jobs (id, project_id, type, status, created_at) "
+            "VALUES (?, NULL, 'outplayed_shorts', 'pending', ?)",
+            (job_id, datetime.now(timezone.utc).isoformat()),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+    _track(_run_outplayed_job(job_id, body))
+    return RankResponse(job_id=job_id)
+
+
+@router.get("/shorts/outplayed_montage")
+async def list_outplayed(game: str | None = None):
+    """List Outplayed best-of shorts on disk. Read-only."""
+    return list_outplayed_shorts(game=game)
+
+
+@router.get("/shorts/outplayed_montage/preview")
+async def preview_outplayed(
+    game: str, limit: int | None = None, since_days: int | None = None
+):
+    """Dry-run: scan Outplayed clips + show what would be picked."""
+    return preview_outplayed_montage(
+        game=game, limit=limit, since_days=since_days
+    )
 
 
 @router.get("/assets/{asset_id}/shorts/topics")
