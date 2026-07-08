@@ -202,6 +202,20 @@ class Settings(BaseSettings):
     # not a "reason deeply about it" task — cheaper model, same job.
     # Bump to `claude-sonnet-4-6` if the verdicts drift.
     vlm_anthropic_model: str = "claude-haiku-4-5"
+    # Per-clip source analyzer — watches each pre-cut Outplayed / custom
+    # clip end-to-end and returns a trim recommendation (buildup_start,
+    # payoff_anchor, resolution_end). See vlm/clip_analyzer.py + the
+    # editing rubric in vlm/game_hints/<game>.md.
+    vlm_clip_analyzer_enabled: bool = True
+    vlm_clip_analyzer_frames: int = 30
+    # Sidecar `<clip>.analysis.json` — skips VLM cost on repeat compiles
+    # unless the rubric PROMPT_VERSION changed.
+    vlm_clip_analyzer_cache_enabled: bool = True
+    # Confidence floor below which we IGNORE the analyzer's window and
+    # fall back to the full clip (avoids acting on unsure verdicts).
+    vlm_clip_analyzer_min_confidence: float = 0.5
+    # Toggle in the outplayed + custom compile flows.
+    shorts_use_clip_analyzer: bool = True
     # Bounded per-call HTTP timeout for the VLM. Anthropic replies land
     # in 2-3s typically; Ollama can take much longer. 120s is a safety
     # net that trips on both.

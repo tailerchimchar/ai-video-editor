@@ -175,6 +175,12 @@ class ShortClip:
     story_score: float
     reason: str
 
+    anchor_offset_seconds: float | None = None
+    """Where the payoff moment sits within the clip FILE (offset from
+    start_seconds). Set by the per-clip VLM analyzer for Outplayed +
+    custom compiles; None means "unknown, use midpoint fallback."
+    See vlm/clip_analyzer.py."""
+
     @property
     def anchor_seconds(self) -> float:
         """Best proxy for the moment: midpoint of the clip window.
@@ -703,14 +709,20 @@ def _build_filter_complex(
 
 def _kill_times_in_montage(plan: ShortPlan) -> tuple[float, ...]:
     """Absolute times (from t=0 of the montage output) at which each
-    clip's kill-moment plays. Assumes clips concat back-to-back and
-    the kill sits at each clip's midpoint (matches how highlights are
-    cut — anchor centered in the window)."""
+    clip's kill-moment plays.
+
+    Uses `ShortClip.anchor_offset_seconds` when the per-clip VLM
+    analyzer set it (Outplayed + custom compiles); falls back to the
+    clip midpoint (analyzed-highlights case, where the anchor was
+    already centered when the highlight window was cut)."""
     times: list[float] = []
     montage_t = 0.0
     for clip in plan.clips:
         duration = clip.end_seconds - clip.start_seconds
-        times.append(montage_t + duration / 2.0)
+        offset = clip.anchor_offset_seconds
+        if offset is None:
+            offset = duration / 2.0
+        times.append(montage_t + offset)
         montage_t += duration
     return tuple(times)
 
@@ -817,9 +829,25 @@ def render_short(
     duck = settings.shorts_source_duck_volume
     music_vol = settings.shorts_montage_music_volume
 
-    # Assemble input args: one -i per clip, plus optionally -i music
+    # Assemble input args: one -i per clip, plus optionally -i music.
+    # `-ss <start>` and `-t <duration>` MUST precede each `-i` — that's
+    # how ffmpeg dispatches them as INPUT options (limit what's read
+    # from that file). Put them after `-i` and ffmpeg treats them as
+    # OUTPUT options and everything downstream breaks.
+    #
+    # Per-input trim only fires when `anchor_offset_seconds is not
+    # None` — that's the signal that (start_seconds, end_seconds) are
+    # in the FILE's timebase (set by the VLM clip analyzer). For
+    # highlight-folder clips those fields are SOURCE offsets on a
+    # pre-cut file, so applying -ss would seek past the file's end.
     input_args: list[str] = []
     for clip in plan.clips:
+        if clip.anchor_offset_seconds is not None:
+            window = clip.end_seconds - clip.start_seconds
+            if clip.start_seconds > 0.0:
+                input_args.extend(["-ss", f"{clip.start_seconds:.3f}"])
+            if window > 0.0:
+                input_args.extend(["-t", f"{window:.3f}"])
         input_args.extend(["-i", str(clip.path)])
     music_input_index: int | None = None
     if mode == "montage" and music_path:
@@ -1969,19 +1997,81 @@ def _scan_outplayed_clips(
     return candidates
 
 
-def _outplayed_clip_to_short_clip(ref: OutplayedClipRef) -> ShortClip:
-    """Wrap an Outplayed clip as a `ShortClip`. Anchor at midpoint;
-    hype=1.0 since Outplayed already curated it."""
+def _analyze_and_window(
+    path: Path,
+    duration: float,
+    game: str | None,
+    *,
+    use_analyzer: bool | None = None,
+) -> tuple[float, float, float | None, str | None]:
+    """Run the per-clip VLM analyzer (cached) and return
+    (start_seconds, end_seconds, anchor_offset_seconds, description).
+
+    Falls back to (0, duration, None, None) when:
+      - analyzer is disabled (flag / config off)
+      - VLM is unreachable or returns garbage
+      - analyzer confidence is below `vlm_clip_analyzer_min_confidence`
+
+    In the fallback case the clip renders un-trimmed (current behavior).
+    """
+    enabled = (
+        settings.shorts_use_clip_analyzer if use_analyzer is None else use_analyzer
+    )
+    if not enabled:
+        return 0.0, duration, None, None
+    try:
+        from .vlm.clip_analyzer import analyze_source_clip
+
+        analysis = analyze_source_clip(
+            path, game=game, clip_duration_seconds=duration
+        )
+    except Exception as exc:
+        _log.warning("clip analyzer crashed (non-fatal): %s", exc)
+        return 0.0, duration, None, None
+    if analysis is None:
+        return 0.0, duration, None, None
+    if analysis.confidence < settings.vlm_clip_analyzer_min_confidence:
+        _log.info(
+            "clip analyzer confidence %.2f below floor %.2f — keeping full clip",
+            analysis.confidence,
+            settings.vlm_clip_analyzer_min_confidence,
+        )
+        return 0.0, duration, None, analysis.description
+    start = analysis.buildup_start_seconds
+    end = analysis.resolution_end_seconds
+    anchor_offset = analysis.payoff_anchor_seconds - start
+    return start, end, anchor_offset, analysis.description
+
+
+def _outplayed_clip_to_short_clip(
+    ref: OutplayedClipRef,
+    *,
+    game: str | None = None,
+    use_analyzer: bool | None = None,
+) -> ShortClip:
+    """Wrap an Outplayed clip as a `ShortClip`.
+
+    When the VLM analyzer is enabled and returns a confident window,
+    the clip's start/end and `anchor_offset_seconds` reflect the
+    trim; otherwise the whole file is used (current behavior).
+    """
+    start, end, anchor_offset, description = _analyze_and_window(
+        ref.path, ref.duration_seconds, game, use_analyzer=use_analyzer
+    )
+    reason = "Outplayed auto-cut event clip (pre-curated)"
+    if description:
+        reason = f"{reason} — {description}"
     return ShortClip(
         file=ref.path.name,
         path=ref.path,
         event_type="outplayed_clip",
-        start_seconds=0.0,
-        end_seconds=ref.duration_seconds,
+        start_seconds=start,
+        end_seconds=end,
         hype_score=1.0,
         funny_score=0.5,
         story_score=0.5,
-        reason="Outplayed auto-cut event clip (pre-curated)",
+        reason=reason,
+        anchor_offset_seconds=anchor_offset,
     )
 
 
@@ -2092,6 +2182,7 @@ def build_outplayed_montage(
     layout: str | None = None,
     beat_flash: bool | None = None,
     beat_flash_source: str | None = None,
+    use_clip_analyzer: bool | None = None,
     now: datetime | None = None,
     today: date | None = None,
     run_vlm_check: bool = True,
@@ -2166,7 +2257,12 @@ def build_outplayed_montage(
         )
         resolved_music = None
 
-    tup = tuple(_outplayed_clip_to_short_clip(ref) for ref in picked)
+    tup = tuple(
+        _outplayed_clip_to_short_clip(
+            ref, game=game, use_analyzer=use_clip_analyzer
+        )
+        for ref in picked
+    )
     plan = ShortPlan(
         bucket=_OUTPLAYED_BUCKET,
         clips=tup,
@@ -2480,10 +2576,12 @@ def build_custom_montage(
     *,
     clip_paths: list[str],
     name: str | None = None,
+    game: str | None = None,
     music_path: str | None = None,
     layout: str | None = None,
     beat_flash: bool | None = None,
     beat_flash_source: str | None = None,
+    use_clip_analyzer: bool | None = None,
     run_vlm_check: bool = True,
 ) -> dict:
     """Compile ONE montage from an EXPLICIT list of clip paths — no
@@ -2497,6 +2595,9 @@ def build_custom_montage(
 
     `name` becomes the output folder + filename stem. When omitted, a
     timestamp is used.
+
+    `game` selects the editing rubric under vlm/game_hints/<game>.md
+    for the per-clip analyzer. Omit for the generic rubric.
 
     Output: `WORKSPACE/shorts/_custom/<name>/<name>.mp4` + `index.md`.
     """
@@ -2530,20 +2631,27 @@ def build_custom_montage(
 
     resolved_name = name or f"custom_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
-    tup = tuple(
-        ShortClip(
+    def _wrap(p: Path, duration: float) -> ShortClip:
+        start, end, anchor_offset, description = _analyze_and_window(
+            p, duration, game, use_analyzer=use_clip_analyzer
+        )
+        reason = "user-supplied clip"
+        if description:
+            reason = f"{reason} — {description}"
+        return ShortClip(
             file=p.name,
             path=p,
             event_type="custom",
-            start_seconds=0.0,
-            end_seconds=duration,
+            start_seconds=start,
+            end_seconds=end,
             hype_score=1.0,
             funny_score=0.5,
             story_score=0.5,
-            reason="user-supplied clip",
+            reason=reason,
+            anchor_offset_seconds=anchor_offset,
         )
-        for p, duration in resolved
-    )
+
+    tup = tuple(_wrap(p, duration) for p, duration in resolved)
     plan = ShortPlan(
         bucket=_CUSTOM_BUCKET,
         clips=tup,

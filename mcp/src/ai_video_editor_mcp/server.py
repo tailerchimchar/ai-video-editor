@@ -1498,6 +1498,7 @@ def compile_outplayed_montage(
     layout: str | None = None,
     beat_flash: bool | None = None,
     beat_flash_source: str | None = None,
+    use_clip_analyzer: bool | None = None,
 ) -> dict:
     """Compile ONE montage DIRECTLY from Outplayed's auto-cut clips
     for `game` — no analysis or LLM ranking needed. Outplayed already
@@ -1516,12 +1517,20 @@ def compile_outplayed_montage(
       - `music_path`: local music file (call `download_music(url)` first)
       - `beat_flash`: True to overlay pulses; `beat_flash_source="kills"`
         (default) fires on each clip's payoff moment
+      - `use_clip_analyzer`: When true (default from config), a per-clip
+        VLM analyzer watches each source clip and decides the trim
+        window — cutting Outplayed's padded pre-roll and hunting for
+        the actual payoff moment. Uses the editing rubric under
+        vlm/game_hints/<game>.md. Pass False to skip and use whole
+        clips (faster but less tight).
 
     Output: `WORKSPACE/shorts/_outplayed/<game>_<YYYY-MM-DD>/
     best_of_<YYYY-MM-DD>.mp4` + an `index.md` listing every clip picked.
 
-    Deterministic: same clip set on disk + same args → same output.
-    Poll internally; typically 30s-2min to render 5 clips.
+    Deterministic: same clip set on disk + same args → same output
+    (analyzer results are cached in a sidecar next to each source clip).
+    Poll internally; typically 30s-3min to render 5 clips (first run
+    with analyzer takes longer; re-runs hit the cache and are fast).
     """
     body: dict = {"game": game}
     if limit is not None:
@@ -1536,6 +1545,8 @@ def compile_outplayed_montage(
         body["beat_flash"] = beat_flash
     if beat_flash_source:
         body["beat_flash_source"] = beat_flash_source
+    if use_clip_analyzer is not None:
+        body["use_clip_analyzer"] = use_clip_analyzer
     with _client() as c:
         job_id = c.post(f"{API}/shorts/outplayed_montage", json=body).json()[
             "job_id"
@@ -1654,10 +1665,12 @@ def list_highlights_clips(
 def compile_custom_montage(
     clip_paths: list[str],
     name: str | None = None,
+    game: str | None = None,
     music_path: str | None = None,
     layout: str | None = None,
     beat_flash: bool | None = None,
     beat_flash_source: str | None = None,
+    use_clip_analyzer: bool | None = None,
 ) -> dict:
     """Compile ONE montage from an EXPLICIT list of clip paths — mix
     from ANYWHERE: Outplayed folder, analyzed highlights folders,
@@ -1693,6 +1706,8 @@ def compile_custom_montage(
     body: dict = {"clip_paths": clip_paths}
     if name:
         body["name"] = name
+    if game:
+        body["game"] = game
     if music_path:
         body["music_path"] = music_path
     if layout:
@@ -1701,6 +1716,8 @@ def compile_custom_montage(
         body["beat_flash"] = beat_flash
     if beat_flash_source:
         body["beat_flash_source"] = beat_flash_source
+    if use_clip_analyzer is not None:
+        body["use_clip_analyzer"] = use_clip_analyzer
     with _client() as c:
         job_id = c.post(f"{API}/shorts/custom_montage", json=body).json()[
             "job_id"

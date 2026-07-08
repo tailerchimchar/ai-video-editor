@@ -16,6 +16,7 @@ game-agnostic.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Literal
 
@@ -83,6 +84,68 @@ class CompilationReview(BaseModel):
         description="True when no fixes are needed. Loop stops immediately."
     )
     fixes: list[CompilationFix] = Field(default_factory=list)
+
+
+PayoffType = Literal[
+    "kill", "multi_kill", "ace", "clutch",
+    "plant", "defuse", "save", "outplay", "other",
+]
+
+
+class ClipAnalysis(BaseModel):
+    """Per-clip source-analyzer response.
+
+    VLM watches an unfiltered source clip (e.g. a raw Outplayed clip up
+    to 60s) and returns a trim recommendation: WHERE the payoff moment
+    is + WHAT window of buildup + resolution to keep. The compile then
+    re-cuts the clip to that window using ffmpeg `-ss` / `-t`.
+
+    All times are seconds from clip start (offset within the clip
+    file itself, NOT the source recording).
+    """
+
+    payoff_anchor_seconds: float = Field(
+        ge=0.0,
+        description=(
+            "The single frame that IS the highlight (kill, plant, "
+            "defuse, clutch shot). If nothing worth highlighting is "
+            "in the clip, put the midpoint here and set confidence low."
+        ),
+    )
+    buildup_start_seconds: float = Field(
+        ge=0.0,
+        description=(
+            "Where meaningful engagement begins. This becomes the new "
+            "clip start. Preserve OP holds / ability setups / peek "
+            "prep. Cut walking / buy phase / dead map view."
+        ),
+    )
+    resolution_end_seconds: float = Field(
+        ge=0.0,
+        description=(
+            "Where the aftermath resolves. This becomes the new clip "
+            "end. Cut before reload / repeated pauses / next round buy."
+        ),
+    )
+    payoff_type: PayoffType = Field(
+        default="other",
+        description=(
+            "Category of the payoff. Used for title overlays and to "
+            "flag high-priority montage picks (ace / clutch / multi_kill)."
+        ),
+    )
+    description: str = Field(
+        description="One-sentence account of what happens in the clip."
+    )
+    confidence: float = Field(
+        ge=0.0,
+        le=1.0,
+        description=(
+            "0..1 self-reported confidence in the anchor + trim window. "
+            "Below `vlm_clip_analyzer_min_confidence` the compile "
+            "ignores the trim and uses the full clip as fallback."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------
@@ -288,3 +351,96 @@ def build_comp_user_prompt(*, clip_count: int, total_seconds: float) -> str:
         " Focus on pacing, cohesion, and variety across the clips shown."
         " Return the JSON review."
     )
+
+
+# ---------------------------------------------------------------------
+# Per-clip source analyzer — decides trim window before the compile
+# ---------------------------------------------------------------------
+
+
+_ANALYZER_SYSTEM_TEMPLATE = """\
+You are a video editor deciding where to cut a raw gameplay clip so
+it lands as a great highlight when stitched into a montage.
+
+You are shown sampled frames spanning the entire clip. Each frame is
+labeled with its timestamp (`t=N.NNs`) so you can pinpoint moments.
+
+Your ONE job: pick a trim window that gives the right amount of
+context before the payoff and cuts cleanly after. The user cares
+about SEQUENCING QUALITY above all else — not too little context
+(payoff feels random), not too much (dead air, walking, reloads
+kill the vibe).
+
+Return exactly one JSON object with these fields:
+
+- `payoff_anchor_seconds` — the frame that IS the highlight moment
+  (the kill, plant, defuse, clutch shot). If nothing worth
+  highlighting is visible, put the clip midpoint here and mark
+  `confidence` low.
+- `buildup_start_seconds` — where meaningful engagement begins.
+  Becomes the new clip START. Preserve buildup that adds tension
+  (OP holds, ability setups, peek prep) but cut dead time (walking,
+  buy phase, empty map).
+- `resolution_end_seconds` — where the aftermath resolves. Becomes
+  the new clip END. Cut before reload / repeated pauses / next round
+  buy screens.
+- `payoff_type` — one of: "kill", "multi_kill", "ace", "clutch",
+  "plant", "defuse", "save", "outplay", "other". Use "other" when
+  nothing highlight-worthy is visible.
+- `description` — one sentence: what happens in the clip.
+- `confidence` — 0..1. Mark below 0.5 if you're unsure whether the
+  payoff really landed or whether the trim window is right.
+
+Constraints:
+- `buildup_start_seconds` <= `payoff_anchor_seconds` <= `resolution_end_seconds`
+- All three MUST be within [0, clip_duration_seconds]
+- The trim window (`resolution_end - buildup_start`) should generally
+  be 5-15 seconds. Very hard ceilings: minimum 3 seconds, maximum 30.
+
+Return ONLY valid JSON matching the schema — no prose before or after:
+
+{{
+  "payoff_anchor_seconds": <number>,
+  "buildup_start_seconds": <number>,
+  "resolution_end_seconds": <number>,
+  "payoff_type": "kill"|"multi_kill"|"ace"|"clutch"|"plant"|"defuse"|"save"|"outplay"|"other",
+  "description": "<one sentence>",
+  "confidence": <0..1>
+}}
+
+## Game-specific editing hints (apply these to your trim decision)
+
+{game_hints}
+"""
+
+
+def build_analyzer_system_prompt(game: str | None) -> tuple[str, str]:
+    """Return (prompt, resolved_hint_name)."""
+    hints, resolved = load_game_hints(game)
+    return _ANALYZER_SYSTEM_TEMPLATE.format(game_hints=hints), resolved
+
+
+def build_analyzer_user_prompt(clip_duration_seconds: float) -> str:
+    return (
+        f"Analyze this {clip_duration_seconds:.1f}-second clip. "
+        "Pick the payoff anchor and the trim window. Return the JSON."
+    )
+
+
+# ---------------------------------------------------------------------
+# PROMPT_VERSION extraction — used as cache invalidation key
+# ---------------------------------------------------------------------
+
+
+_PROMPT_VERSION_RE = re.compile(
+    r"<!--\s*PROMPT_VERSION\s*:\s*(\d+)\s*-->", re.IGNORECASE
+)
+
+
+def game_hints_prompt_version(game: str | None) -> int:
+    """Read the `<!-- PROMPT_VERSION: N -->` marker from the game's hint
+    file. Falls back to 0 when the marker is missing. Bumping the
+    version in the .md file invalidates every cached analyzer sidecar."""
+    hints_text, _ = load_game_hints(game)
+    m = _PROMPT_VERSION_RE.search(hints_text)
+    return int(m.group(1)) if m else 0

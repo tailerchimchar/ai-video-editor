@@ -416,6 +416,14 @@ class OutplayedMontageBody(BaseModel):
     layout: str | None = Field(default=None)
     beat_flash: bool | None = Field(default=None)
     beat_flash_source: str | None = Field(default=None)
+    use_clip_analyzer: bool | None = Field(
+        default=None,
+        description=(
+            "Toggle the per-clip VLM analyzer that decides the trim "
+            "window before render. Defaults to config "
+            "`SHORTS_USE_CLIP_ANALYZER` (currently on)."
+        ),
+    )
 
 
 async def _run_outplayed_job(job_id: str, body: OutplayedMontageBody) -> None:
@@ -436,6 +444,7 @@ async def _run_outplayed_job(job_id: str, body: OutplayedMontageBody) -> None:
             layout=body.layout,
             beat_flash=body.beat_flash,
             beat_flash_source=body.beat_flash_source,
+            use_clip_analyzer=body.use_clip_analyzer,
         )
         if not result.get("ok"):
             await _finish_job(
@@ -546,10 +555,21 @@ class CustomMontageBody(BaseModel):
         default=None,
         description="Output folder + filename stem. Omit for timestamp.",
     )
+    game: str | None = Field(
+        default=None,
+        description=(
+            "Selects the editing rubric for the per-clip analyzer "
+            "(vlm/game_hints/<game>.md). Omit for the generic rubric."
+        ),
+    )
     music_path: str | None = Field(default=None)
     layout: str | None = Field(default=None)
     beat_flash: bool | None = Field(default=None)
     beat_flash_source: str | None = Field(default=None)
+    use_clip_analyzer: bool | None = Field(
+        default=None,
+        description="Per-clip VLM analyzer. Defaults to config.",
+    )
 
 
 async def _run_custom_job(job_id: str, body: CustomMontageBody) -> None:
@@ -565,10 +585,12 @@ async def _run_custom_job(job_id: str, body: CustomMontageBody) -> None:
             build_custom_montage,
             clip_paths=body.clip_paths,
             name=body.name,
+            game=body.game,
             music_path=body.music_path,
             layout=body.layout,
             beat_flash=body.beat_flash,
             beat_flash_source=body.beat_flash_source,
+            use_clip_analyzer=body.use_clip_analyzer,
         )
         if not result.get("ok"):
             await _finish_job(

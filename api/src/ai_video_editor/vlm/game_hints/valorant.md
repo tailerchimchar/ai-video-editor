@@ -1,57 +1,102 @@
-# Valorant game hints
+<!-- PROMPT_VERSION: 2 -->
+# Valorant editing hints
 
-## HUD layout (1920x1080 reference)
+Your primary job when analyzing a Valorant clip is **sequencing
+quality**: pick a trim window that gives the right amount of context
+before the payoff and cuts cleanly after. Not too little (payoff
+feels random), not too much (dead air, walking, reloads kill the
+vibe).
 
-- **Round score**: top-center — attacker score / defender score /
-  round timer / current round number
-- **Killfeed**: top-right — text ribbons with agent portraits, weapon
-  icon, victim name, and headshot marker when applicable
-- **Loadout + credits**: bottom (agent icon, weapon, shield, credits)
-- **Ability slots**: bottom-center (C / Q / E / X)
-- **Minimap**: top-left corner
-- **Ping / callout wheel**: appears mid-screen briefly when active
+## The payoff (the "anchor" moment)
 
-## Event lexicon
+The frame in the clip where the highlight moment happens. In
+priority order:
 
-Kills:
-- **Ace** — one player kills all 5 enemies in a single round
-- **Clutch** — winning a round while outnumbered (1v2 / 1v3 / 1v4 / 1v5)
-- **Entry frag** — the first kill of a round, usually the entry player
-- **Headshot** — a kill via headshot (small marker in the killfeed)
-- **Knife kill** — a kill with the melee weapon (rare, very hype)
-- **Wallbang** — a kill through a wall (marker in the killfeed)
+1. **Ace** — the 5th enemy dying, killfeed showing your name repeatedly
+2. **Clutch shot** — the deciding kill in a 1vX where you were losing
+3. **OP one-tap** — a single sniper shot that connects on the head
+4. **Multi-kill sequence** — 2+ kills within ~5 seconds
+5. **Solo kill on a key duelist** — a Jett dash-kill, a Reyna outplay
+6. **Standard kill** — killfeed shows your name on the left, someone
+   dies on the right
+7. **Plant / defuse under pressure** — bomb interaction while enemies
+   are alive nearby
 
-Utility:
-- **Smoke** — Brimstone/Omen/Astra/Viper/Harbor obscure vision
-- **Molly / incendiary** — area denial fire (KAY/O, Phoenix, Brim)
-- **Flash** — pop-flash that blinds enemies (Reyna, Skye, Yoru, Phoenix, KAY/O)
-- **Ult** — agent ultimate (usually distinctive per agent)
+If NO payoff moment is visible in the sampled frames, the clip is
+low-value — return low confidence and mark payoff_type as `other`.
 
-Rounds: 2 halves x 12 rounds each. Overtime possible.
+## Buildup — what MUST be preserved before the payoff
 
-## Common false positives (things that LOOK like events but aren't)
+Different plays need different buildup. Judge by what you SEE:
 
-- **Killfeed showing a teammate's kill** — top-right shows a kill but
-  the person recording didn't get it. Highlight belongs to a teammate,
-  not the player of interest.
-- **Retake / clutch attempt that FAILS** — a 1v3 attempt is only a
-  highlight if the player wins; a dramatic failure is not usually a
-  reel-worthy moment.
-- **Loud comms / teammate laughter** — audio_peak sometimes fires on
-  vocal reactions; if the frames show a downtime moment (buy phase,
-  agent select) there's no visual event.
-- **Watching a spectator killfeed post-death** — the player died,
-  is spectating, and the killfeed keeps updating. The player of
-  interest isn't in these frames.
+- **Snap kill** (peek → shot within 1s) → 1-3 seconds pre-anchor.
+  Anything more is padding.
+- **OP hold** (crouched, scoped, still, holding an angle) →
+  preserve 3-8 seconds of the hold. The tension IS the moment.
+- **Ability setup** (Cypher trap set → wait → kill; Sova recon dart
+  → info → engage) → preserve the setup action + brief wait.
+- **Rotation clutch** (running through map to a site with alarm
+  music-like tension) → up to 5s of the run-in.
+- **Multi-frag streak** → walk backward to the FIRST kill in the
+  streak, not the last one.
 
-## What "good context" looks like for a kill highlight
+**Hard ceiling: 15 seconds of pre-anchor context.** Anything before
+that is almost always waste even for the biggest OP hold.
 
-- 1-3 seconds before the kill showing peek / position / setup
-- The actual kill moment (crosshair on target, shot landing,
-  killfeed pops)
-- 1-2 seconds after showing the killfeed confirmation and any
-  follow-up (multi-kill sequence, callout, celebration)
+## Vibe killers — cut these out of the trim window
 
-Cuts that start AT the shot feel abrupt. Cuts that end before the
-killfeed confirms feel unfinished. Multi-kill sequences should
-capture the full run of kills, not just the first.
+Things you should chop from the pre-anchor buildup or post-anchor
+resolution:
+
+- **Walking through empty callouts** with no enemy in sight — > 2s
+  of dead map view = cut
+- **Buy phase** at the round start — never include
+- **Agent select / loading screen** — never include
+- **Post-kill reload** — cut after 1 second unless it's dramatic
+- **Camera moving to nothing** — like the player checking their
+  crosshair or aiming at floor > 2s = cut
+- **Repeated scoreboard-check pauses** — cut
+- **Post-round buy-menu screen** — cut
+
+## Post-anchor resolution — how much to keep AFTER the kill
+
+- **Snap kill** → 2-3 seconds (killfeed confirms, brief pause)
+- **Multi-kill mid-sequence** → 3-6 seconds (see if follow-up
+  kills come)
+- **Ace / clutch payoff** → 4-6 seconds (celebration / voice line
+  moment)
+- Never more than **6 seconds** of post-anchor unless another
+  payoff is coming.
+
+## Cut on natural audio drops
+
+When choosing the exact cut point, prefer these visual proxies for
+audio quiet (since you can't hear):
+
+- Player stops moving / reloads finish
+- Round-end white flash
+- Next round buy phase starts
+- Enemy visibility drops (nobody on screen, no killfeed)
+
+## Common mistakes to avoid
+
+- **Starting exactly at the kill** — feels abrupt, viewer can't tell
+  what happened
+- **Ending during the reload animation** — feels incomplete
+- **Preserving 10s of walking because Outplayed cut it that way** —
+  Outplayed pads clips; trim aggressively
+- **Confusing teammate kills for user kills** — the killfeed shows
+  ALL kills. Only trim around kills where the LEFT side (killer) is
+  the user's name
+- **Marking a downtime clip as payoff_type=kill** — if no kill or
+  key moment is visible, use `other` and low confidence
+
+## HUD reference (1920x1080)
+
+- **Killfeed** top-right — user's name on LEFT of the row = they got
+  the kill. Read this to identify the anchor moment.
+- **Round score** top-center — includes round timer
+- **Team icons** top-center (5 each side) — grey out on death
+- **Minimap** top-left
+- **Loadout / abilities** bottom
+- **Crosshair** center — flashes red briefly on hit
