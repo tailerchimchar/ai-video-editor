@@ -1,4 +1,4 @@
-<!-- PROMPT_VERSION: 2 -->
+<!-- PROMPT_VERSION: 3 -->
 # Valorant editing hints
 
 Your primary job when analyzing a Valorant clip is **sequencing
@@ -22,17 +22,35 @@ priority order:
 7. **Plant / defuse under pressure** — bomb interaction while enemies
    are alive nearby
 
-If NO payoff moment is visible in the sampled frames, the clip is
-low-value — return low confidence and mark payoff_type as `other`.
+## When the user did NOT get the kill — HARD RULE
+
+If the sampled frames show the USER dying (their screen goes to a
+death cam / spectator view / greyed out) and there is NO visible
+kill BY THE USER before the death, this clip is a false positive:
+
+- Set `payoff_type = "other"`
+- Set `confidence <= 0.3`
+
+The user does NOT want death clips in their highlight reel, ever.
+Outplayed cuts on ANY event (kill OR death), so many clips are
+death clips. Reject them.
+
+Exception: if the user got at least ONE kill visible in the frames
+BEFORE dying (e.g. multi-kill trade), that IS a valid highlight —
+use `outplay` or `kill` type, confidence normally.
 
 ## Buildup — what MUST be preserved before the payoff
 
 Different plays need different buildup. Judge by what you SEE:
 
-- **Snap kill** (peek → shot within 1s) → 1-3 seconds pre-anchor.
-  Anything more is padding.
-- **OP hold** (crouched, scoped, still, holding an angle) →
-  preserve 3-8 seconds of the hold. The tension IS the moment.
+- **Snap kill** (peek → shot within 1s) → **1-2 seconds** pre-anchor.
+  Anything more is padding. Err on cutting MORE aggressively when the
+  pre-shot frames are repetitive positioning (same corner, same aim).
+- **OP hold** (crouched, scoped, still, holding an angle) → preserve
+  **4-8 seconds** of the hold. The tension IS the moment. **When in
+  doubt on an OP hold, extend the buildup by 1-2 more seconds
+  rather than cut early** — a slightly-too-long OP setup reads as
+  intentional; a too-short one reads as abrupt.
 - **Ability setup** (Cypher trap set → wait → kill; Sova recon dart
   → info → engage) → preserve the setup action + brief wait.
 - **Rotation clutch** (running through map to a site with alarm
@@ -40,8 +58,9 @@ Different plays need different buildup. Judge by what you SEE:
 - **Multi-frag streak** → walk backward to the FIRST kill in the
   streak, not the last one.
 
-**Hard ceiling: 15 seconds of pre-anchor context.** Anything before
-that is almost always waste even for the biggest OP hold.
+**Hard ceiling: 12 seconds of pre-anchor context.** Anything before
+that is almost always waste even for the biggest OP hold. (Lowered
+from 15s in v2 based on feedback that openers still felt padded.)
 
 ## Vibe killers — cut these out of the trim window
 
@@ -49,14 +68,16 @@ Things you should chop from the pre-anchor buildup or post-anchor
 resolution:
 
 - **Walking through empty callouts** with no enemy in sight — > 2s
-  of dead map view = cut
+  of dead map view = cut. **Even 1.5s feels padded — trim tighter.**
 - **Buy phase** at the round start — never include
 - **Agent select / loading screen** — never include
 - **Post-kill reload** — cut after 1 second unless it's dramatic
 - **Camera moving to nothing** — like the player checking their
-  crosshair or aiming at floor > 2s = cut
+  crosshair or aiming at floor > 1.5s = cut
 - **Repeated scoreboard-check pauses** — cut
 - **Post-round buy-menu screen** — cut
+- **Idle scoped hold with NO enemy visible / hearable** — count
+  every second of this against the 12s buildup ceiling. Trim.
 
 ## Post-anchor resolution — how much to keep AFTER the kill
 
@@ -87,9 +108,12 @@ audio quiet (since you can't hear):
   Outplayed pads clips; trim aggressively
 - **Confusing teammate kills for user kills** — the killfeed shows
   ALL kills. Only trim around kills where the LEFT side (killer) is
-  the user's name
-- **Marking a downtime clip as payoff_type=kill** — if no kill or
-  key moment is visible, use `other` and low confidence
+  the user's name (see HUD reference)
+- **Marking a downtime OR DEATH clip as a real payoff** — if no kill
+  BY THE USER is visible, use `other` and low confidence. The
+  compile drops these clips entirely.
+- **Trusting the fact that Outplayed cut this clip** — Outplayed
+  detects ANY event including deaths. Not every clip is a highlight.
 
 ## HUD reference (1920x1080)
 
@@ -100,3 +124,11 @@ audio quiet (since you can't hear):
 - **Minimap** top-left
 - **Loadout / abilities** bottom
 - **Crosshair** center — flashes red briefly on hit
+- **Player death** — full-screen colored overlay + spectator UI
+  (you're now watching a teammate). If you see this, the user died.
+
+## Rubric changelog (for reference — do not use as rules)
+
+- v2 → v3: hard-drop death clips (`payoff_type="other"` + low
+  confidence); snap-kill buildup 3s → 2s; ceiling 15s → 12s;
+  err longer for OP holds when unsure.

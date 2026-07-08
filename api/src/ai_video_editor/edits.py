@@ -46,6 +46,16 @@ _ROI_PRESETS: dict[str, tuple[str, str, str, str]] = {
     # Tune the values for your specific OBS layout if the cam doesn't fill
     # the zoom cleanly — change `_ROI_PRESETS["streamcam_lol"]` here.
     "streamcam_lol": ("iw*0.19", "ih*0.22", "iw*0.66", "ih*0.78"),
+    # Valorant killfeed (top-right) — mirrors profiles/valorant.toml
+    # [regions.killfeed]. Wide + tall enough to catch multi-row kill
+    # announcements.
+    "killfeed_val": ("iw*0.22", "ih*0.28", "iw*0.78", "ih*0.08"),
+    # Valorant minimap (TOP-left — unlike LoL's bottom-right). Mirrors
+    # profiles/valorant.toml [regions.minimap].
+    "minimap_val": ("iw*0.20", "ih*0.30", "iw*0.01", "ih*0.02"),
+    # Valorant scoreboard bar (top-center: round score + timer + team
+    # alive count). Mirrors profiles/valorant.toml [regions.scoreboard].
+    "scoreboard_val": ("iw*0.40", "ih*0.07", "iw*0.30", "0"),
 }
 
 
@@ -65,28 +75,86 @@ _SHORT_WIDTH = 720
 _SHORT_HEIGHT = 1280
 
 
-def cropped_hud_9x16(zoom_out: float | None = None) -> str:
+def cropped_hud_9x16(
+    zoom_out: float | None = None,
+    game: str | None = None,
+) -> str:
     """9:16 layout that trades a tighter play area for OVERLAID HUD.
 
-    Reads `settings.shorts_zoom_out` for the crop width multiplier when
-    not overridden per-call.
+    Dispatches to a per-game composer. The default (game=None or LoL)
+    keeps the current League behavior — scoreline top-right, minimap
+    bottom-right. Valorant swaps in the killfeed (top-right) and moves
+    the minimap to match Val's HUD (top-left).
 
-    Layout:
-      1. Crops the source to a `zoom_out * 9/16` slice of the width from
-         center. `zoom_out=1.0` matches the pure 9:16 crop (very tight);
-         `zoom_out=1.2` (default) shows ~20% more horizontal game map.
-      2. Scales the crop to 720 wide, preserving aspect. That leaves
-         the sharp foreground at some height ≤ 1280.
-      3. Fills the 720x1280 frame with a BLURRED, zoomed copy of the
-         same source so the letterbox areas top/bottom aren't dead
-         black bars — same aesthetic as `blur_fill_9x16` for the fill.
-      4. Overlays a top-right SCORELINE strip (team kills / personal KDA
-         / clock — the League HUD's top-right info block). Always
-         populated, unlike the killfeed which was empty most of the time.
-      5. Overlays the minimap (from `_ROI_PRESETS['minimap_lol']`)
-         bottom-right of the vertical.
+    Reads `settings.shorts_zoom_out` for the crop width multiplier
+    when not overridden per-call. Filter graph shape: entry `[0:v]`,
+    exit `[out]`, `filter_complex`.
+    """
+    resolved = _hud_game(game)
+    if resolved == "valorant":
+        return _cropped_hud_valorant(zoom_out)
+    return _cropped_hud_lol(zoom_out)
 
-    Filter graph shape: entry `[0:v]`, exit `[out]`, `filter_complex`.
+
+def _hud_game(game: str | None) -> str:
+    """Normalize a game name to a HUD composer key.
+
+    Handles fuzzy game names (e.g. "League of Legends_..." session
+    folder-style strings) via substring match — mirrors the pattern
+    used in `vlm/prompts.py::load_game_hints`.
+    """
+    if not game:
+        return "league_of_legends"
+    g = game.lower().strip()
+    if "valorant" in g:
+        return "valorant"
+    # Default to LoL for backward compatibility.
+    return "league_of_legends"
+
+
+def _cropped_hud_lol(zoom_out: float | None) -> str:
+    """LoL variant — scoreline top-right + minimap bottom-right."""
+    from .config import settings
+
+    factor = (
+        float(zoom_out)
+        if zoom_out is not None
+        else float(settings.shorts_zoom_out)
+    )
+    crop_w = f"ih*9/16*{factor:.4f}"
+
+    # Position the scoreline strip so its bottom edge sits just above
+    # the sharp play area (i.e. IN the blurred letterbox, hugging the
+    # top of the main image).
+    scoreline_height_px = 82  # ROI 422x108 scaled to width 320
+    letterbox_top = 640.0 * (1.0 - 1.0 / factor) if factor > 0 else 0.0
+    scoreline_y = max(4, round(letterbox_top - scoreline_height_px - 4))
+    return (
+        "[0:v]split=4[main][blur_src][sl][mm];"
+        f"[main]crop={crop_w}:ih:(iw-{crop_w})/2:0,"
+        "scale=720:-2:flags=lanczos,setsar=1[fg];"
+        "[blur_src]scale=720:1280:force_original_aspect_ratio=increase:"
+        "flags=lanczos,crop=720:1280,boxblur=luma_radius=25:luma_power=2,"
+        "setsar=1[bg];"
+        "[bg][fg]overlay=(W-w)/2:(H-h)/2[main_composed];"
+        "[sl]crop=iw*0.22:ih*0.10:iw*0.78:ih*0.005,"
+        "scale=320:-1:flags=lanczos,setsar=1[sls];"
+        "[mm]crop=ih*0.22:ih*0.22:iw-ih*0.23:ih*0.77,"
+        "scale=240:240:flags=lanczos,setsar=1[mms];"
+        f"[main_composed][sls]overlay=W-w-16:{scoreline_y}[step1];"
+        "[step1][mms]overlay=W-w-16:H-h-40[out]"
+    )
+
+
+def _cropped_hud_valorant(zoom_out: float | None) -> str:
+    """Valorant variant — killfeed top-right + minimap top-left.
+
+    Val's HUD is very different from LoL's:
+      - Killfeed sits top-right (Val's kill announcements)
+      - Minimap sits top-LEFT (Val convention — mirrors valorant.toml)
+      - We skip a separate scoreboard overlay for MVP — the top-center
+        Val score/timer is thin and would clash with the killfeed on
+        the same row.
     """
     from .config import settings
 
@@ -95,48 +163,42 @@ def cropped_hud_9x16(zoom_out: float | None = None) -> str:
         if zoom_out is not None
         else float(settings.shorts_zoom_out)
     )
-    # crop_w = ih * (9/16) * factor — expressed at ffmpeg-eval time so
-    # the filter graph stays source-resolution-independent.
     crop_w = f"ih*9/16*{factor:.4f}"
 
-    # Position the scoreline strip so its bottom edge sits just above
-    # the sharp play area (i.e. IN the blurred letterbox, hugging the
-    # top of the main image). At zoom_out=F the letterbox top height =
-    # 640 * (1 - 1/F). Scoreline is 320-wide x ~82 tall; leave 4px gap.
-    # When zoom_out is small the letterbox is too thin to hold the
-    # strip — clamp to y=4 (overlaps top of play area slightly).
-    scoreline_height_px = 82  # ROI 422x108 scaled to width 320
-    letterbox_top = 640.0 * (1.0 - 1.0 / factor) if factor > 0 else 0.0
-    scoreline_y = max(4, round(letterbox_top - scoreline_height_px - 4))
+    # Killfeed strip: taller than LoL's scoreline (Val kill entries
+    # stack vertically as rows), narrower height allowed. Scale to
+    # 320 wide → target height ~408 to preserve aspect. We ANCHOR the
+    # killfeed at the top-right of the SHARP play area (not the
+    # letterbox strip like LoL scoreline) since Val kills appear
+    # over time and the letterbox is too thin for a stacked feed.
+    killfeed_y = 12  # small margin from the true top of the frame
+
+    # Minimap: TOP-LEFT for Valorant. Scale to 200 wide (smaller than
+    # LoL's minimap since Val's is rectangular / bigger natively).
+    minimap_x = 12
+    minimap_y = 12
     return (
-        # Split the source four ways: main sharp crop, blurred fill,
-        # scoreline strip (top-right HUD), minimap square.
-        "[0:v]split=4[main][blur_src][sl][mm];"
-        # Main: zoom-out center crop, scaled to 720 wide (height auto,
-        # ≤ 1280). Even height so the codec is happy.
+        "[0:v]split=4[main][blur_src][kf][mm];"
+        # Main: zoom-out center crop, scaled to 720 wide.
         f"[main]crop={crop_w}:ih:(iw-{crop_w})/2:0,"
         "scale=720:-2:flags=lanczos,setsar=1[fg];"
-        # Blurred background fill — same recipe as blur_fill_9x16.
+        # Blurred fill same as LoL.
         "[blur_src]scale=720:1280:force_original_aspect_ratio=increase:"
         "flags=lanczos,crop=720:1280,boxblur=luma_radius=25:luma_power=2,"
         "setsar=1[bg];"
-        # Center the sharp foreground on the blurred background.
         "[bg][fg]overlay=(W-w)/2:(H-h)/2[main_composed];"
-        # Scoreline strip — team kills / personal KDA / clock lives in
-        # the top-right of League's HUD, always populated. Wider crop
-        # than the old killfeed (grabs 10% of source height starting at
-        # the very top) so the whole info block comes through. Scale to
-        # 320 wide (bigger than the old killfeed) for readability.
-        "[sl]crop=iw*0.22:ih*0.10:iw*0.78:ih*0.005,"
-        "scale=320:-1:flags=lanczos,setsar=1[sls];"
-        # Minimap: ROI = `_ROI_PRESETS['minimap_lol']`. Square, 240px.
-        "[mm]crop=ih*0.22:ih*0.22:iw-ih*0.23:ih*0.77,"
-        "scale=240:240:flags=lanczos,setsar=1[mms];"
-        # Scoreline overlay: right-aligned, y computed above so it hugs
-        # the top of the sharp play area from inside the blurred letterbox.
-        f"[main_composed][sls]overlay=W-w-16:{scoreline_y}[step1];"
-        # Minimap bottom-right.
-        "[step1][mms]overlay=W-w-16:H-h-40[out]"
+        # Killfeed strip — Val's killfeed ROI (top-right, tall).
+        # Crop from source then scale to 320 wide (~360 tall preserved).
+        "[kf]crop=iw*0.22:ih*0.28:iw*0.78:ih*0.08,"
+        "scale=320:-1:flags=lanczos,setsar=1[kfs];"
+        # Minimap — Val's minimap ROI (top-left, rectangular).
+        # Scale to 200 wide preserving aspect (~300 tall).
+        "[mm]crop=iw*0.20:ih*0.30:iw*0.01:ih*0.02,"
+        "scale=200:-1:flags=lanczos,setsar=1[mms];"
+        # Killfeed top-right of the vertical output.
+        f"[main_composed][kfs]overlay=W-w-16:{killfeed_y}[step1];"
+        # Minimap top-left.
+        f"[step1][mms]overlay={minimap_x}:{minimap_y}[out]"
     )
 
 
@@ -145,7 +207,9 @@ def cropped_hud_9x16(zoom_out: float | None = None) -> str:
 # instance of the graph needs its internal labels suffixed with the
 # clip index. Callers use these constants to do that rewrite.
 BLUR_FILL_9X16_LABELS: tuple[str, ...] = ("fga", "bga", "fg", "bg")
-CROPPED_HUD_9X16_LABELS: tuple[str, ...] = (
+
+# LoL cropped_hud labels (scoreline `sl`/`sls`, minimap bottom-right).
+CROPPED_HUD_9X16_LABELS_LOL: tuple[str, ...] = (
     "main",
     "blur_src",
     "sl",
@@ -157,6 +221,32 @@ CROPPED_HUD_9X16_LABELS: tuple[str, ...] = (
     "mms",
     "step1",
 )
+
+# Valorant cropped_hud labels (killfeed `kf`/`kfs`, minimap top-left).
+CROPPED_HUD_9X16_LABELS_VAL: tuple[str, ...] = (
+    "main",
+    "blur_src",
+    "kf",
+    "mm",
+    "fg",
+    "bg",
+    "main_composed",
+    "kfs",
+    "mms",
+    "step1",
+)
+
+
+def cropped_hud_labels_for_game(game: str | None) -> tuple[str, ...]:
+    """Pick the right label set for the game's cropped_hud variant."""
+    if _hud_game(game) == "valorant":
+        return CROPPED_HUD_9X16_LABELS_VAL
+    return CROPPED_HUD_9X16_LABELS_LOL
+
+
+# Back-compat alias — old callers import this name. Points at LoL for
+# backward-compat (LoL was the ONLY variant before this refactor).
+CROPPED_HUD_9X16_LABELS = CROPPED_HUD_9X16_LABELS_LOL
 
 
 def blur_fill_9x16() -> str:

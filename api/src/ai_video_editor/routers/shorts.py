@@ -424,6 +424,15 @@ class OutplayedMontageBody(BaseModel):
             "`SHORTS_USE_CLIP_ANALYZER` (currently on)."
         ),
     )
+    analyze_pool_size: int | None = Field(
+        default=None,
+        description=(
+            "How many candidate clips to analyze before ranking by "
+            "payoff type + confidence. Larger pool = better selection "
+            "at the cost of more VLM calls (cached after first pass). "
+            "Defaults to 3x `limit`."
+        ),
+    )
 
 
 async def _run_outplayed_job(job_id: str, body: OutplayedMontageBody) -> None:
@@ -445,6 +454,7 @@ async def _run_outplayed_job(job_id: str, body: OutplayedMontageBody) -> None:
             beat_flash=body.beat_flash,
             beat_flash_source=body.beat_flash_source,
             use_clip_analyzer=body.use_clip_analyzer,
+            analyze_pool_size=body.analyze_pool_size,
         )
         if not result.get("ok"):
             await _finish_job(

@@ -1499,6 +1499,7 @@ def compile_outplayed_montage(
     beat_flash: bool | None = None,
     beat_flash_source: str | None = None,
     use_clip_analyzer: bool | None = None,
+    analyze_pool_size: int | None = None,
 ) -> dict:
     """Compile ONE montage DIRECTLY from Outplayed's auto-cut clips
     for `game` — no analysis or LLM ranking needed. Outplayed already
@@ -1547,6 +1548,8 @@ def compile_outplayed_montage(
         body["beat_flash_source"] = beat_flash_source
     if use_clip_analyzer is not None:
         body["use_clip_analyzer"] = use_clip_analyzer
+    if analyze_pool_size is not None:
+        body["analyze_pool_size"] = analyze_pool_size
     with _client() as c:
         job_id = c.post(f"{API}/shorts/outplayed_montage", json=body).json()[
             "job_id"

@@ -619,23 +619,37 @@ def _title_drawtext(title: str) -> str:
 
 _LAYOUT_BUILDERS: dict[str, tuple[callable, tuple[str, ...]]] = {  # type: ignore[type-arg]
     "blur_fill": (blur_fill_9x16, BLUR_FILL_9X16_LABELS),
+    # cropped_hud dispatches by game inside the builder + picks labels
+    # via cropped_hud_labels_for_game(game). The label tuple stored
+    # here is the LoL default (backward-compat when game=None).
     "cropped_hud": (cropped_hud_9x16, CROPPED_HUD_9X16_LABELS),
 }
 
 
-def _indexed_layout_chain(layout: str, i: int) -> str:
+def _indexed_layout_chain(
+    layout: str, i: int, *, game: str | None = None
+) -> str:
     """Return the per-clip filter chain for `layout` with all internal
     labels suffixed by `i` so multiple clips can be concatenated.
 
+    `game` selects the per-game variant for HUD-style layouts. Ignored
+    for game-agnostic layouts like blur_fill.
+
     Raises `ValueError` for unknown layouts.
     """
+    from .edits import cropped_hud_labels_for_game
+
     if layout not in _LAYOUT_BUILDERS:
         raise ValueError(
             f"unknown shorts layout {layout!r}; "
             f"expected one of {sorted(_LAYOUT_BUILDERS)}"
         )
-    builder, labels = _LAYOUT_BUILDERS[layout]
-    chain = builder().replace("[0:v]", f"[{i}:v]")
+    if layout == "cropped_hud":
+        chain = cropped_hud_9x16(game=game).replace("[0:v]", f"[{i}:v]")
+        labels = cropped_hud_labels_for_game(game)
+    else:
+        builder, labels = _LAYOUT_BUILDERS[layout]
+        chain = builder().replace("[0:v]", f"[{i}:v]")
     for lbl in labels:
         chain = chain.replace(f"[{lbl}]", f"[{lbl}{i}]")
     return chain.replace("[out]", f"[v{i}]")
@@ -651,6 +665,7 @@ def _build_filter_complex(
     music_volume: float,
     layout: str = "cropped_hud",
     beat_flash_filter: str | None = None,
+    game: str | None = None,
 ) -> str:
     """Assemble the full `-filter_complex` string.
 
@@ -666,11 +681,14 @@ def _build_filter_complex(
     `music.build_beat_effect_filter` reading `[vcat]` and writing
     `[vflashed]`. When None, the title overlays directly on `[vcat]`.
 
+    `game` selects the per-game HUD variant for cropped_hud (Valorant
+    → killfeed top-right + minimap top-left; anything else → LoL).
+
     Result: `[vout][aout]`.
     """
     parts: list[str] = []
     for i in range(n_video_inputs):
-        parts.append(_indexed_layout_chain(layout, i))
+        parts.append(_indexed_layout_chain(layout, i, game=game))
 
     # Concat video streams (video-only concat, `n=N:v=1:a=0`)
     concat_v_ins = "".join(f"[v{i}]" for i in range(n_video_inputs))
@@ -809,6 +827,7 @@ def render_short(
     layout: str | None = None,
     beat_flash: bool | None = None,
     beat_flash_source: str | None = None,
+    game: str | None = None,
 ) -> tuple[bool, str | None]:
     """Render one short from its plan. Returns (ok, error_message_or_none).
 
@@ -873,6 +892,7 @@ def render_short(
         music_volume=music_vol,
         layout=layout or settings.shorts_layout,
         beat_flash_filter=beat_flash_filter,
+        game=game,
     )
 
     cmd = [
@@ -1277,6 +1297,7 @@ def _render_and_refine(
     last_why: str | None = None
     refinements_applied: list[str] = []
 
+    game_hint = asset.get("game")
     for iteration in range(max_iter + 1):
         ok, err = render_short(
             current_plan,
@@ -1286,6 +1307,7 @@ def _render_and_refine(
             layout=layout,
             beat_flash=beat_flash,
             beat_flash_source=beat_flash_source,
+            game=game_hint,
         )
         if not ok:
             return RenderResult(
@@ -1997,6 +2019,22 @@ def _scan_outplayed_clips(
     return candidates
 
 
+# Payoff-type quality score — higher = better highlight. Used to rank
+# a pool of analyzed clips so we pick real highlights instead of the
+# newest N files (which include deaths and downtime).
+_PAYOFF_TYPE_SCORE: dict[str, int] = {
+    "ace": 5,
+    "clutch": 4,
+    "multi_kill": 4,
+    "outplay": 3,
+    "kill": 2,
+    "plant": 1,
+    "defuse": 1,
+    "save": 1,
+    "other": 0,  # deaths / downtime — dropped by rank_analyzed_clips
+}
+
+
 def _analyze_and_window(
     path: Path,
     duration: float,
@@ -2041,6 +2079,117 @@ def _analyze_and_window(
     end = analysis.resolution_end_seconds
     anchor_offset = analysis.payoff_anchor_seconds - start
     return start, end, anchor_offset, analysis.description
+
+
+@dataclass(frozen=True)
+class _AnalyzedOutplayedClip:
+    """One Outplayed clip + its VLM analysis, ready for ranking."""
+
+    ref: OutplayedClipRef
+    analysis_payoff_type: str
+    analysis_confidence: float
+    analysis_description: str
+    payoff_score: int
+
+
+def _analyze_pool(
+    refs: list[OutplayedClipRef],
+    *,
+    game: str | None,
+    use_analyzer: bool | None,
+) -> list[_AnalyzedOutplayedClip]:
+    """Analyze every clip in `refs` via the VLM. Returns per-clip
+    analysis metadata (from the sidecar cache when possible)."""
+    from .vlm.clip_analyzer import analyze_source_clip
+
+    enabled = (
+        settings.shorts_use_clip_analyzer if use_analyzer is None else use_analyzer
+    )
+    out: list[_AnalyzedOutplayedClip] = []
+    for ref in refs:
+        analysis = None
+        if enabled:
+            try:
+                analysis = analyze_source_clip(
+                    ref.path,
+                    game=game,
+                    clip_duration_seconds=ref.duration_seconds,
+                )
+            except Exception as exc:
+                _log.warning(
+                    "pool analyze crashed on %s (non-fatal): %s", ref.path.name, exc
+                )
+        if analysis is None:
+            # No analyzer verdict — treat as an unranked "kill" so it
+            # can still make the cut when the analyzer is disabled.
+            out.append(
+                _AnalyzedOutplayedClip(
+                    ref=ref,
+                    analysis_payoff_type="kill",
+                    analysis_confidence=0.5,
+                    analysis_description="",
+                    payoff_score=_PAYOFF_TYPE_SCORE["kill"],
+                )
+            )
+            continue
+        out.append(
+            _AnalyzedOutplayedClip(
+                ref=ref,
+                analysis_payoff_type=analysis.payoff_type,
+                analysis_confidence=analysis.confidence,
+                analysis_description=analysis.description,
+                payoff_score=_PAYOFF_TYPE_SCORE.get(
+                    analysis.payoff_type, 0
+                ),
+            )
+        )
+    return out
+
+
+def _rank_analyzed_pool(
+    analyzed: list[_AnalyzedOutplayedClip],
+    *,
+    limit: int,
+    min_confidence: float | None = None,
+) -> tuple[list[_AnalyzedOutplayedClip], list[_AnalyzedOutplayedClip]]:
+    """Rank + trim the analyzed pool. Returns (kept, dropped).
+
+    Drop rules (in order):
+      - `payoff_type == "other"` (death / downtime clip)
+      - `confidence < min_confidence` (default = analyzer floor)
+
+    Rank rules (all DESC): payoff_score, confidence, mtime_epoch,
+    then path for tiebreak determinism.
+
+    Anything that survives + tops the ranked list up to `limit` is
+    returned as `kept`.
+    """
+    floor = (
+        settings.vlm_clip_analyzer_min_confidence
+        if min_confidence is None
+        else min_confidence
+    )
+    kept_pool: list[_AnalyzedOutplayedClip] = []
+    dropped: list[_AnalyzedOutplayedClip] = []
+    for a in analyzed:
+        if a.analysis_payoff_type == "other":
+            dropped.append(a)
+            continue
+        if a.analysis_confidence < floor:
+            dropped.append(a)
+            continue
+        kept_pool.append(a)
+    kept_pool.sort(
+        key=lambda a: (
+            -a.payoff_score,
+            -a.analysis_confidence,
+            -a.ref.mtime_epoch,
+            a.ref.path.as_posix(),
+        )
+    )
+    kept = kept_pool[:limit]
+    dropped = dropped + kept_pool[limit:]
+    return kept, dropped
 
 
 def _outplayed_clip_to_short_clip(
@@ -2093,6 +2242,8 @@ def _write_outplayed_index_md(
     since_days: int | None,
     result: RenderResult | None,
     music_path: str | None,
+    kept_analyzed: list[_AnalyzedOutplayedClip] | None = None,
+    dropped: list[dict] | None = None,
 ) -> None:
     lines: list[str] = []
     lines.append(f"# Outplayed best-of for {game}")
@@ -2104,14 +2255,35 @@ def _write_outplayed_index_md(
     lines.append(f"Clips scanned: {len(scanned)}")
     lines.append("")
     lines.append(f"## Picked clips ({len(picked)})")
+    kept_map = (
+        {k.ref.path.as_posix(): k for k in (kept_analyzed or [])}
+    )
     for i, ref in enumerate(picked, 1):
         mtime = datetime.fromtimestamp(ref.mtime_epoch).strftime("%Y-%m-%d %H:%M")
         session = ref.path.parent.name
+        analyzed = kept_map.get(ref.path.as_posix())
+        badge = ""
+        if analyzed:
+            badge = (
+                f"  [{analyzed.analysis_payoff_type} "
+                f"conf={analyzed.analysis_confidence:.2f}]"
+            )
         lines.append(
             f"{i:02d}. {mtime}  {ref.duration_seconds:.1f}s  "
-            f"{session}/{ref.path.name}"
+            f"{session}/{ref.path.name}{badge}"
         )
+        if analyzed and analyzed.analysis_description:
+            lines.append(f"    {analyzed.analysis_description}")
     lines.append("")
+    if dropped:
+        lines.append(f"## Dropped from pool ({len(dropped)})")
+        for d in dropped:
+            lines.append(
+                f"- {d['session']}/{d['file']}  "
+                f"[{d['payoff_type']} conf={d['confidence']:.2f}]  "
+                f"reason: {d['reason']}"
+            )
+        lines.append("")
     if result is not None:
         status = "OK" if result.ok else "FAILED"
         lines.append(f"## Render  [{status}]")
@@ -2183,6 +2355,7 @@ def build_outplayed_montage(
     beat_flash: bool | None = None,
     beat_flash_source: str | None = None,
     use_clip_analyzer: bool | None = None,
+    analyze_pool_size: int | None = None,
     now: datetime | None = None,
     today: date | None = None,
     run_vlm_check: bool = True,
@@ -2220,8 +2393,7 @@ def build_outplayed_montage(
         }
 
     filtered = _filter_by_since(scanned, since_days, now)
-    picked = filtered[:lim]
-    if not picked:
+    if not filtered:
         out_folder = _outplayed_output_folder(game, resolved_today)
         out_folder.mkdir(parents=True, exist_ok=True)
         _write_outplayed_index_md(
@@ -2243,6 +2415,63 @@ def build_outplayed_montage(
             ),
             "folder": out_folder.as_posix(),
             "clips_scanned": len(scanned),
+            "shorts": [],
+        }
+
+    # Analyze a bigger pool than `limit` so we can drop deaths /
+    # downtime clips and rank the rest by payoff quality. Pool size
+    # defaults to 3x limit — trades a bit more VLM cost (cached after
+    # first pass) for meaningfully better clip selection.
+    pool_size = (
+        analyze_pool_size
+        if analyze_pool_size is not None
+        else max(lim * 3, lim + 5)
+    )
+    pool = filtered[:pool_size]
+    analyzed = _analyze_pool(pool, game=game, use_analyzer=use_clip_analyzer)
+    kept, dropped = _rank_analyzed_pool(analyzed, limit=lim)
+    picked = [k.ref for k in kept]
+    dropped_summary = [
+        {
+            "session": d.ref.path.parent.name,
+            "file": d.ref.path.name,
+            "payoff_type": d.analysis_payoff_type,
+            "confidence": d.analysis_confidence,
+            "reason": (
+                "payoff_type=other (death or downtime)"
+                if d.analysis_payoff_type == "other"
+                else f"confidence {d.analysis_confidence:.2f} below floor"
+                if d.analysis_confidence < settings.vlm_clip_analyzer_min_confidence
+                else "outranked"
+            ),
+        }
+        for d in dropped
+    ]
+
+    if not picked:
+        out_folder = _outplayed_output_folder(game, resolved_today)
+        out_folder.mkdir(parents=True, exist_ok=True)
+        _write_outplayed_index_md(
+            out_folder,
+            game=game,
+            today=resolved_today,
+            scanned=scanned,
+            picked=[],
+            since_days=since_days,
+            result=None,
+            music_path=None,
+            dropped=dropped_summary,
+        )
+        return {
+            "ok": True,
+            "shorts_written": 0,
+            "reason": (
+                f"no valid payoff clips in analyzed pool "
+                f"({len(pool)} analyzed, all dropped)"
+            ),
+            "folder": out_folder.as_posix(),
+            "clips_scanned": len(scanned),
+            "dropped": dropped_summary,
             "shorts": [],
         }
 
@@ -2302,6 +2531,8 @@ def build_outplayed_montage(
         since_days=since_days,
         result=result,
         music_path=resolved_music,
+        kept_analyzed=kept,
+        dropped=dropped_summary,
     )
 
     return {
@@ -2310,7 +2541,10 @@ def build_outplayed_montage(
         "shorts_written": 1 if result.ok else 0,
         "shorts_total": 1,
         "clips_scanned": len(scanned),
+        "clips_analyzed": len(analyzed),
         "clips_picked": len(picked),
+        "clips_dropped": len(dropped_summary),
+        "dropped": dropped_summary,
         "shorts": [
             {
                 "file": result.out_path.name,
@@ -2323,11 +2557,13 @@ def build_outplayed_montage(
                 "vlm_why": result.vlm_why,
                 "sources": [
                     {
-                        "path": ref.path.as_posix(),
-                        "session": ref.path.parent.name,
-                        "duration_seconds": ref.duration_seconds,
+                        "path": k.ref.path.as_posix(),
+                        "session": k.ref.path.parent.name,
+                        "duration_seconds": k.ref.duration_seconds,
+                        "payoff_type": k.analysis_payoff_type,
+                        "confidence": k.analysis_confidence,
                     }
-                    for ref in picked
+                    for k in kept
                 ],
             }
         ],
