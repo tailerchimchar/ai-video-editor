@@ -31,21 +31,113 @@ Three things landed after the initial skill was written; anyone touching related
 
 - **Chronological highlights folder** — `highlights.py::build_highlights` sorts kept rankings by `suggested_start_seconds` (was: `hype_score` descending). The folder reads as a log of the game; filenames `01_..., 02_...` walk play time. If a caller needs a hype-first order, that's the `compile_highlights(order="hook"|"hype")` layer's job, not the highlights folder.
 
-## Recent: Shorts pipeline (informal, MVP)
+## Recent: Shorts pipeline (SHIPPED — v0.5 as of 2026-07-08)
 
-There is no `compile_shorts` endpoint or MCP tool yet — Shorts are being hand-generated via direct ffmpeg from validated clips (see the Notion doc for the pro-tier rubric). When productizing:
+Fully wired end-to-end. Five compile flows share the render path;
+each layer is game-agnostic + open/closed by design so LoL support
+is a drop-in add of one game-hint md + optional player_name.
 
-- 9:16 aspect (`aspect="9:16"` in existing compile path — passes through `aspect_filter()`)
-- Blur-fill background pattern (16:9 gameplay centered vertically, blurred+scaled version fills top/bottom bars). Filter graph shape:
-  ```
-  [0:v]split=2[a][b];
-  [a]scale=720:-2:flags=lanczos,setsar=1[fg];
-  [b]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,boxblur=25:2,setsar=1[bg];
-  [bg][fg]overlay=(W-w)/2:(H-h)/2
-  ```
-- ~30-55s duration cap (Shorts algorithm sweet spot)
-- Output goes to `WORKSPACE_DIR/shorts/<game>_<date>/`
-- Pro-tier follow-ups (not in MVP): hook-edit (payoff-first), kill-moment zoom via `apply_zoom` at the peak, music bed (royalty-free), dynamic KDA overlay from cv_kda data, face-cam bubble (blocked on user recording it)
+### Compile flows (all in `api/src/ai_video_editor/shorts.py`)
+
+- `build_shorts(asset, candidates, mode="voiceover"|"montage")` —
+  single-asset compile from an analyzed highlights folder. Buckets
+  clips by narrative intent (first_blood / laning_phase / multikill
+  / …). Reads `hype_score` from index.json.
+- `build_cross_asset_montage(game, window="week")` — sweeps every
+  session's highlights folder, ranks by (kill-group size, hype
+  score, session date), builds ONE "best of" montage.
+- `build_outplayed_montage(game, limit, analyze_pool_size)` —
+  DIRECT from `OUTPLAYED_MEDIA_DIR/<game>/` skipping the DB scan +
+  analyzer pipeline entirely. Best for games where Outplayed's
+  auto-clipper already picks clean moments (Valorant). Analyzes a
+  bigger pool than needed then ranks by (payoff_type, confidence).
+- `build_custom_montage(clip_paths=[...])` — user hand-picks paths
+  from anywhere (Outplayed folder, highlights folder, ad-hoc drops).
+  Same downstream pipeline; no ranking.
+
+### Two-layer intelligence (per-clip → whole-comp)
+
+Everything above `_render_and_refine` shares this shape:
+
+1. **`vlm/clip_analyzer.py::analyze_source_clip`** — VLM watches
+   ONE source clip end-to-end. Returns a `ClipAnalysis` with a
+   primary payoff moment (buildup_start / payoff_anchor /
+   resolution_end / payoff_type / confidence) PLUS
+   `additional_moments: list[PayoffMoment]` — because pre-clipped
+   VODs typically have 2-3 kills spread across the clip. One
+   source clip becomes 1-3 sub-clips in the montage.
+2. **`killfeed.py::detect_killfeed_kills` + `verify_anchor`** —
+   OCR the killfeed HUD region for the user's name (config
+   `PLAYER_NAME_<GAME>`). Each VLM moment gets cross-checked; the
+   anchor snaps to the OCR-derived kill time within tolerance,
+   OR the moment is DROPPED as VLM hallucination.
+3. **Whole-comp VLM review** (`vlm/validator.py`) — after render,
+   the VLM watches the compiled montage and can trigger a re-cut
+   loop for pacing / cohesion fixes.
+
+Each layer has a sidecar cache next to the source clip:
+`<clip>.analysis.json` (per-clip VLM) + `<clip>.killfeed.json`
+(OCR track). Same URL + same prompt_version = free re-run.
+
+### Killfeed OCR — open/closed backend
+
+`api/src/ai_video_editor/killfeed.py`. `_OCR_BACKENDS = {"tesseract":
+_ocr_tesseract}` — add PaddleOCR / EasyOCR by registering a new
+callable. Currently uses tesseract subprocess (same pattern as
+`candidates/cv_kda.py`) with PSM 11, 3x upscale, alphanumeric
+whitelist. Fuzzy-matches player name via `rapidfuzz` at threshold
+70 (tolerates single-char OCR noise).
+
+Rising-edge detection over per-frame counts of user's name in the
+killfeed ROI's LEFT half (killer position). Emits kill timestamps
+in seconds from clip start.
+
+### Rubric = the primary editing intelligence
+
+`vlm/game_hints/valorant.md` (currently PROMPT_VERSION 4). Rewrite
+this file to change the analyzer's judgment. Includes the
+`<!-- PROMPT_VERSION: N -->` header — bumping invalidates all
+cached analyses. Rubric maintains the editing rules (payoff types,
+buildup preservation, vibe-killers, multi-payoff instruction,
+death-nuance rule). LoL support = drop a `league.md` beside it +
+mirror the structure.
+
+### 9:16 layout is game-specific
+
+`edits.py::cropped_hud_9x16(zoom_out, game)` dispatches to
+per-game composers:
+- `_cropped_hud_lol` — scoreline top-right + minimap bottom-right
+- `_cropped_hud_valorant` — killfeed top-right (bigger, lower)
+  + minimap top-left
+
+Register a new game by adding another `_cropped_hud_<game>` and a
+branch in `_hud_game(game)`. Label tuples in
+`CROPPED_HUD_9X16_LABELS_<GAME>` and `cropped_hud_labels_for_game`.
+
+### Music + beats + flash
+
+`music/` package: `download.py` (yt-dlp → local mp3, cached by URL
+hash), `beats.py` (librosa, cached in `<mp3>.librosa.beats.json`),
+`sync.py` (kill-on-beat sync — pure logic; NOT applied in ffmpeg
+yet, queued), `effects.py` (`_EFFECT_BUILDERS` returns filter
+fragments; currently `flash` overlay pulse at kill anchors).
+
+### Config knobs that matter
+
+- `SHORTS_USE_CLIP_ANALYZER` — VLM per-clip pass
+- `SHORTS_BEAT_FLASH_SOURCE` — kills / downbeats / beats
+- `KILLFEED_VERIFIER_ENABLED`, `PLAYER_NAME_VALORANT`
+- `VLM_CLIP_ANALYZER_MIN_CONFIDENCE` — 0.5 default; below this
+  the VLM's trim is dropped, clip renders whole
+
+### Pro-tier follow-ups still queued
+
+- Beat-sync actual clip shift (currently only flash uses beats)
+- Cross-clip flash TRANSITION between clips (user requested)
+- Authoritative-OCR mode: use killfeed as anchor source of truth,
+  have VLM only shape windows around OCR kills (not the other way)
+- LoL rubric + player_name_league
+- Face-cam bubble
 
 ## Mental model
 
