@@ -216,6 +216,29 @@ class Settings(BaseSettings):
     vlm_clip_analyzer_min_confidence: float = 0.5
     # Toggle in the outplayed + custom compile flows.
     shorts_use_clip_analyzer: bool = True
+    # Killfeed OCR verifier — cross-checks the VLM analyzer's detected
+    # kill moments against actual killfeed rows in the source clip.
+    # When a moment's payoff_anchor has no matching killfeed appearance
+    # for `player_name_<game>` within tolerance, the moment gets
+    # DROPPED (VLM likely hallucinated). Anchors within tolerance get
+    # SNAPPED to the actual kill time.
+    #
+    # Backend registry lives in candidates/killfeed.py::_OCR_BACKENDS.
+    # tesseract is the current default (already installed for cv_kda).
+    killfeed_verifier_enabled: bool = True
+    killfeed_ocr_backend: str = "tesseract"
+    # Fuzzy-match threshold (0-100) for player name against OCR output.
+    # 70+ tolerates OCR noise like N00dlz / Noodl2 while rejecting
+    # random enemy names.
+    killfeed_name_match_threshold: int = 70
+    # ± seconds around a VLM-called anchor to look for a killfeed row.
+    # 2.5s covers Val's killfeed appearance delay (~500ms after the
+    # kill sfx) plus some slack.
+    killfeed_snap_tolerance_seconds: float = 2.5
+    # Per-game player-name registry. Empty string disables verification
+    # for that game (compile still ships; just no OCR pass).
+    player_name_valorant: str = ""
+    player_name_league: str = ""
     # Bounded per-call HTTP timeout for the VLM. Anthropic replies land
     # in 2-3s typically; Ollama can take much longer. 120s is a safety
     # net that trips on both.

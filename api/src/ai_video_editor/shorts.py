@@ -2229,23 +2229,71 @@ def _outplayed_clip_to_short_clip(
     )
 
 
+_PLAYER_NAME_BY_GAME: dict[str, str] = {}
+
+
+def _player_name_for(game: str | None) -> str:
+    """Return the configured player name for `game`, or empty string
+    when unset. Cached via module-level dict so we don't re-read
+    settings for every clip."""
+    if not game:
+        return ""
+    key = game.lower()
+    if key in _PLAYER_NAME_BY_GAME:
+        return _PLAYER_NAME_BY_GAME[key]
+    if "valorant" in key:
+        name = settings.player_name_valorant
+    elif "league" in key:
+        name = settings.player_name_league
+    else:
+        name = ""
+    _PLAYER_NAME_BY_GAME[key] = name
+    return name
+
+
+def _run_killfeed_verifier(
+    ref_path: Path, duration: float, game: str | None
+):
+    """Wrapper that returns None when the verifier is off / unavailable
+    (any failure). Never raises."""
+    player = _player_name_for(game)
+    if not player:
+        return None
+    try:
+        from .killfeed import detect_killfeed_kills
+
+        return detect_killfeed_kills(
+            ref_path, duration, player_name=player, game=game
+        )
+    except Exception as exc:
+        _log.info("killfeed verifier crashed (non-fatal): %s", exc)
+        return None
+
+
 def _ref_to_short_clips_from_analysis(
     ref: OutplayedClipRef,
     analysis: object | None,
+    *,
+    game: str | None = None,
 ) -> list[ShortClip]:
     """Split ONE Outplayed source clip into 1..N ShortClips based on
-    the VLM analyzer's detected moments. When the analyzer is
-    unavailable / low-confidence, returns a single whole-clip ShortClip
-    (backward-compat with the pre-multi-moment behavior).
+    the VLM analyzer's detected moments, then VERIFY each moment
+    against the killfeed OCR.
 
-    Each returned ShortClip carries its own trim window (via
-    start/end + `anchor_offset_seconds`) so the render pipeline
-    already handles them.
+    Verification behavior:
+      - Killfeed track found → each moment's anchor gets snapped to
+        the closest killfeed kill within `killfeed_snap_tolerance`.
+        Moments with no killfeed kill nearby get DROPPED.
+      - Killfeed track missing (verifier disabled / OCR unavailable /
+        player_name unset) → all moments pass through unchanged.
+
+    When the analyzer is unavailable / low-confidence, returns a single
+    whole-clip ShortClip (backward-compat).
     """
+    from .killfeed import verify_anchor
     from .vlm.prompts import ClipAnalysis
 
     if not isinstance(analysis, ClipAnalysis):
-        # No analysis — render the whole clip.
         return [
             ShortClip(
                 file=ref.path.name,
@@ -2261,8 +2309,6 @@ def _ref_to_short_clips_from_analysis(
             )
         ]
     if analysis.confidence < settings.vlm_clip_analyzer_min_confidence:
-        # Below floor: keep the whole clip (matches _analyze_and_window
-        # fallback behavior).
         return [
             ShortClip(
                 file=ref.path.name,
@@ -2281,21 +2327,47 @@ def _ref_to_short_clips_from_analysis(
             )
         ]
 
+    # Run killfeed OCR ONCE per source clip (returns None when off /
+    # unavailable). All moments in this clip verify against it.
+    track = _run_killfeed_verifier(ref.path, ref.duration_seconds, game)
+
     moments = analysis.all_moments
     clips: list[ShortClip] = []
+    drops: list[str] = []
     for i, m in enumerate(moments, 1):
         window = m.resolution_end_seconds - m.buildup_start_seconds
-        if window < 0.5:  # too tight; skip
+        if window < 0.5:
             continue
-        anchor_offset = m.payoff_anchor_seconds - m.buildup_start_seconds
-        reason = f"payoff {i}/{len(moments)} [{m.payoff_type}] — {m.description}"
+        # Verify + snap anchor if killfeed detected a kill nearby
+        verdict = verify_anchor(m.payoff_anchor_seconds, track)
+        if not verdict.verified:
+            drops.append(
+                f"moment {i} [{m.payoff_type}] anchor={m.payoff_anchor_seconds:.1f}s "
+                f"— no killfeed kill within tolerance; VLM likely wrong"
+            )
+            continue
+        # Adjust the trim window to keep the anchor centered when we
+        # snapped it. Shift = snapped - original.
+        shift = verdict.snapped_anchor - m.payoff_anchor_seconds
+        new_start = max(0.0, m.buildup_start_seconds + shift)
+        new_end = min(ref.duration_seconds, m.resolution_end_seconds + shift)
+        anchor_offset = verdict.snapped_anchor - new_start
+        badge = (
+            "[killfeed-verified]"
+            if verdict.matched_kill_time is not None
+            else "[unverified — no OCR]"
+        )
+        reason = (
+            f"payoff {i}/{len(moments)} [{m.payoff_type}] "
+            f"{badge} — {m.description}"
+        )
         clips.append(
             ShortClip(
                 file=ref.path.name,
                 path=ref.path,
                 event_type=m.payoff_type or "outplayed_clip",
-                start_seconds=m.buildup_start_seconds,
-                end_seconds=m.resolution_end_seconds,
+                start_seconds=new_start,
+                end_seconds=new_end,
                 hype_score=m.confidence,
                 funny_score=0.5,
                 story_score=0.5,
@@ -2303,8 +2375,14 @@ def _ref_to_short_clips_from_analysis(
                 anchor_offset_seconds=anchor_offset,
             )
         )
+    if drops:
+        _log.info(
+            "killfeed verifier dropped %d moment(s) on %s: %s",
+            len(drops),
+            ref.path.name,
+            "; ".join(drops),
+        )
     if not clips:
-        # All moments were degenerate — fall back to whole clip
         return [
             ShortClip(
                 file=ref.path.name,
@@ -2584,14 +2662,14 @@ def build_outplayed_montage(
         )
         resolved_music = None
 
-    # Split source clips into sub-clips per detected payoff moment.
-    # A single Outplayed clip with 3 kills becomes 3 tight ShortClips
-    # in the montage. Analyzer results are already cached from the
-    # pool ranking above — reuse them here.
+    # Split source clips into sub-clips per detected payoff moment,
+    # cross-checked against the killfeed OCR verifier for each source.
+    # A single Outplayed clip with 3 kills becomes up to 3 tight
+    # ShortClips (verifier drops unverified moments).
     sub_clips: list[ShortClip] = []
     for k in kept:
         sub_clips.extend(
-            _ref_to_short_clips_from_analysis(k.ref, k.analysis)
+            _ref_to_short_clips_from_analysis(k.ref, k.analysis, game=game)
         )
     tup = tuple(sub_clips)
     plan = ShortPlan(
@@ -3000,7 +3078,9 @@ def build_custom_montage(
         pseudo_ref = OutplayedClipRef(
             path=p, duration_seconds=duration, mtime_epoch=0.0
         )
-        clips = _ref_to_short_clips_from_analysis(pseudo_ref, analysis)
+        clips = _ref_to_short_clips_from_analysis(
+            pseudo_ref, analysis, game=game
+        )
         # Retag event_type from "outplayed_clip" → "custom" for
         # untrimmed fallbacks. The multi-moment splits already carry
         # their payoff_type.
