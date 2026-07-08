@@ -45,6 +45,16 @@ except Exception:  # optional — mirrors ranker.py
 _log = logging.getLogger(__name__)
 
 
+# Candidate sources whose "kill happened here" claim is game-client
+# ground truth (not visual inference). When the VLM says
+# `false_positive` on frames from one of these, we trust the source
+# instead — the killfeed row might have scrolled off before the sampled
+# frames land, but we KNOW a kill occurred per the game client's own
+# event stream. See `candidates/overwolf_events.py` for the source that
+# reads Outplayed's log directly.
+_GROUND_TRUTH_SOURCES = frozenset({"overwolf_game_event", "riot_api"})
+
+
 # ---------------------------------------------------------------------
 # Per-clip loop
 # ---------------------------------------------------------------------
@@ -172,6 +182,33 @@ def validate_and_cut(
                 verdict_history=history,
             )
         if verdict.verdict == "false_positive":
+            # Ground-truth sources (game-client-reported events) beat
+            # the VLM's visual guess: the killfeed row might have
+            # scrolled off before the sampled frames land, but we KNOW
+            # a kill happened here per the game client. Ship the clip
+            # anyway with the verdict recorded in metadata for the
+            # trace.
+            if source in _GROUND_TRUTH_SOURCES:
+                _log.info(
+                    "vlm false_positive overridden by ground-truth source %s",
+                    source,
+                )
+                return ClipLoopResult(
+                    ok=True,
+                    out_path=out_path,
+                    final_verdict=ClipVerdict(
+                        verdict="pass",
+                        why=(
+                            f"ground_truth_override: source={source} "
+                            f"vlm said false_positive but game client "
+                            f"reported this event"
+                        ),
+                    ),
+                    iterations=iteration,
+                    start_seconds=cur_start,
+                    end_seconds=cur_end,
+                    verdict_history=history,
+                )
             # Delete the cut file — no false positives written to disk.
             out_path.unlink(missing_ok=True)
             return ClipLoopResult(

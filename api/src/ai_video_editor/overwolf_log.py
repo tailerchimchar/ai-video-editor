@@ -3,7 +3,7 @@ timestamps from Outplayed's own log files.
 
 Outplayed is an Overwolf app; it subscribes to Valorant's game-event
 provider (`gep_valorant.dll`) and logs every event to
-`%LOCALAPPDATA%\\Overwolf\\Log\\Apps\\Outplayed\\background.html.*.log`.
+`%LOCALAPPDATA%\\Overwolf\\Log\\Apps\\Outplayed\\background.html*.log`.
 
 We parse those logs directly. Every kill / death / assist / headshot
 that fires in-game shows up as a `[StreamingCaptureService] Already
@@ -22,7 +22,7 @@ Caveats:
 - Val only (log format is generic but only Val's events are
   subscribed by Outplayed)
 - Only clips recorded AFTER Outplayed was running
-- Log files rotate — read ALL `background.html.*.log`, not just latest
+- Log files rotate — read ALL `background.html*.log`, not just latest
 """
 
 from __future__ import annotations
@@ -125,7 +125,7 @@ def _dir_signature(log_dir: Path) -> float:
     is newer than what we cached, we re-parse everything.
     """
     latest = 0.0
-    for f in log_dir.glob("background.html.*.log"):
+    for f in log_dir.glob("background.html*.log"):
         try:
             latest = max(latest, f.stat().st_mtime)
         except OSError:
@@ -162,7 +162,7 @@ def _parse_line(line: str, log_file: str) -> OverwolfEvent | None:
 
 
 def _scan_all_logs(log_dir: Path) -> tuple[OverwolfEvent, ...]:
-    """Parse every `background.html.*.log` file into an event list.
+    """Parse every `background.html*.log` file into an event list.
     Sorted by time_ms ASC. Cached by log-dir signature."""
     key = log_dir.as_posix()
     sig = _dir_signature(log_dir)
@@ -171,7 +171,7 @@ def _scan_all_logs(log_dir: Path) -> tuple[OverwolfEvent, ...]:
         if cached is not None and cached[0] >= sig:
             return cached[1]
     events: list[OverwolfEvent] = []
-    for f in sorted(log_dir.glob("background.html.*.log")):
+    for f in sorted(log_dir.glob("background.html*.log")):
         try:
             with open(f, encoding="utf-8", errors="ignore") as fp:
                 for line in fp:
@@ -308,7 +308,7 @@ def _load_dispatched(log_dir: Path) -> dict[str, DispatchedVideo]:
     file. Returns a dict keyed by normalized file path (lowercased,
     posix-style so Windows path variations don't miss)."""
     out: dict[str, DispatchedVideo] = {}
-    for f in sorted(log_dir.glob("background.html.*.log")):
+    for f in sorted(log_dir.glob("background.html*.log")):
         try:
             with open(f, encoding="utf-8", errors="ignore") as fp:
                 for line in fp:
@@ -443,7 +443,7 @@ def player_identity(log_dir: Path | None = None) -> dict | None:
     )
     latest_me: dict | None = None
     latest_mtime = 0.0
-    for f in sorted(log_dir.glob("background.html.*.log")):
+    for f in sorted(log_dir.glob("background.html*.log")):
         try:
             with open(f, encoding="utf-8", errors="ignore") as fp:
                 for line in fp:
