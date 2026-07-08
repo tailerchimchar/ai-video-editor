@@ -1238,12 +1238,19 @@ def _apply_window_fixes(
     clips: tuple[ShortClip, ...],
     fixes: list,
     *,
-    asset_path: str,
+    asset_path: str | None,
     out_dir: Path,
     iteration: int,
 ) -> tuple[tuple[ShortClip, ...], int]:
     """Apply every window-shift fix to its target clip. Returns the new
     tuple of ShortClips + count of fixes actually applied.
+
+    When `asset_path` is None (custom / cross-asset / outplayed
+    compiles where each clip has its OWN source), each fix re-cuts
+    from `clip.path` — the clip's own source file. That works for
+    highlight-folder clips (they're already trimmed segments; the
+    fix widens WITHIN the file's bounds) and for Outplayed clips
+    (they ARE the source).
 
     Non-window fixes (apply_zoom, remove_clip, ...) are silently skipped
     at the caller level; this function only sees `_WINDOW_FIX_TYPES`.
@@ -1254,8 +1261,13 @@ def _apply_window_fixes(
         if fix.fix not in _WINDOW_FIX_TYPES:
             continue
         idx = _resolve_clip_ref(fix.clip_ref, len(clip_list))
+        c = clip_list[idx]
+        # asset_path=None → use each clip's own source file. That's the
+        # right thing for custom / cross-asset / outplayed compiles
+        # where the plan spans multiple source files.
+        src = asset_path if asset_path else str(c.path)
         new_clip = _apply_window_fix_to_clip(
-            clip_list[idx], fix, asset_path, out_dir, iteration
+            c, fix, src, out_dir, iteration
         )
         if new_clip is None:
             continue
@@ -1400,10 +1412,15 @@ def _render_and_refine(
             )
 
         refine_dir.mkdir(parents=True, exist_ok=True)
+        # When the fake asset has no real source path (custom /
+        # cross-asset / outplayed compiles), pass None so each fix
+        # re-cuts from its own clip.path instead of a shared source.
+        asset_src = asset.get("path")
+        multi_source = not asset_src or asset_src == "multi"
         new_clips, applied = _apply_window_fixes(
             current_plan.clips,
             window_fixes,
-            asset_path=asset["path"],
+            asset_path=None if multi_source else asset_src,
             out_dir=refine_dir,
             iteration=iteration + 1,
         )
@@ -3134,7 +3151,9 @@ def build_custom_montage(
         old.unlink(missing_ok=True)
     out_path = out_folder / f"{resolved_name}.mp4"
 
-    fake_asset = {"path": str(resolved[0][0]), "game": None}
+    # `path: "multi"` signals _render_and_refine that each clip has
+    # its own source (see asset_src handling in the refine block).
+    fake_asset = {"path": "multi", "game": game}
     result = _render_and_refine(
         plan,
         out_path,
@@ -3142,7 +3161,11 @@ def build_custom_montage(
         asset=fake_asset,
         music_path=resolved_music,
         run_vlm_check=run_vlm_check,
-        max_iter=0,
+        max_iter=(
+            settings.shorts_max_review_iter
+            if settings.shorts_auto_fix_enabled
+            else 0
+        ),
         layout=layout,
         beat_flash=beat_flash,
         beat_flash_source=beat_flash_source,

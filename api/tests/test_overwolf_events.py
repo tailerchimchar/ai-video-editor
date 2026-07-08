@@ -188,7 +188,8 @@ def test_detect_emits_one_candidate_per_surfaced_event(
     assert event_types == ["kill", "death", "assist", "objective", "victory"]
     kill = candidates[0]
     assert kill["confidence"] == 1.0
-    assert kill["metadata"]["anchor_seconds"] == 125.0
+    # Anchor is time_ms/1000 - 3s offset (killfeed lag correction)
+    assert kill["metadata"]["anchor_seconds"] == 122.0
     assert kill["metadata"]["headshot"] is True
     assert kill["metadata"]["overwolf_data"] == "1"
 
@@ -224,10 +225,11 @@ def test_detect_skips_events_past_duration(tmp_path, monkeypatch) -> None:
 
     target = r"C:\Val\match.mp4"
     events = [
-        _make_event("kill", 10000, "1"),     # 10s — kept
+        _make_event("kill", 10000, "1"),     # 10s — kept (7s after offset)
         _make_event("kill", 120000, "2"),    # 120s — way past 60s, dropped
     ]
     _write_log(log_dir, [_make_dispatch(target, events=events)])
     candidates = detect_overwolf_events(target, duration_seconds=60.0)
     assert len(candidates) == 1
-    assert candidates[0]["metadata"]["anchor_seconds"] == 10.0
+    # Anchor = 10s - 3s offset = 7s
+    assert candidates[0]["metadata"]["anchor_seconds"] == 7.0

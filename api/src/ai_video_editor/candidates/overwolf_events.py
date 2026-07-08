@@ -59,6 +59,14 @@ _TYPE_MAP: dict[str, str] = {
 # way.
 _WINDOW_HALF_SECONDS = 5.0
 
+# Overwolf's `time` field fires when the killfeed row APPEARS on screen,
+# which is ~2-4 seconds AFTER the actual kill instant (weapon fires,
+# enemy drops, kill sfx plays, killfeed animates in). We shift the
+# anchor earlier by this offset so the trim window centers on the
+# frag itself, not the killfeed reveal. Empirically calibrated on
+# user feedback from 2026-07-08.
+_ANCHOR_OFFSET_SECONDS = 3.0
+
 
 def detect_overwolf_events(
     video_path: str,
@@ -94,11 +102,15 @@ def detect_overwolf_events(
         canonical = _TYPE_MAP.get(etype)
         if canonical is None:
             continue
-        anchor_seconds = ev["time_ms_in_video"] / 1000.0
+        # Shift back by _ANCHOR_OFFSET_SECONDS — killfeed appearance
+        # lags the kill instant; we want the frag frame.
+        anchor_seconds = max(
+            0.0, ev["time_ms_in_video"] / 1000.0 - _ANCHOR_OFFSET_SECONDS
+        )
         # Clamp to the video's actual bounds (defensive — the log's
         # `duration` matches ffprobe within ~1s but we don't trust it
         # blindly).
-        if anchor_seconds < 0 or anchor_seconds > duration_seconds + 1.0:
+        if anchor_seconds > duration_seconds + 1.0:
             continue
         start = max(0.0, anchor_seconds - _WINDOW_HALF_SECONDS)
         end = min(duration_seconds, anchor_seconds + _WINDOW_HALF_SECONDS)
