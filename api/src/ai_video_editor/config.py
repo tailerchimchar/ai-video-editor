@@ -222,6 +222,8 @@ class Settings(BaseSettings):
     # clip end-to-end and returns a trim recommendation (buildup_start,
     # payoff_anchor, resolution_end). See vlm/clip_analyzer.py + the
     # editing rubric in vlm/game_hints/<game>.md.
+    # Corrections rendered into a VLM prompt (and folded into its cache key).
+    corrections_top_k: int = 12
     vlm_clip_analyzer_enabled: bool = True
     vlm_clip_analyzer_frames: int = 30
     # Sidecar `<clip>.analysis.json` — skips VLM cost on repeat compiles

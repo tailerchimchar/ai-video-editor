@@ -85,14 +85,6 @@ def test_load_skips_malformed_lines(hints_dir) -> None:
     assert {c.rule for c in got} == {"r1", "r2"}
 
 
-def test_examples_hash_changes_on_append(hints_dir) -> None:
-    corrections.append_correction("valorant", feedback="a", rule="r1")
-    h1 = corrections.examples_hash("valorant")
-    corrections.append_correction("valorant", feedback="b", rule="r2")
-    h2 = corrections.examples_hash("valorant")
-    assert h1 != h2 and h1 and h2
-
-
 def test_render_corrections_section_empty_string_when_none() -> None:
     assert corrections.render_corrections_section([]) == ""
 
@@ -129,13 +121,12 @@ def test_effective_version_changes_after_correction(hints_dir) -> None:
     corrections.append_correction("valorant", feedback="fb", rule="r")
     v1 = prompts.game_hints_effective_version("valorant")
     assert v0 != v1
-    assert v0.startswith("v7") and v1.startswith("v7-")
 
 
-def test_effective_version_default_hints_has_no_examples_hash(hints_dir) -> None:
-    # game=None -> _default.md -> no examples file
-    v = prompts.game_hints_effective_version(None)
-    assert v == "v0"
+def test_effective_version_default_hints_ignores_examples(hints_dir) -> None:
+    v0 = prompts.game_hints_effective_version(None)
+    corrections.append_correction("valorant", feedback="fb", rule="r")
+    assert prompts.game_hints_effective_version(None) == v0
 
 
 def test_http_record_correction(hints_dir, client) -> None:

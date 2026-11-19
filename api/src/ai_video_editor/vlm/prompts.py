@@ -22,21 +22,15 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from ..config import settings
 from ..taxonomy import PayoffType
 from .corrections import (
-    examples_hash,
+    effective_prompt_version,
     load_recent_corrections,
     render_corrections_section,
 )
 
 _HINTS_DIR = Path(__file__).parent / "game_hints"
-
-# Cap on corrections injected into any single prompt. 10 was enough for
-# a season's worth of feedback in our internal test — bump if the user
-# adds so many they never see the older ones. Recency-sorted so newest
-# wins even at the cap.
-_CORRECTIONS_LIMIT = 10
-
 
 # ---------------------------------------------------------------------
 # Verdict schemas
@@ -52,9 +46,7 @@ class ClipVerdict(BaseModel):
     """
 
     verdict: Literal["pass", "fixable", "false_positive"]
-    why: str = Field(
-        description="One-sentence explanation the loop logs + the user reads."
-    )
+    why: str = Field(description="One-sentence explanation the loop logs + the user reads.")
     fix: Literal["extend_before", "extend_after", "trim_start", "trim_end"] | None = None
     fix_seconds: float | None = Field(
         default=None,
@@ -93,9 +85,7 @@ class CompilationFix(BaseModel):
 class CompilationReview(BaseModel):
     """Whole-comp review response — a list of fixes plus a pass flag."""
 
-    is_cohesive: bool = Field(
-        description="True when no fixes are needed. Loop stops immediately."
-    )
+    is_cohesive: bool = Field(description="True when no fixes are needed. Loop stops immediately.")
     fixes: list[CompilationFix] = Field(default_factory=list)
 
 
@@ -138,23 +128,17 @@ class ClipAnalysis(BaseModel):
     )
     buildup_start_seconds: float = Field(
         ge=0.0,
-        description=(
-            "Where meaningful engagement begins for the primary payoff."
-        ),
+        description=("Where meaningful engagement begins for the primary payoff."),
     )
     resolution_end_seconds: float = Field(
         ge=0.0,
-        description=(
-            "Where the aftermath of the primary payoff resolves."
-        ),
+        description=("Where the aftermath of the primary payoff resolves."),
     )
     payoff_type: PayoffType = Field(
         default=PayoffType.other,
         description="Category of the primary payoff.",
     )
-    description: str = Field(
-        description="One-sentence account of what happens in the clip."
-    )
+    description: str = Field(description="One-sentence account of what happens in the clip.")
     confidence: float = Field(
         ge=0.0,
         le=1.0,
@@ -242,7 +226,7 @@ def load_game_hints(game: str | None) -> tuple[str, str]:
     path, resolved = _resolve_hint_file(game)
     base = path.read_text(encoding="utf-8") if path else ""
     if resolved not in ("_missing", "_default") and game:
-        corrections = load_recent_corrections(resolved, limit=_CORRECTIONS_LIMIT)
+        corrections = load_recent_corrections(resolved, limit=settings.corrections_top_k)
         base += render_corrections_section(corrections)
     return base, resolved
 
@@ -502,9 +486,7 @@ def build_analyzer_user_prompt(clip_duration_seconds: float) -> str:
 # ---------------------------------------------------------------------
 
 
-_PROMPT_VERSION_RE = re.compile(
-    r"<!--\s*PROMPT_VERSION\s*:\s*(\d+)\s*-->", re.IGNORECASE
-)
+_PROMPT_VERSION_RE = re.compile(r"<!--\s*PROMPT_VERSION\s*:\s*(\d+)\s*-->", re.IGNORECASE)
 
 
 def game_hints_prompt_version(game: str | None) -> int:
@@ -517,17 +499,5 @@ def game_hints_prompt_version(game: str | None) -> int:
 
 
 def game_hints_effective_version(game: str | None) -> str:
-    """Composite version key that changes when EITHER the .md rubric
-    version changes OR a correction is appended. Use this as the cache
-    key for per-clip analyzer sidecars so recording a correction
-    invalidates them cleanly without touching the .md file.
-
-    Format: `v<md_version>-<examples_hash>` (hash empty when no
-    corrections yet). Stable string, safe for filenames.
-    """
-    md_version = game_hints_prompt_version(game)
-    _, resolved = _resolve_hint_file(game)
-    if resolved in ("_missing", "_default") or not game:
-        return f"v{md_version}"
-    h = examples_hash(resolved)
-    return f"v{md_version}-{h}" if h else f"v{md_version}"
+    """Per-clip sidecar cache key; see `corrections.effective_prompt_version`."""
+    return effective_prompt_version(game)
