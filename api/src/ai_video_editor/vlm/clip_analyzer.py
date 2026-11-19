@@ -66,9 +66,9 @@ def _resolved_model(backend: VLMBackend) -> str:
 
 def _load_cached(
     cache: Path, *, accepted_versions: tuple[str | int, ...], expected_model: str
-) -> ClipAnalysis | None:
-    """Return cached analysis if the sidecar exists AND its
-    (prompt_version, model) match. Otherwise None (caller re-runs).
+) -> tuple[ClipAnalysis, str | int] | None:
+    """Return (analysis, its stamped prompt_version) if the sidecar exists
+    AND its (prompt_version, model) match. Otherwise None (caller re-runs).
 
     `accepted_versions` holds the current effective version plus the legacy
     integer marker, so sidecars written before the effective-version key
@@ -79,7 +79,8 @@ def _load_cached(
         data = json.loads(cache.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
-    if data.get("prompt_version") not in accepted_versions:
+    stamped = data.get("prompt_version")
+    if stamped not in accepted_versions:
         return None
     if data.get("model") != expected_model:
         return None
@@ -87,7 +88,7 @@ def _load_cached(
     if not isinstance(payload, dict):
         return None
     try:
-        return ClipAnalysis.model_validate(payload)
+        return ClipAnalysis.model_validate(payload), stamped
     except Exception:  # bad shape — invalidate
         return None
 
@@ -148,12 +149,17 @@ def analyze_source_clip(
     cache_on = settings.vlm_clip_analyzer_cache_enabled if use_cache is None else use_cache
     cache = _cache_path(path)
     if cache_on:
-        cached = _load_cached(
+        hit = _load_cached(
             cache,
             accepted_versions=(version, legacy_version),
             expected_model=model,
         )
-        if cached is not None:
+        if hit is not None:
+            cached, stamped = hit
+            if stamped != version:
+                # Legacy sidecar: migrate it to the current version (no VLM
+                # call) so the next correction in the top-K invalidates it.
+                _save_cached(cache, cached, prompt_version=version, model=model)
             _annotate_trace(cached, backend, game, n_frames=0, cached=True)
             return cached
 
