@@ -522,19 +522,22 @@ def player_identity(
     if not log_dir.is_dir():
         return None
     parse = _IDENTITY_PARSERS.get(load_profile(game).meta.game, _valorant_identity)
-    newest: dict | None = None
-    newest_before: dict | None = None
+    # (logged_ms, scan order, identity). File names sort by name, not by
+    # time (".10.log" < ".9.log"), so recency comes from the line stamps.
+    found: list[tuple[int, int, dict]] = []
     for f in sorted(log_dir.glob("background.html*.log")):
         try:
             with open(f, encoding="utf-8", errors="ignore") as fp:
                 for line in fp:
                     identity = parse(line)
-                    if identity is None:
-                        continue
-                    newest = identity
-                    logged_ms = _line_time_ms(line)
-                    if at_ms is not None and logged_ms is not None and logged_ms <= at_ms:
-                        newest_before = identity
+                    if identity is not None:
+                        found.append((_line_time_ms(line) or 0, len(found), identity))
         except OSError:
             continue
-    return newest_before or newest
+    if not found:
+        return None
+    if at_ms is not None:
+        before = [entry for entry in found if entry[0] <= at_ms]
+        if before:
+            return max(before)[2]
+    return max(found)[2]

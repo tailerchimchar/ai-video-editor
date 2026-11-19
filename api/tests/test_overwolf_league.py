@@ -114,6 +114,35 @@ def test_identity_before_any_session_falls_back_to_newest(two_sessions) -> None:
     assert identity["champion"] == "Zeri"
 
 
+@pytest.fixture
+def rotated_sessions(tmp_path) -> Path:
+    """Name order is the reverse of time: `.10.log` (later) sorts before
+    `.9.log` (earlier), so the last-scanned file holds the OLDER session."""
+    (tmp_path / "background.html.9.log").write_text(
+        _league_session_line("2026-11-19 01:00:00,000", "Akali") + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "background.html.10.log").write_text(
+        _league_session_line("2026-11-19 02:00:00,000", "Zeri") + "\n",
+        encoding="utf-8",
+    )
+    return tmp_path
+
+
+def test_rotated_logs_after_both_sessions_pick_latest_by_time(rotated_sessions) -> None:
+    identity = player_identity(rotated_sessions, game="league", at_ms=_ms(2026, 11, 19, 3, 0))
+    assert identity["champion"] == "Zeri"
+
+
+def test_rotated_logs_between_sessions_pick_earlier_by_time(rotated_sessions) -> None:
+    identity = player_identity(rotated_sessions, game="league", at_ms=_ms(2026, 11, 19, 1, 30))
+    assert identity["champion"] == "Akali"
+
+
+def test_rotated_logs_without_at_ms_pick_latest_by_time(rotated_sessions) -> None:
+    assert player_identity(rotated_sessions, game="league")["champion"] == "Zeri"
+
+
 def test_league_identity_skips_nested_player_info_lines(tmp_path) -> None:
     nested = (
         "2026-11-19 01:00:00,000 (INFO) </background.js> (:4) - "
