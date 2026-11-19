@@ -34,7 +34,7 @@ Scope = Literal["clip", "compilation", "short"]
 # rendered today. The editor must reject or substitute them.
 NOT_RENDERABLE = ("slow_mo", "speed_ramp", "transition", "pulse_zoom", "beat_snap", "time_scoped")
 
-# TODO(taxonomy): replace with taxonomy.Format once Task 1 lands.
+# Edit-plan format names (editing-expert SKILL.md). `edit_plan.validate_plan` reads this list.
 FORMATS = ("hype_montage", "story_short", "vo_short", "funny_short", "arc_montage")
 _FORMATS_NOT_RENDERABLE = ("arc_montage",)
 

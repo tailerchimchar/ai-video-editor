@@ -56,10 +56,14 @@ class Library:
             "source_url": source_url,
             "duration_s": analysis.structure.falling[1],
             "analysis_path": sidecar,
+            "audio_path": str(path),
             "tags": list(tags),
         }
         self._save([r for r in rows if r is not existing] + [row])
         return row
+
+    def get(self, song_id: str) -> Row | None:
+        return next((r for r in self._rows() if r["song_id"] == song_id), None)
 
     def suggest(self, tags: list[str], duration_s: float) -> list[Row]:
         """All songs, best first: most shared tags, then closest duration."""
