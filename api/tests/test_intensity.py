@@ -31,7 +31,7 @@ def test_monotonic_in_kill_count() -> None:
 
 
 def test_monotonic_in_multi_kill_tier() -> None:
-    tiers = ["kill", "doublekill", "triplekill", "quadrakill", "pentakill"]
+    tiers = ["kill", "multi_kill_2", "multi_kill_3", "multi_kill_4", "ace"]
     scores = [score_clip([_ev(t)], None, None) for t in tiers]
     assert scores == sorted(scores)
     assert scores[1] > scores[0]
@@ -39,7 +39,7 @@ def test_monotonic_in_multi_kill_tier() -> None:
 
 
 def test_clamped_to_unit_interval() -> None:
-    assert score_clip([_ev("pentakill")] * 4, 1.0, 1.0) == 1.0
+    assert score_clip([_ev("ace")] * 4, 1.0, 1.0) == 1.0
     assert score_clip([_ev("death")] * 20, None, None) == 0.0
 
 
@@ -91,7 +91,7 @@ def _write_index(folder: Path) -> Path:
 
     clips = [
         clip("a.mp4", "kill", 10, 20),
-        clip("b.mp4", "pentakill", 100, 115),
+        clip("b.mp4", "ace", 100, 115),
         clip("c.mp4", "death", 200, 210),
         clip(None, "kill", 300, 310, ok=False),
     ]
@@ -111,7 +111,10 @@ def test_score_session_one_result_per_rendered_clip(tmp_path: Path) -> None:
 def test_score_session_reads_optional_sidecar(tmp_path: Path) -> None:
     idx = _write_index(tmp_path)
     baseline = {c.clip_ref: c.intensity for c in score_session(idx)}
-    (tmp_path / "a.analysis.json").write_text(json.dumps({"payoff_score": 1.0}), encoding="utf-8")
+    (tmp_path / "a.mp4.analysis.json").write_text(
+        json.dumps({"analysis": {"payoff_type": "kill", "confidence": 1.0}}),
+        encoding="utf-8",
+    )
     boosted = {c.clip_ref: c.intensity for c in score_session(idx)}
     assert boosted["a.mp4"] > baseline["a.mp4"]
 
@@ -120,6 +123,6 @@ def test_score_session_tolerates_bad_sidecar_and_missing_index(
     tmp_path: Path,
 ) -> None:
     idx = _write_index(tmp_path)
-    (tmp_path / "a.analysis.json").write_text("{not json", encoding="utf-8")
+    (tmp_path / "a.mp4.analysis.json").write_text("{not json", encoding="utf-8")
     assert len(score_session(idx)) == 3
     assert score_session(tmp_path / "missing.json") == []

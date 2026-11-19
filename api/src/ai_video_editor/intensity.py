@@ -18,18 +18,18 @@ from .config import settings
 # taxonomy.PayoffType / Topic enums once Task 1 is merged.
 _KILLS_PER_EVENT: dict[str, int] = {
     "kill": 1,
+    "multi_kill_2": 2,
+    "multi_kill_3": 3,
+    "multi_kill_4": 4,
+    "ace": 5,
+    # LoL event names (Riot candidates)
     "doublekill": 2,
     "triplekill": 3,
     "quadrakill": 4,
     "pentakill": 5,
-    "ace": 5,
 }
 _MULTI_KILL_TIER: dict[str, int] = {
-    "doublekill": 2,
-    "triplekill": 3,
-    "quadrakill": 4,
-    "pentakill": 5,
-    "ace": 5,
+    name: kills for name, kills in _KILLS_PER_EVENT.items() if kills > 1
 }
 _DEATH_EVENT = "death"
 
@@ -94,11 +94,22 @@ def _optional_float(value: object) -> float | None:
     return float(value) if isinstance(value, (int, float)) else None
 
 
+def _vlm_payoff(clip_path: Path) -> float | None:
+    """Confidence of the clip analyzer's primary payoff, read from its
+    `<clip>.analysis.json` sidecar. None when absent or not a real payoff."""
+    sidecar = _read_json(clip_path.with_suffix(clip_path.suffix + ".analysis.json"))
+    analysis = sidecar.get("analysis")
+    if not isinstance(analysis, dict) or analysis.get("payoff_type") == "other":
+        return None
+    return _optional_float(analysis.get("confidence"))
+
+
 def score_session(index_json_path: Path) -> list[ClipWithIntensity]:
     """Score every rendered clip in a highlights folder's index.json.
 
-    Optional per-clip signals: `transcript_arousal` on the index entry and
-    a `<clip stem>.analysis.json` sidecar carrying `payoff_score`.
+    Optional per-clip signals: `sentiment_score` (transcript VADER arousal)
+    on the index entry, and the clip analyzer's `<clip>.analysis.json`
+    sidecar (see `vlm/clip_analyzer.py`).
     """
     folder = index_json_path.parent
     result: list[ClipWithIntensity] = []
@@ -106,11 +117,10 @@ def score_session(index_json_path: Path) -> list[ClipWithIntensity]:
         file = entry.get("file")
         if not entry.get("ok") or not file:
             continue
-        sidecar = _read_json(folder / Path(file).with_suffix(".analysis.json"))
         intensity = score_clip(
-            [{"event_type": entry.get("event")}],
-            _optional_float(entry.get("transcript_arousal")),
-            _optional_float(sidecar.get("payoff_score")),
+            [{"event_type": entry.get("event") or entry.get("event_type")}],
+            _optional_float(entry.get("sentiment_score")),
+            _vlm_payoff(folder / file),
         )
         result.append(
             ClipWithIntensity(
