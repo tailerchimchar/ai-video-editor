@@ -16,6 +16,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import numpy as np
+
 _log = logging.getLogger(__name__)
 
 
@@ -49,19 +51,29 @@ class BeatTrack:
 # ---------------------------------------------------------------------
 
 
-def _detect_librosa(mp3_path: Path) -> tuple[float, list[float]]:
-    """librosa beat_track — returns (tempo_bpm, beat_times_seconds).
+def detect_beats_from_signal(y: np.ndarray, sr: int) -> tuple[float, list[float]]:
+    """librosa beat_track on an already-decoded mono signal.
 
-    librosa is imported lazily so unit tests can mock this whole
-    function without paying its ~1s import cost.
+    Lets a caller that needs several analyses decode the file once.
+    librosa is imported lazily to keep module import cheap.
     """
     import librosa
 
-    y, sr = librosa.load(str(mp3_path), sr=None, mono=True)
     tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr, units="frames")
     beat_times = librosa.frames_to_time(beat_frames, sr=sr)
     # librosa may return numpy scalar for tempo — coerce to plain float
     return float(tempo), [float(t) for t in beat_times]
+
+
+def _detect_librosa(mp3_path: Path) -> tuple[float, list[float]]:
+    """Decode `mp3_path` and run librosa beat tracking.
+
+    Mockable as a whole in unit tests (no librosa import until called).
+    """
+    import librosa
+
+    y, sr = librosa.load(str(mp3_path), sr=None, mono=True)
+    return detect_beats_from_signal(y, sr)
 
 
 _BEAT_DETECTORS: dict[str, Callable[[Path], tuple[float, list[float]]]] = {
@@ -112,6 +124,20 @@ def _save_cached(cache: Path, track: BeatTrack) -> None:
 # ---------------------------------------------------------------------
 # Public surface
 # ---------------------------------------------------------------------
+
+
+def legacy_beats_path(mp3_path: Path, detector: str = "librosa") -> Path:
+    """Where the old path-keyed beats cache for `mp3_path` lives."""
+    return _cache_path(mp3_path, detector)
+
+
+def read_legacy_beats(mp3_path: Path, detector: str = "librosa") -> BeatTrack | None:
+    """Read the old path-keyed `<mp3>.<detector>.beats.json`, if any.
+
+    Only for migrating into the content-hash analysis sidecar; new code
+    never writes this file.
+    """
+    return _load_cached(_cache_path(mp3_path, detector))
 
 
 def detect_beats(
