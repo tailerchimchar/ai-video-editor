@@ -25,9 +25,12 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .config import settings
+from .decisions import Answer, BoolQuestion, ChoiceQuestion, ask_many
 from .taxonomy import Format, PayoffType
 
 _log = logging.getLogger(__name__)
@@ -177,3 +180,56 @@ def route_session_folder(session_folder: Path) -> BucketManifest | None:
         _log.warning("bucketing: bad index.json in %s: %s", session_folder, exc)
         return None
     return route_session_index(data)
+
+
+_INCLUDE_QUESTION = BoolQuestion(
+    prompt=(
+        "Is this candidate moment worth keeping for a gameplay highlight "
+        "reel (skill, hype, humor or a story beat), rather than noise?"
+    )
+)
+
+
+def _include_probability(answer: Answer) -> float:
+    """P(include). A BoolQuestion answer's probability is confidence in
+    its own value, so a confident "no" is a low include-probability."""
+    if answer.value is None:
+        return 1.0
+    return answer.probability if answer.value else 1.0 - answer.probability
+
+
+def prefilter_candidates(
+    candidates: list[dict], ask_many: Callable[..., list[Answer]] = ask_many
+) -> tuple[list[dict], list[dict]]:
+    """Split candidates into (kept, dropped) before any agent or VLM call.
+
+    A candidate is dropped when its include-probability is below
+    `PREFILTER_MIN_PROBABILITY`. Dropped copies carry
+    `prefilter_probability` so the decision stays auditable. One batched
+    ask for the whole list; with the rules backend everything is kept.
+    """
+    answers = ask_many([(_INCLUDE_QUESTION, {"candidate": c}) for c in candidates])
+    kept: list[dict] = []
+    dropped: list[dict] = []
+    for candidate, answer in zip(candidates, answers, strict=True):
+        probability = _include_probability(answer)
+        if probability >= settings.prefilter_min_probability:
+            kept.append(candidate)
+        else:
+            dropped.append({**candidate, "prefilter_probability": round(probability, 4)})
+    return kept, dropped
+
+
+_FORMAT_QUESTION = ChoiceQuestion(
+    prompt="Which editorial format fits this clip: hype, story, voice_over, funny or arc_montage?",
+    options=Format,
+)
+
+
+def classify_formats(
+    clips: list[dict], ask_many: Callable[..., list[Answer]] = ask_many
+) -> list[Format | str]:
+    """Format for each clip via one batched ask. Falls back to `SKIPPED`
+    when the backend has no opinion."""
+    answers = ask_many([(_FORMAT_QUESTION, {"clip": clip}) for clip in clips])
+    return [a.value if a.value is not None else SKIPPED for a in answers]

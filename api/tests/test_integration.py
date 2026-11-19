@@ -101,6 +101,51 @@ def test_rank_endpoint_writes_rankings_json(client, asset, poll, monkeypatch):
     assert ranked[0]["keep"] is True
 
 
+def test_rank_job_skips_prefilter_dropped_candidates(client, asset, poll, monkeypatch):
+    import asyncio
+    import json
+
+    from ai_video_editor.database import get_db
+
+    ids = {"kept": str(uuid.uuid4()), "dropped": str(uuid.uuid4())}
+
+    async def _insert():
+        db = await get_db()
+        try:
+            for name, cid in ids.items():
+                meta = {"prefilter_dropped": True} if name == "dropped" else {}
+                await db.execute(
+                    "INSERT INTO highlight_candidates "
+                    "(id, video_id, source, start_seconds, end_seconds, event_type, "
+                    " confidence, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        cid,
+                        asset["id"],
+                        "audio_peak",
+                        0.0,
+                        5.0,
+                        "audio_peak",
+                        0.5,
+                        json.dumps(meta),
+                        datetime.now(timezone.utc).isoformat(),
+                    ),
+                )
+            await db.commit()
+        finally:
+            await db.close()
+
+    asyncio.run(_insert())
+
+    seen = []
+    monkeypatch.setattr(
+        "ai_video_editor.routers.analyze.rank_candidates",
+        lambda game, candidates: seen.extend(c["id"] for c in candidates) or [],
+    )
+    r = client.post(f"/api/v1/assets/{asset['id']}/rank").json()
+    assert poll(client, r["job_id"])["status"] == "completed"
+    assert seen == [ids["kept"]]
+
+
 def test_search_endpoint_returns_indexed_chunks(client, asset, monkeypatch):
     # Pre-insert one embedding row by stuffing a 384-d zero vector.
     # Mock the query embedder so /search returns it regardless of text.
