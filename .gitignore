@@ -143,3 +143,6 @@ _thumbnails/
 
 # Redacted test fixture log must stay tracked (overrides *.log above)
 !api/tests/fixtures/overwolf_league_zeri.log
+
+# superpowers SDD workspace (ledgers, briefs, reports)
+.superpowers/
