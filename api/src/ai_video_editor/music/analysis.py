@@ -19,11 +19,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..config import settings
-from .beats import BeatTrack, detect_beats, read_legacy_beats
+from .beats import BeatTrack, detect_beats_from_signal, legacy_beats_path, read_legacy_beats
 from .structure import (
     STRUCTURE_ANALYZER_VERSION,
     SongStructure,
-    detect_structure,
+    decode_audio,
+    structure_from_signal,
 )
 
 _log = logging.getLogger(__name__)
@@ -129,11 +130,37 @@ def _manual_sidecar(file_sha256: str, song: Path) -> SongAnalysis | None:
     return None
 
 
+_LEGACY_SPAN_TOLERANCE_S = 1.0
+
+
+def _fresh_legacy_beats(song: Path, duration_s: float) -> BeatTrack | None:
+    """The old path-keyed beats, only if they can still describe `song`.
+
+    That cache is keyed by path, so it goes stale when the file is replaced.
+    Adopt it only when it is no older than the audio and its last beat does
+    not run past the audio's end.
+    """
+    legacy = read_legacy_beats(song)
+    if legacy is None:
+        return None
+    legacy_file = legacy_beats_path(song)
+    if legacy_file.stat().st_mtime < song.stat().st_mtime:
+        return None
+    if legacy.beats and legacy.beats[-1] > duration_s + _LEGACY_SPAN_TOLERANCE_S:
+        return None
+    return legacy
+
+
 def _analyze(song: Path, file_sha256: str) -> SongAnalysis:
-    beats = read_legacy_beats(song) or detect_beats(song, use_cache=False)
+    """Analyse `song`, decoding it exactly once for beats and structure."""
+    y, sr = decode_audio(song)
+    beats = _fresh_legacy_beats(song, y.size / sr)
+    if beats is None:
+        tempo, times = detect_beats_from_signal(y, sr)
+        beats = BeatTrack(mp3_path=song, tempo_bpm=tempo, beats=tuple(times), detector="librosa")
     return SongAnalysis(
         beats=beats,
-        structure=detect_structure(song),
+        structure=structure_from_signal(y, sr),
         file_sha256=file_sha256,
     )
 
@@ -174,7 +201,7 @@ def offset_analysis(analysis: SongAnalysis, trim_start_s: float, trim_end_s: flo
     decoding. Beats outside the trim are dropped; spans and the drop are
     clamped into the trimmed length.
     """
-    length = trim_end_s - trim_start_s
+    length = max(trim_end_s - trim_start_s, 0.0)
     s = analysis.structure
     beats = tuple(b - trim_start_s for b in analysis.beats.beats if trim_start_s <= b <= trim_end_s)
     structure = dataclasses.replace(

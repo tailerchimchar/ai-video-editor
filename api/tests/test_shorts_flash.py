@@ -95,17 +95,21 @@ def test_flash_times_unknown_source_raises(tmp_path) -> None:
         _flash_times(plan, music_path="/tmp/x.mp3", source="drops", max_t=60.0)
 
 
-def _stub_structure(monkeypatch) -> None:
-    """Beat flash reads beats via load_or_analyze; skip the real audio decode."""
+def _stub_audio(monkeypatch, beats: list[float]) -> None:
+    """Beat flash reads beats via load_or_analyze; fake the decode and detectors."""
+    import numpy as np
+
     from ai_video_editor.music import analysis as analysis_mod
     from ai_video_editor.music.structure import SongStructure
 
     monkeypatch.setattr(
+        analysis_mod, "decode_audio", lambda path: (np.zeros(22050 * 5, dtype=np.float32), 22050)
+    )
+    monkeypatch.setattr(analysis_mod, "detect_beats_from_signal", lambda y, sr: (120.0, beats))
+    monkeypatch.setattr(
         analysis_mod,
-        "detect_structure",
-        lambda path: SongStructure(
-            (0.0, 1.0), (1.0, 2.0), (2.0, 3.0), 1.0, "auto", "test"
-        ),
+        "structure_from_signal",
+        lambda y, sr: SongStructure((0.0, 1.0), (1.0, 2.0), (2.0, 3.0), 1.0, "auto", "test"),
     )
 
 
@@ -113,16 +117,9 @@ def test_flash_times_downbeats_takes_every_fourth(
     monkeypatch, tmp_path, sandbox
 ) -> None:
     """downbeats source thins the beat list to every 4th onset."""
-    from ai_video_editor.music import beats as beats_mod
-
     mp3 = tmp_path / "song.mp3"
     mp3.write_bytes(b"fake")
-
-    def _fake_detector(mp3_path: Path):
-        return (120.0, [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5])
-
-    monkeypatch.setitem(beats_mod._BEAT_DETECTORS, "librosa", _fake_detector)
-    _stub_structure(monkeypatch)
+    _stub_audio(monkeypatch, [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5])
     plan = _plan([_clip("a.mp4", 0.0, 10.0)])
     times = _flash_times(
         plan, music_path=str(mp3), source="downbeats", max_t=60.0
@@ -132,16 +129,9 @@ def test_flash_times_downbeats_takes_every_fourth(
 
 def test_flash_times_beats_takes_all(monkeypatch, tmp_path, sandbox) -> None:
     """beats source uses every detected beat."""
-    from ai_video_editor.music import beats as beats_mod
-
     mp3 = tmp_path / "song.mp3"
     mp3.write_bytes(b"fake")
-
-    def _fake_detector(mp3_path: Path):
-        return (120.0, [0.5, 1.0, 1.5])
-
-    monkeypatch.setitem(beats_mod._BEAT_DETECTORS, "librosa", _fake_detector)
-    _stub_structure(monkeypatch)
+    _stub_audio(monkeypatch, [0.5, 1.0, 1.5])
     plan = _plan([_clip("a.mp4", 0.0, 10.0)])
     times = _flash_times(plan, music_path=str(mp3), source="beats", max_t=60.0)
     assert times == (0.5, 1.0, 1.5)

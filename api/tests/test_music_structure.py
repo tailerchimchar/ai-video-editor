@@ -6,6 +6,7 @@ import wave
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from ai_video_editor.music.structure import (
     STRUCTURE_ANALYZER_VERSION,
@@ -62,3 +63,24 @@ def test_silence_degrades_to_one_climax_span() -> None:
     assert structure.climax == (0.0, 10.0)
     assert structure.falling == (10.0, 10.0)
     assert structure.drop_s == 0.0
+
+
+@pytest.mark.parametrize("seconds", [0.1, 0.5, 1.5])
+@pytest.mark.parametrize("shape", ["steady", "ramp_up", "ramp_down", "silent"])
+def test_very_short_tracks_still_tile_without_error(seconds, shape) -> None:
+    t = np.arange(int(SR * seconds)) / SR
+    envelope = {
+        "steady": np.full_like(t, 0.5),
+        "ramp_up": t / seconds,
+        "ramp_down": 1.0 - t / seconds,
+        "silent": np.zeros_like(t),
+    }[shape]
+    y = (envelope * np.sin(2 * np.pi * 220.0 * t)).astype(np.float32)
+    structure = structure_from_signal(y, SR)
+    assert structure.rising[0] == 0.0
+    assert structure.rising[1] == structure.climax[0]
+    assert structure.climax[1] == structure.falling[0]
+    duration = y.size / SR
+    assert structure.falling[1] == pytest.approx(duration)
+    assert structure.climax[0] <= structure.climax[1] <= duration + 1e-9
+    assert structure.climax[0] <= structure.drop_s <= structure.climax[1]

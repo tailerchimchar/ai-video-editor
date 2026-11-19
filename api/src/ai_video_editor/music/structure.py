@@ -32,6 +32,7 @@ _SMOOTH_WINDOWS = 8
 _PLATEAU_FRACTION = 0.75
 _RMS_WEIGHT = 0.7
 _ONSET_HOP = 512
+_DECODE_SR = 22050
 
 Span = tuple[float, float]
 
@@ -104,7 +105,10 @@ def structure_from_signal(y: np.ndarray, sr: int) -> SongStructure:
             STRUCTURE_ANALYZER_VERSION,
         )
 
-    kernel = np.ones(_SMOOTH_WINDOWS) / _SMOOTH_WINDOWS
+    # Kernel never longer than the track: np.convolve "same" would otherwise
+    # return the kernel's length and index past the windows.
+    width = min(_SMOOTH_WINDOWS, score.size)
+    kernel = np.ones(width) / width
     smoothed = np.convolve(score, kernel, mode="same")
     lo, hi = _plateau(smoothed)
 
@@ -121,9 +125,14 @@ def structure_from_signal(y: np.ndarray, sr: int) -> SongStructure:
     )
 
 
-def detect_structure(path: Path) -> SongStructure:
-    """Decode `path` (any format librosa/ffmpeg reads) and detect its structure."""
+def decode_audio(path: Path) -> tuple[np.ndarray, int]:
+    """Decode `path` (any format librosa/ffmpeg reads) to mono float samples."""
     import librosa
 
-    y, sr = librosa.load(str(path), sr=22050, mono=True)
-    return structure_from_signal(y, int(sr))
+    y, sr = librosa.load(str(path), sr=_DECODE_SR, mono=True)
+    return y, int(sr)
+
+
+def detect_structure(path: Path) -> SongStructure:
+    """Decode `path` and detect its structure."""
+    return structure_from_signal(*decode_audio(path))

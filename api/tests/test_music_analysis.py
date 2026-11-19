@@ -5,13 +5,15 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import os
+import wave
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from ai_video_editor.config import settings
 from ai_video_editor.music import analysis as analysis_mod
-from ai_video_editor.music import beats as beats_mod
 from ai_video_editor.music import structure as structure_mod
 from ai_video_editor.music.analysis import (
     SongAnalysis,
@@ -21,6 +23,19 @@ from ai_video_editor.music.analysis import (
 )
 from ai_video_editor.music.beats import BeatTrack
 from ai_video_editor.music.structure import SongStructure
+
+
+def write_wav(path: Path, y: np.ndarray) -> Path:
+    pcm = (np.clip(y, -1.0, 1.0) * 32767).astype(np.int16)
+    with wave.open(str(path), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(SR)
+        wav.writeframes(pcm.tobytes())
+    return path
+
+
+SR = 22050
 
 
 def auto_structure(version: str = structure_mod.STRUCTURE_ANALYZER_VERSION):
@@ -36,20 +51,25 @@ def auto_structure(version: str = structure_mod.STRUCTURE_ANALYZER_VERSION):
 
 @pytest.fixture
 def detectors(tmp_path, monkeypatch):
-    """Isolated workspace plus counting fake beat/structure detectors."""
+    """Isolated workspace plus counting fakes: a 20s decode, beats, structure."""
     monkeypatch.setattr(settings, "workspace_dir", tmp_path / "ws")
-    calls = {"beats": 0, "structure": 0}
+    calls = {"decode": 0, "beats": 0, "structure": 0}
 
-    def fake_beats(mp3_path: Path) -> tuple[float, list[float]]:
+    def fake_decode(path: Path):
+        calls["decode"] += 1
+        return np.zeros(SR * 20, dtype=np.float32), SR
+
+    def fake_beats(y, sr) -> tuple[float, list[float]]:
         calls["beats"] += 1
         return (120.0, [0.5, 1.0, 1.5])
 
-    def fake_structure(path: Path) -> SongStructure:
+    def fake_structure(y, sr) -> SongStructure:
         calls["structure"] += 1
         return auto_structure()
 
-    monkeypatch.setitem(beats_mod._BEAT_DETECTORS, "librosa", fake_beats)
-    monkeypatch.setattr(analysis_mod, "detect_structure", fake_structure)
+    monkeypatch.setattr(analysis_mod, "decode_audio", fake_decode)
+    monkeypatch.setattr(analysis_mod, "detect_beats_from_signal", fake_beats)
+    monkeypatch.setattr(analysis_mod, "structure_from_signal", fake_structure)
     return calls
 
 
@@ -73,7 +93,7 @@ def test_load_or_analyze_writes_one_sidecar_and_reuses_it(tmp_path, detectors) -
     assert first == second
     assert first.beats.beats == (0.5, 1.0, 1.5)
     assert first.structure == auto_structure()
-    assert detectors == {"beats": 1, "structure": 1}
+    assert detectors == {"decode": 1, "beats": 1, "structure": 1}
     assert analysis_path(song).is_file()
 
 
@@ -111,6 +131,57 @@ def test_legacy_beats_json_is_migrated_once_then_ignored(tmp_path, detectors, mo
     assert load_or_analyze(song) == migrated
 
 
+def write_legacy(song: Path, beats: list[float]) -> Path:
+    legacy = song.with_suffix(".librosa.beats.json")
+    legacy.write_text(
+        json.dumps(
+            {"mp3_path": str(song), "tempo_bpm": 90.0, "beats": beats, "detector": "librosa"}
+        ),
+        encoding="utf-8",
+    )
+    return legacy
+
+
+def test_legacy_beats_older_than_the_audio_are_not_adopted(tmp_path, detectors) -> None:
+    """A file replaced at the same path must not inherit the old beat grid."""
+    song = make_song(tmp_path)
+    legacy = write_legacy(song, [0.1, 0.2])
+    song.write_bytes(b"replaced-with-longer-audio")
+    stale = song.stat().st_mtime - 100
+    os.utime(legacy, (stale, stale))
+
+    analysis = load_or_analyze(song)
+    assert analysis.beats.beats == (0.5, 1.0, 1.5)
+    assert detectors["beats"] == 1
+
+
+def test_legacy_beats_running_past_the_audio_end_are_not_adopted(tmp_path, detectors) -> None:
+    song = make_song(tmp_path)
+    write_legacy(song, [0.5, 90.0])  # fake decode is 20s long
+
+    assert load_or_analyze(song).beats.beats == (0.5, 1.0, 1.5)
+    assert detectors["beats"] == 1
+
+
+def test_first_analysis_decodes_the_file_exactly_once(tmp_path, monkeypatch) -> None:
+    """Beats and structure share one decode (real librosa, counting the load)."""
+    import librosa
+
+    monkeypatch.setattr(settings, "workspace_dir", tmp_path / "ws")
+    t = np.arange(SR * 3) / SR
+    wav = write_wav(tmp_path / "song.wav", (0.5 * np.sin(2 * np.pi * 220 * t)).astype(np.float32))
+    loads = {"n": 0}
+    real_load = librosa.load
+
+    def counting_load(*args, **kwargs):
+        loads["n"] += 1
+        return real_load(*args, **kwargs)
+
+    monkeypatch.setattr(librosa, "load", counting_load)
+    load_or_analyze(wav)
+    assert loads["n"] == 1
+
+
 def test_fresh_analysis_does_not_write_a_legacy_beats_file(tmp_path, detectors) -> None:
     song = make_song(tmp_path)
     load_or_analyze(song)
@@ -131,7 +202,7 @@ def test_manual_structure_survives_analyzer_version_change(tmp_path, detectors) 
 
     loaded = load_or_analyze(song)
     assert loaded.structure == manual
-    assert detectors == {"beats": 0, "structure": 0}
+    assert detectors == {"decode": 0, "beats": 0, "structure": 0}
 
 
 def test_stale_auto_structure_is_redetected_on_version_change(tmp_path, detectors) -> None:
