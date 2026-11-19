@@ -1,0 +1,65 @@
+{
+  "specName": "expert-panel",
+  "timestamp": "2026-11-19",
+  "status": "spec-written",
+  "specPath": "docs/specs/spec-expert-panel.md",
+  "capturedAtCommit": "88b80a3",
+  "baseline": {
+    "derivedFrom": "Explore agent scan 2026-11-18 (pre-commit baseline 3f6c060; July work committed as 88b80a3)",
+    "capturedAtCommit": "88b80a3",
+    "claims": [
+      {"area": "agents", "claim": ".claude/agents/ is empty and gitignored; no gaming/viewer expert exists", "evidence": ".gitignore:131"},
+      {"area": "skills", "claim": "editing-expert SKILL.md is 638 lines; effects are whole-clip zoom/focus/caption only", "evidence": ".claude/skills/editing-expert/SKILL.md:385-411"},
+      {"area": "vlm", "claim": "VLM verdicts are pydantic-typed; PayoffType has no LoL entries", "evidence": "api/src/ai_video_editor/vlm/prompts.py:102"},
+      {"area": "bucketing", "claim": "two rule-based classifiers on different axes: bucketing.py (Format) and shorts.py categorize_clips (Topic+time phase); both behind MCP tools", "evidence": "api/src/ai_video_editor/bucketing.py:69; shorts.py:107-116; mcp server.py:131,1309,1392"},
+      {"area": "music", "claim": "librosa BPM + path-keyed beats.json; no section detection; snap_clips_to_beats never called", "evidence": "api/src/ai_video_editor/music/beats.py:77-79; sync.py:191"},
+      {"area": "corrections", "claim": "corrections JSONL hash is folded into VLM prompt version; only valorant_examples.jsonl exists", "evidence": "api/src/ai_video_editor/vlm/corrections.py:136-143"},
+      {"area": "league", "claim": "no LoL gameplay concepts modelled; league.md lists trading as a false positive", "evidence": "api/src/ai_video_editor/vlm/game_hints/league.md:34"},
+      {"area": "tests", "claim": "700 passed, 1 skipped (uv run python -m pytest -q)", "evidence": "api/tests"}
+    ]
+  },
+  "coverageMap": {
+    "problem": "done", "expert-runtime": "done", "invocation": "done", "gaming-expert": "done",
+    "viewer-expert": "done", "editing-expert": "done", "music-arcs": "done",
+    "clip-inclusion-layer": "done", "engineering-workflow": "done", "tonight-content": "done"
+  },
+  "qaLog": [
+    {"area": "expert-runtime", "q": "Where do the experts run?", "a": "Engineering-time agents only, period."},
+    {"area": "invocation", "q": "How are experts invoked?", "a": "Always a panel for content; solo for engineering."},
+    {"area": "gaming-expert", "q": "Job?", "a": "Judge the play + extract the story; commentary = talking points only."},
+    {"area": "gaming-expert", "q": "Teaching?", "a": "Constant learning; SKILL.md < ~400 lines; folder with dictionary, appendix, log."},
+    {"area": "gaming-expert", "q": "Scope?", "a": "LoL only, ADC first, role-extensible."},
+    {"area": "viewer-expert", "q": "Audience?", "a": "LoL players scrolling TikTok/Shorts."},
+    {"area": "viewer-expert", "q": "Judges?", "a": "Hook/retention; effects+sound; title/caption/hashtags; thumbnail."},
+    {"area": "viewer-expert", "q": "Sources?", "a": "Built-in craft; web research; posted analytics."},
+    {"area": "mentor", "q": "Fate of mentor?", "a": "Fourth panel voice / chair."},
+    {"area": "editing-expert", "q": "Shape?", "a": "Same folder layout as gaming-expert."},
+    {"area": "editing-expert", "q": "Arsenal truth?", "a": "Generate from MCP catalog; user floated a DB registry; resolved to in-code pydantic registry."},
+    {"area": "editing-expert", "q": "Handoff?", "a": "Typed JSON edit plan."},
+    {"area": "editing-expert", "q": "Research?", "a": "Yes, on demand, logged."},
+    {"area": "music-arcs", "q": "Arc source?", "a": "Auto-detect; user picks songs mostly; library suggests."},
+    {"area": "music-arcs", "q": "Story format?", "a": "Video first, music follows; both one-game story and arc montage; shorts too."},
+    {"area": "music-arcs", "q": "Placement?", "a": "Intensity score + panel override."},
+    {"area": "clip-inclusion-layer", "q": "Typed vs KG?", "a": "Typed taxonomy now; graph later. 'jev' = TypeSafe AI's Jev decision model -> decision adapter with Haiku fallback; Format/Topic classification + include/exclude pre-filter; user on waitlist."},
+    {"area": "engineering-workflow", "q": "Jira?", "a": "New project AVE."},
+    {"area": "engineering-workflow", "q": "Commit July work?", "a": "Yes, one milestone commit (88b80a3)."},
+    {"area": "tonight-content", "q": "Tonight?", "a": "Build v0 panel first, then cut tonight's footage with it."}
+  ],
+  "redTeamStatus": "completed",
+  "redTeamFindings": [
+    {"title": "agents dir gitignored; mentor unversioned", "severity": "critical", "resolution": "D20"},
+    {"title": "two correction stores, runtime never sees expert logs", "severity": "critical", "resolution": "D21"},
+    {"title": "typed corrections migration invalidates all VLM caches", "severity": "major", "resolution": "D29"},
+    {"title": "classifiers are different axes behind live MCP tools", "severity": "major", "resolution": "D24, D27"},
+    {"title": "beat cache keyed by path; stale after trim", "severity": "major", "resolution": "D25"},
+    {"title": "teammates' voices in transcripts/logs/cuts", "severity": "major", "resolution": "D22"},
+    {"title": "agent skill preloading unverified; no agent-to-agent chair", "severity": "major", "resolution": "D26"},
+    {"title": "panel cost per decision; 400-line cap unenforced", "severity": "major", "resolution": "D23"},
+    {"title": "mentor is Valorant-centric chair for LoL", "severity": "minor", "resolution": "D28"},
+    {"title": "registry coverage direction; no plan-level undo", "severity": "minor", "resolution": "D30"}
+  ],
+  "driftLedger": [],
+  "previewUrl": null,
+  "sourceIssue": null,
+  "feedbackRounds": []
+}

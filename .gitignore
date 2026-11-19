@@ -128,7 +128,6 @@ _thumbnails/
 .claude/sessions/
 .claude/projects/
 .claude/plans/
-.claude/agents/
 .claude/cache/
 
 # ============================================================
