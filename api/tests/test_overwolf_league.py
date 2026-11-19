@@ -8,7 +8,7 @@ including two double kills).
 
 from __future__ import annotations
 
-import shutil
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -68,6 +68,60 @@ def test_valorant_identity_is_unchanged(tmp_path) -> None:
         "player_id": "abc",
         "region": "na",
     }
+
+
+def _league_session_line(stamp: str, champion: str) -> str:
+    return (
+        f"{stamp} (INFO) </background.js> (:4) - [GameService:League of Legends] "
+        'Session start info {"summoner_info":{"name":"Noodlz","region":"NA",'
+        f'"champion":"{champion}"}}}}'
+    )
+
+
+def _ms(year: int, month: int, day: int, hour: int, minute: int) -> int:
+    return int(datetime(year, month, day, hour, minute).timestamp() * 1000)
+
+
+@pytest.fixture
+def two_sessions(tmp_path) -> Path:
+    """Akali game at 01:00, then Zeri game at 02:00."""
+    (tmp_path / "background.html.1.log").write_text(
+        _league_session_line("2026-11-19 01:00:00,000", "Akali")
+        + "\n"
+        + _league_session_line("2026-11-19 02:00:00,000", "Zeri")
+        + "\n",
+        encoding="utf-8",
+    )
+    return tmp_path
+
+
+def test_identity_at_video_between_sessions_is_first_champion(two_sessions) -> None:
+    identity = player_identity(two_sessions, game="league", at_ms=_ms(2026, 11, 19, 1, 30))
+    assert identity["champion"] == "Akali"
+
+
+def test_identity_at_video_after_last_session_is_last_champion(two_sessions) -> None:
+    identity = player_identity(two_sessions, game="league", at_ms=_ms(2026, 11, 19, 3, 0))
+    assert identity["champion"] == "Zeri"
+
+
+def test_identity_without_at_ms_is_newest(two_sessions) -> None:
+    assert player_identity(two_sessions, game="league")["champion"] == "Zeri"
+
+
+def test_identity_before_any_session_falls_back_to_newest(two_sessions) -> None:
+    identity = player_identity(two_sessions, game="league", at_ms=_ms(2026, 11, 19, 0, 0))
+    assert identity["champion"] == "Zeri"
+
+
+def test_league_identity_skips_nested_player_info_lines(tmp_path) -> None:
+    nested = (
+        "2026-11-19 01:00:00,000 (INFO) </background.js> (:4) - "
+        '{"summoner_info":{"is_garena_user":"false","player_info":'
+        '"{\\"displayName\\":\\"Noodlz\\"}"}}'
+    )
+    (tmp_path / "background.html.1.log").write_text(nested + "\n", encoding="utf-8")
+    assert player_identity(tmp_path, game="league") is None
 
 
 def test_league_identity_missing_from_valorant_only_log(tmp_path) -> None:

@@ -34,6 +34,7 @@ import re
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path, PureWindowsPath
 
 _log = logging.getLogger(__name__)
@@ -485,9 +486,31 @@ _IDENTITY_PARSERS: dict[str, Callable[[str], dict | None]] = {
 }
 
 
-def player_identity(log_dir: Path | None = None, game: str | None = None) -> dict | None:
-    """Newest player identity the Outplayed logs record for `game`
+_LINE_TIME_RE = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d),(\d{3})")
+
+
+def _line_time_ms(line: str) -> int | None:
+    """Wall-clock ms (local time, as Overwolf logs it) of a log line."""
+    m = _LINE_TIME_RE.match(line)
+    if m is None:
+        return None
+    stamp = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")
+    return int(stamp.timestamp() * 1000) + int(m.group(2))
+
+
+def player_identity(
+    log_dir: Path | None = None,
+    game: str | None = None,
+    at_ms: int | None = None,
+) -> dict | None:
+    """Player identity the Outplayed logs record for `game`
     (Valorant when unset or unrecognised), or None.
+
+    Several games a night can use different champions, so pass `at_ms`
+    (Unix ms, e.g. the END of the video: a session's identity line is
+    logged just after its recording starts) to get the latest identity
+    logged at or before it. Without `at_ms`, or when nothing precedes
+    it, the newest identity in the logs wins.
 
     Valorant: the `me` object (player_name, player_id, region, server).
     League: `{player_name, champion, game}`. The League killfeed shows
@@ -499,14 +522,19 @@ def player_identity(log_dir: Path | None = None, game: str | None = None) -> dic
     if not log_dir.is_dir():
         return None
     parse = _IDENTITY_PARSERS.get(load_profile(game).meta.game, _valorant_identity)
-    latest: dict | None = None
+    newest: dict | None = None
+    newest_before: dict | None = None
     for f in sorted(log_dir.glob("background.html*.log")):
         try:
             with open(f, encoding="utf-8", errors="ignore") as fp:
                 for line in fp:
                     identity = parse(line)
-                    if identity is not None:
-                        latest = identity
+                    if identity is None:
+                        continue
+                    newest = identity
+                    logged_ms = _line_time_ms(line)
+                    if at_ms is not None and logged_ms is not None and logged_ms <= at_ms:
+                        newest_before = identity
         except OSError:
             continue
-    return latest
+    return newest_before or newest

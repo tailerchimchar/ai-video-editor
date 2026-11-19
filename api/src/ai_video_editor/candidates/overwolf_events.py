@@ -22,7 +22,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..killfeed import verify_windows_have_kill
-from ..overwolf_log import events_for_video, game_for_video, player_identity
+from ..overwolf_log import (
+    dispatched_video_for,
+    events_for_video,
+    game_for_video,
+    player_identity,
+)
 from ..profiles import load_profile
 
 _log = logging.getLogger(__name__)
@@ -240,7 +245,9 @@ def detect_overwolf_events(
     # spikes / clutches / victories aren't verifiable this way (the
     # player isn't the KILLER in the killfeed row). If tesseract or
     # ffmpeg is missing, verifier returns [True, ...] — never drops.
-    player_name = _killfeed_name(player_identity(game=game), game)
+    video = dispatched_video_for(path)
+    video_end_ms = video.start_time_ms + video.duration_ms if video else None
+    player_name = _killfeed_name(player_identity(game=game, at_ms=video_end_ms), game)
     kill_indices = [i for i, r in enumerate(rows) if r["event_type"] == "kill"]
     if kill_indices and not player_name:
         for i in kill_indices:
