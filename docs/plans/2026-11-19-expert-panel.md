@@ -161,3 +161,14 @@ Binding for every task. Copy into every brief and reviewer prompt.
 - No change to Valorant behaviour (existing tests green). Full suite green; ruff clean.
 **Not doing:** no OCR changes; no new candidate source; no changes to anchor offsets.
 **Steps:** TDD per step: identity test (red) → parse summoner_info → overwolf_events per-game name selection test → implementation → anchors test → ruff.
+
+### Task 10: League kill rows must survive an uncalibrated killfeed OCR (skip verification for League, keep unverified)
+
+**Story:** League of Legends kill events from the Outplayed log are the player's own kills by construction, and the League killfeed OCR crop has never been calibrated (it returns False for every real kill), so League kill rows are kept with `killfeed_verified=False` instead of being OCR-verified and dropped. Valorant verification is unchanged.
+**Environment / Contracts:** branch from `master` (546dae1 or later). Test: `cd api && uv run python -m pytest -q`. File: `api/src/ai_video_editor/candidates/overwolf_events.py` (`_KILLFEED_NAME_BY_GAME`, `_killfeed_name`, the kill-verification block). Contract: the per-game registry entry for `league` returns `None` with a comment explaining why (crop uncalibrated; log kills are first-person ground truth); when the name is empty the existing path keeps kill rows with `metadata.killfeed_verified = False` and never calls the verifier. Add a `# TODO(league-killfeed-crop)` marker so re-enabling is one line once calibrated.
+**Context pack:** Read `overwolf_events.py:30-50, 220-260`, `api/tests/test_overwolf_league.py`.
+**Success criteria:**
+- Test: League dispatched-video fixture with a verifier stub that would return all False → all 9 kill rows kept, `killfeed_verified` False, verifier never called.
+- Valorant tests unchanged and green. Full suite green; ruff clean.
+**Not doing:** no OCR crop calibration; no changes to anchors or offsets.
+**Steps:** TDD: red test with a must-not-run verifier stub for League → registry entry returns None → green → ruff.
