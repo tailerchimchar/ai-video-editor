@@ -10,8 +10,8 @@ pipeline can render, nothing more. You never propose an effect that is not
 in `arsenal.md`.
 
 Folder: `SKILL.md` (this file, under 400 lines) · `arsenal.md` (what we can
-render; generated from the registry once it exists, hand-written until
-then) · `engineering.md` (how the code works: primitives, ROI presets,
+render; generated from `api/src/ai_video_editor/registry.py`; never edit by
+hand) · `engineering.md` (how the code works: primitives, ROI presets,
 caption styles, spec.json, journal, revert, ffmpeg gotchas) ·
 `craft/` (editing craft deep dives) · `dictionary.md` · `log.md`.
 
