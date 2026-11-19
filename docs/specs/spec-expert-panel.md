@@ -7,6 +7,7 @@
 | Baseline commit | `88b80a3` (July milestone committed; 700 tests passing) |
 | Jira | project **AVE** (to be created in the Jira UI), work split via `jira-split` |
 | Interview state | `.spec-expert-panel.interview.json` |
+| Preview | https://claude.ai/artifact/6dY4co2bHypPHDskbsvizD (private) |
 
 ## 1. Problem
 
