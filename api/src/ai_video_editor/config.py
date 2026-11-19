@@ -236,8 +236,6 @@ class Settings(BaseSettings):
     # clip end-to-end and returns a trim recommendation (buildup_start,
     # payoff_anchor, resolution_end). See vlm/clip_analyzer.py + the
     # editing rubric in vlm/game_hints/<game>.md.
-    # Corrections rendered into a VLM prompt (and folded into its cache key).
-    corrections_top_k: int = 12
     vlm_clip_analyzer_enabled: bool = True
     vlm_clip_analyzer_frames: int = 30
     # Sidecar `<clip>.analysis.json` — skips VLM cost on repeat compiles
@@ -275,6 +273,13 @@ class Settings(BaseSettings):
     # in 2-3s typically; Ollama can take much longer. 120s is a safety
     # net that trips on both.
     vlm_call_timeout_seconds: float = 120.0
+
+    # --- Corrections memory (vlm/corrections.py) --------------------------
+    # How many recent corrections are rendered into every VLM prompt and
+    # folded into `effective_prompt_version` (the sidecar cache key).
+    # Default raised 10 -> 12 with the expert-panel build (it replaced the
+    # hard-coded prompts._CORRECTIONS_LIMIT = 10).
+    corrections_top_k: int = 12
 
     # --- YouTube Shorts pipeline -----------------------------------------
     # `compile_shorts` reads the highlights folder, buckets clips by
