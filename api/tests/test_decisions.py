@@ -105,6 +105,17 @@ def test_rules_topic_maps_multikill_events():
     assert answer.value == Topic.multikill
 
 
+@pytest.mark.parametrize("event", ["doublekill", "triplekill", "multi_kill_5", "pentakill"])
+def test_rules_topic_maps_every_multikill_alias(event):
+    answer = ask(ChoiceQuestion(prompt="t", options=Topic), {"clip": {"event": event}})
+    assert answer.value == Topic.multikill
+
+
+def test_rules_topic_has_no_opinion_on_a_single_kill():
+    answer = ask(ChoiceQuestion(prompt="t", options=Topic), {"clip": {"event": "kill"}})
+    assert answer.value is None
+
+
 def test_rules_has_no_opinion_on_unknown_questions():
     answer = ask(ScoreQuestion(prompt="s", lo=0, hi=10), {})
     assert answer.backend == "rules"

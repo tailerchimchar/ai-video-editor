@@ -108,6 +108,19 @@ def test_score_session_one_result_per_rendered_clip(tmp_path: Path) -> None:
     assert (result[1].start, result[1].end) == (100.0, 115.0)
 
 
+def test_score_session_carries_the_event_type(tmp_path: Path) -> None:
+    result = score_session(_write_index(tmp_path))
+    assert [c.event_type for c in result] == ["kill", "ace", "death"]
+
+
+def test_league_and_valorant_names_score_alike() -> None:
+    assert score_clip([_ev("pentakill")], None, None) == score_clip([_ev("ace")], None, None)
+    assert score_clip([_ev("multi_kill_5")], None, None) == score_clip([_ev("ace")], None, None)
+    assert score_clip([_ev("triplekill")], None, None) == score_clip(
+        [_ev("multi_kill_3")], None, None
+    )
+
+
 def test_score_session_reads_optional_sidecar(tmp_path: Path) -> None:
     idx = _write_index(tmp_path)
     baseline = {c.clip_ref: c.intensity for c in score_session(idx)}

@@ -31,45 +31,43 @@ from pathlib import Path
 
 from .config import settings
 from .decisions import Answer, BoolQuestion, ChoiceQuestion, ask_many
-from .taxonomy import Format, PayoffType
+from .taxonomy import Format, PayoffType, kills_for_event
 
 _log = logging.getLogger(__name__)
 
 
-# Event types that AUTOMATICALLY route to the hype bucket regardless
-# of hype_score. These are the multi-kill clusters emitted by the
-# overwolf_events source + the League ace / pentakill signals +
-# clutches (mentor rule: 1v3+ clutches qualify for hype).
-_HYPE_EVENT_TYPES = frozenset({
-    PayoffType.ace,
-    "pentakill",   # League event names with no PayoffType member
-    "quadrakill",
-    PayoffType.multi_kill_5,
-    PayoffType.multi_kill_4,
-    PayoffType.multi_kill_3,
-    PayoffType.clutch,
-})
+# Kill events route by kill count (`taxonomy.kills_for_event`, which folds
+# League / Valorant names): a 3K and up -- ace, quadra, penta, the
+# overwolf_events multi-kill clusters -- is hype; a 1K/2K is voice-over
+# material per mentor rule 1, never hype.
+_HYPE_MIN_KILLS = 3
+
+# Non-kill events that AUTOMATICALLY route to hype regardless of
+# hype_score (mentor rule: 1v3+ clutches qualify for hype).
+_HYPE_EVENT_TYPES = frozenset({PayoffType.clutch})
 
 # Event types for the funny bucket.
-_FUNNY_EVENT_TYPES = frozenset({
-    "funny_callout",
-    "funny_audio",
-})
+_FUNNY_EVENT_TYPES = frozenset(
+    {
+        "funny_callout",
+        "funny_audio",
+    }
+)
 
-# Event types for the voice-over bucket. Single kills + hype callouts +
-# assists all end up here -- material that Noodlz might talk over.
-_VOICE_OVER_EVENT_TYPES = frozenset({
-    "kill",
-    "assist",
-    PayoffType.multi_kill_2,   # 2Ks are voice-over material per mentor, not hype
-    "hype_callout",
-    "audio_peak",     # loud moments without a visible payoff
-    "objective",      # spike plants without a frag
-    "death",          # own death, could be a "how I threw" storytelling
-    "victory",        # round-win / match-win screens -- reel closer material
-    "unknown",
-    "clip",           # legacy generic label when event_type was dropped
-})
+# Non-kill event types for the voice-over bucket. Hype callouts +
+# assists end up here alongside 1K/2Ks -- material Noodlz might talk over.
+_VOICE_OVER_EVENT_TYPES = frozenset(
+    {
+        "assist",
+        "hype_callout",
+        "audio_peak",  # loud moments without a visible payoff
+        "objective",  # spike plants without a frag
+        "death",  # own death, could be a "how I threw" storytelling
+        "victory",  # round-win / match-win screens -- reel closer material
+        "unknown",
+        "clip",  # legacy generic label when event_type was dropped
+    }
+)
 
 # Bucket names -- align with the mentor skill's taxonomy.
 BUCKETS = (Format.hype, Format.story, Format.voice_over, Format.funny)
@@ -118,8 +116,9 @@ def route_clip(clip: dict) -> tuple[Format | str, str]:
     event = (clip.get("event") or clip.get("event_type") or "").lower()
     hype_score = float(clip.get("hype_score") or 0.0)
     funny_score = float(clip.get("funny_score") or 0.0)
+    kills = kills_for_event(event)
 
-    if event in _HYPE_EVENT_TYPES:
+    if kills >= _HYPE_MIN_KILLS or event in _HYPE_EVENT_TYPES:
         return Format.hype, f"event_type={event} -> hype (multi-kill / ace)"
     if event in _FUNNY_EVENT_TYPES:
         return Format.funny, f"event_type={event} -> funny"
@@ -129,7 +128,7 @@ def route_clip(clip: dict) -> tuple[Format | str, str]:
     # kills usually stay in voice_over unless funny is dominant.
     if funny_score >= 0.8 and hype_score < 0.7:
         return Format.funny, f"funny_score={funny_score:.2f} -> funny override"
-    if event in _VOICE_OVER_EVENT_TYPES:
+    if kills or event in _VOICE_OVER_EVENT_TYPES:
         return Format.voice_over, f"event_type={event} -> voice_over pool"
     return SKIPPED, f"event_type={event!r} did not match any bucket"
 
