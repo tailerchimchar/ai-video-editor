@@ -580,6 +580,14 @@ class CustomMontageBody(BaseModel):
         default=None,
         description="Per-clip VLM analyzer. Defaults to config.",
     )
+    max_seconds: float | None = Field(
+        default=None,
+        description=(
+            "Override the `SHORTS_MAX_DURATION_SECONDS` ffmpeg -t cap "
+            "for this compile only. Story shorts often need 90-180s; "
+            "hype shorts stay at the default. None uses the config."
+        ),
+    )
 
 
 async def _run_custom_job(job_id: str, body: CustomMontageBody) -> None:
@@ -601,6 +609,7 @@ async def _run_custom_job(job_id: str, body: CustomMontageBody) -> None:
             beat_flash=body.beat_flash,
             beat_flash_source=body.beat_flash_source,
             use_clip_analyzer=body.use_clip_analyzer,
+            max_seconds=body.max_seconds,
         )
         if not result.get("ok"):
             await _finish_job(
@@ -653,6 +662,103 @@ async def list_custom(game: str | None = None):
     symmetry with other list endpoints)."""
     _ = game
     return list_custom_shorts()
+
+
+class WatchMontageBody(BaseModel):
+    """Request body for `POST /shorts/watch`.
+
+    Exactly one of `montage_path` or `custom_name` must be set."""
+
+    montage_path: str | None = Field(
+        default=None,
+        description="Absolute path to any rendered montage .mp4 on disk.",
+    )
+    custom_name: str | None = Field(
+        default=None,
+        description=(
+            "Name of a custom-compile output (e.g. 'Valorant_best_of_v1'). "
+            "Resolved to `WORKSPACE/shorts/_custom/<name>/<name>.mp4`."
+        ),
+    )
+    save_markdown: bool = Field(
+        default=True,
+        description="Write a `critique.md` next to the montage on success.",
+    )
+
+
+@router.post("/shorts/watch")
+async def watch_montage_endpoint(body: WatchMontageBody):
+    """Ask the VLM to watch an entire rendered montage end-to-end and
+    return a structured per-interval critique.
+
+    Panel-packs the montage at 1 fps into 2x2 mosaics (4 seconds per
+    panel) and sends the sequence to Claude Haiku 4.5 with a strict-
+    mode structured-output schema. One call, ~$0.02 for a 60s
+    montage. Result is written as `critique.md` next to the video
+    file so the compilation folder self-documents.
+
+    Fast enough (~5s wall-clock) to run inline; no job queue.
+    """
+    from ..config import settings
+    from ..vlm.watch_montage import save_critique, watch_montage
+
+    if body.montage_path:
+        path = Path(body.montage_path)
+    elif body.custom_name:
+        root = settings.workspace_dir / "shorts" / "_custom" / body.custom_name
+        path = root / f"{body.custom_name}.mp4"
+    else:
+        raise HTTPException(400, "Provide montage_path or custom_name")
+
+    if not path.is_file():
+        raise HTTPException(404, f"Montage not found: {path}")
+
+    result = await asyncio.to_thread(watch_montage, path)
+    if body.save_markdown and result.critique is not None:
+        save_critique(result, path.with_name("critique.md"))
+    payload: dict = {
+        "panel_count": result.panel_count,
+        "total_seconds": result.total_seconds,
+        "error": result.error,
+        "critique": (
+            result.critique.model_dump() if result.critique is not None else None
+        ),
+    }
+    return payload
+
+
+@router.get("/highlights/{game}/{session}/buckets")
+async def get_session_buckets(game: str, session: str):
+    """Route a session's clips into the four mentor buckets: hype /
+    story / voice_over / funny.
+
+    Reads the session's `index.json` and applies pure routing rules
+    (see `bucketing.route_clip`):
+
+      - `hype` -- aces / 4K / 3K only. No 1Ks or 2Ks per mentor rules.
+      - `funny` -- funny_callout clips or clips with funny_score >= 0.8.
+      - `voice_over` -- single kills, 2Ks, hype callouts. The "solo
+        queue moments" pool for VO shorts.
+      - `story` -- reserved for manual picks (round-arc detection is
+        not yet automated).
+
+    Returns a manifest with per-bucket clip lists + rationale. Cheap
+    -- reads one JSON, no LLM, no ffmpeg.
+    """
+    from dataclasses import asdict
+
+    from ..bucketing import route_session_folder
+    from ..config import settings
+
+    folder = settings.workspace_dir / "highlights" / game / session
+    if not folder.is_dir():
+        raise HTTPException(404, f"Session folder not found: {folder}")
+    manifest = route_session_folder(folder)
+    if manifest is None:
+        raise HTTPException(
+            404, f"No readable index.json in {folder}"
+        )
+    return asdict(manifest)
 
 
 @router.get("/assets/{asset_id}/shorts/topics")

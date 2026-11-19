@@ -1,4 +1,4 @@
-<!-- PROMPT_VERSION: 4 -->
+<!-- PROMPT_VERSION: 5 -->
 # Valorant editing hints
 
 Your primary job when analyzing a Valorant clip is **sequencing
@@ -180,6 +180,26 @@ You'd return:
 The compile then renders 3 tight sub-clips from that single source
 file. Total: ~13 seconds of hype vs 40s of padding.
 
+## Priority hierarchy (v5 — the load-bearing rule)
+
+When trim windows compete, resolve in this exact order:
+
+1. **Kills win over quotes.** If a funny voice-line lands at t=X but a
+   kill lands at t=X+2, anchor the window on the kill. The quote
+   still appears in-clip; the killfeed pop is the visual payoff.
+2. **Kills win over buildup.** A 2s peek is not worth cutting a kill.
+   If tightening buildup would push the kill to the clip's last 500ms,
+   keep the buildup instead.
+3. **Kills need ≥1s post-buffer.** The killfeed row animates in ~0.5-1s
+   AFTER the frag. Cutting on the kill sfx alone drops the pop off
+   screen. Always leave 1s minimum after the kill instant.
+4. **Sub-clip must contain a verifiable killfeed event.** If the window
+   you propose doesn't include the killfeed pop, you picked the wrong
+   window — extend or shift until it does.
+5. **Quote-only clips (setup, callout, reaction) are the exception, not
+   the default.** Only mark a clip "quote_only" when there is no kill
+   within ±10s of the quote. Otherwise anchor to the kill.
+
 ## Rubric changelog (for reference — do not use as rules)
 
 - v2 → v3: hard-drop death clips (`payoff_type="other"` + low
@@ -189,3 +209,9 @@ file. Total: ~13 seconds of hype vs 40s of padding.
   `additional_moments` array for multi-payoff clips (user pre-clips
   their own VOD so most clips have 2+ kills); tighter guidance on
   merging close-together kills.
+- v4 → v5: explicit priority hierarchy (kills > quotes > buildup);
+  ≥1s post-buffer requirement (killfeed pop must be in-frame);
+  quote-only clips demoted to exception status. Motivation: mechanical
+  fix layer (`anchoring.py`) now handles snap-to-kill for clips with
+  Overwolf ground truth — the rubric enforces the same rule for VLM-
+  driven windows on clips without ground truth.

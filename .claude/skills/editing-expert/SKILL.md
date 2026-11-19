@@ -31,6 +31,74 @@ Three things landed after the initial skill was written; anyone touching related
 
 - **Chronological highlights folder** — `highlights.py::build_highlights` sorts kept rankings by `suggested_start_seconds` (was: `hype_score` descending). The folder reads as a log of the game; filenames `01_..., 02_...` walk play time. If a caller needs a hype-first order, that's the `compile_highlights(order="hook"|"hype")` layer's job, not the highlights folder.
 
+## Recent: Anchor + critic + corrections stack (SHIPPED 2026-07-14)
+
+The mechanical fix for "kills off by ~1s" issues in hand-picked sub-
+clips. Three modules, chained:
+
+### M1 — Ground-truth anchor snapping (deterministic, $0)
+
+- `candidates/overwolf_events.kill_anchors_for_video(source, duration,
+  include_clusters=True)` → list of `EventAnchor(anchor_seconds,
+  event_type, metadata)`. Ground truth from Outplayed's dispatch log,
+  killfeed-OCR verified. Empty when the log doesn't cover the file
+  (rotates ~2 weeks; user-clipped shorts skip the log).
+- `anchoring.py` — pure snap math. Two entry points:
+  - `snap_window_to_anchor(start, end, anchors, duration_seconds,
+    max_snap_distance=5.0)` — take a hand-picked window, snap to
+    nearest kill within tolerance. Uses per-payoff-type buffers
+    (single kill 3s/2.5s, ace 6s/4s).
+  - `auto_windows_from_anchors(anchors, duration_seconds)` — one
+    window per anchor, merges overlapping windows (an ace becomes
+    one clip, not four).
+- HTTP surface (`routers/clips.py`):
+  - `POST /clips/list_kill_anchors` — preview the log's anchors.
+  - `POST /clips/auto_cut_kills` — hands-off cut per anchor.
+  - `POST /clips/trim_source` gained `anchor_to_kill: bool` — snap
+    when true, fall through unchanged when no anchor is close.
+- MCP tools: `list_kill_anchors`, `auto_cut_kills_from_source`,
+  `trim_source_to_clip(anchor_to_kill=True)`.
+
+Hands-off flow for any dispatch-log-covered source:
+
+    cuts = auto_cut_kills_from_source(source_path=src)
+    compile_custom_montage(
+      clip_paths=[c["output_path"] for c in cuts["clips"]],
+      game="Valorant",
+    )
+
+### M2 — VLM critic gained mechanical categories
+
+`vlm/watch_montage.py::FlagCategory` extended with:
+- `kill_anchor_misplaced` — killfeed pop straddles a panel boundary
+- `killfeed_pop_cut_off` — kill in-clip but killfeed animates off-screen
+- `cut_too_early` / `cut_too_late`
+
+`MomentFlag` gained `suggested_fix: SuggestedFix | None` (one of
+drop/extend_before/extend_after/trim_start/trim_end/shift_left/
+shift_right/keep) + `fix_seconds: float | None` (0-5 range). The
+refine loop reads these to shift/extend, not just drop.
+`watch_montage.PROMPT_VERSION` gets bumped when schema changes so
+caller-side critique caches invalidate.
+
+### M3 — Corrections memory (DSPy-style, no dep)
+
+- `vlm/corrections.py` — one Correction dataclass, appended as JSON
+  lines to `vlm/game_hints/<game>_examples.jsonl`. Loader (
+  `load_recent_corrections`) reads newest-first by FILE ORDER (not
+  timestamp — robust to same-microsecond appends).
+- `vlm/prompts.py::load_game_hints` auto-appends a "## Recent
+  corrections you've received" section. Every VLM system prompt for
+  that game inherits it — no caller changes.
+- `game_hints_effective_version(game)` returns `v<md>-<examples_hash>`
+  which folds file content hash into the cache key. Any append
+  invalidates per-clip analyzer sidecars cleanly.
+- `POST /mentor/record_correction` + MCP `mentor_record_correction`
+  is the write path. Call IT (not just conversation) whenever the
+  user corrects the pipeline in chat, so the next compile learns.
+- `POST /mentor/recent_corrections` + MCP `mentor_recent_corrections`
+  audits stored rules before a compile.
+
 ## Recent: Shorts pipeline (SHIPPED — v0.5 as of 2026-07-08)
 
 Fully wired end-to-end. Five compile flows share the render path;

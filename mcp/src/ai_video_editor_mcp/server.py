@@ -95,11 +95,17 @@ def list_candidates(asset_id: str) -> list[dict]:
 
 @mcp.tool()
 def transcribe_asset(asset_id: str) -> dict:
-    """Transcribe one recording with local Whisper (private, $0). Waits
-    for the job and returns the segment count + a short preview. Short
-    clips finish in seconds; long VODs are slow on CPU and may report
-    'timeout' here while still running — re-check with get_transcript /
-    get_job. Stored once, then reused by candidate generation."""
+    """Transcribe one recording with the configured Whisper backend.
+    Local by default (private, $0, via faster-whisper) — set
+    `TRANSCRIBE_BACKEND=groq` in the API's .env for cloud transcription
+    (~$0.02/full VOD via whisper-large-v3-turbo, ~30s wall-clock).
+
+    Waits for the job and returns the segment count + a short preview.
+    Short clips finish in seconds; long VODs on local CPU are slow
+    and may report 'timeout' here while still running — re-check with
+    get_transcript / get_job. Stored once, then reused by candidate
+    generation (transcript_keyword source scans hype/funny cues and
+    VADER high-arousal segments)."""
     with _client() as c:
         job_id = c.post(f"{API}/assets/{asset_id}/transcribe").json()["job_id"]
         job = _wait_for_job(c, job_id)
@@ -119,6 +125,40 @@ def get_transcript(asset_id: str) -> list[dict]:
     recording, if it has been transcribed."""
     with _client() as c:
         return c.get(f"{API}/assets/{asset_id}/transcript").json()
+
+
+@mcp.tool()
+def list_session_buckets(game: str, session: str) -> dict:
+    """Route an analyzed session's clips into the four mentor buckets:
+    `hype`, `story`, `voice_over`, `funny`.
+
+    Reads the session's `highlights/<game>/<session>/index.json` and
+    applies pure rules:
+
+    - `hype` -- aces / 4Ks / 3Ks only. No 1Ks or 2Ks (mentor rule).
+    - `funny` -- funny_callout clips or funny_score >= 0.8 kills.
+    - `voice_over` -- single kills, 2Ks, hype callouts, deaths (VO
+      storytelling material).
+    - `story` -- reserved for manual picks; round-arc auto-detection
+      is not yet built.
+
+    Args:
+      - `game` -- e.g. "Valorant", "League of Legends"
+      - `session` -- session folder name, e.g. "07-07-2026_23h44"
+
+    Returns a manifest with per-bucket clip lists (file, event_type,
+    hype_score, funny_score, story_score, reason). Cheap -- one JSON
+    read, no LLM, no ffmpeg. Use this BEFORE deciding what to compile
+    so you route the right clips to the right compile call:
+
+    - hype list -> compile_custom_montage with hype pool
+    - funny list -> compile_custom_montage tagged for funny editing
+    - voice_over list -> hold for VO scripting
+    """
+    with _client() as c:
+        return c.get(
+            f"{API}/highlights/{game}/{session}/buckets"
+        ).json()
 
 
 @mcp.tool()
@@ -1674,10 +1714,16 @@ def compile_custom_montage(
     beat_flash: bool | None = None,
     beat_flash_source: str | None = None,
     use_clip_analyzer: bool | None = None,
+    max_seconds: float | None = None,
 ) -> dict:
     """Compile ONE montage from an EXPLICIT list of clip paths — mix
     from ANYWHERE: Outplayed folder, analyzed highlights folders,
     ad-hoc directories. Order in the list = order in the output.
+
+    `max_seconds` overrides the config-level duration cap for THIS
+    compile only. Default (config) is 180s -- long enough for a full
+    Valorant round. Pass e.g. 60 for a hype short cap or 300 for a
+    Spike Rush match. Omit to use the config default.
 
     This is the "hey, take these specific clips and put them together"
     flow — complements (does not replace) the automated
@@ -1721,6 +1767,8 @@ def compile_custom_montage(
         body["beat_flash_source"] = beat_flash_source
     if use_clip_analyzer is not None:
         body["use_clip_analyzer"] = use_clip_analyzer
+    if max_seconds is not None:
+        body["max_seconds"] = max_seconds
     with _client() as c:
         job_id = c.post(f"{API}/shorts/custom_montage", json=body).json()[
             "job_id"
@@ -1735,6 +1783,348 @@ def list_custom_shorts() -> dict:
     """
     with _client() as c:
         return c.get(f"{API}/shorts/custom_montage").json()
+
+
+@mcp.tool()
+def trim_source_to_clip(
+    source_path: str,
+    start_seconds: float,
+    end_seconds: float,
+    name: str | None = None,
+    anchor_to_kill: bool = False,
+) -> dict:
+    """Cut a window out of any .mp4 into a stable file the editing
+    pipeline can consume. Sync -- returns the output path immediately.
+
+    The building block for JUMP-CUT edits and story shorts. Chain 2-4
+    calls to slice one long source into short sub-clips, then feed the
+    output paths to `compile_custom_montage(clip_paths=[...])` to get
+    a jump-cut compilation.
+
+    Example -- turning a 40s clip into a 3-cut comedy short:
+
+        a = trim_source_to_clip(src, 25, 35, "setup")
+        b = trim_source_to_clip(src, 75, 95, "climax")
+        c = trim_source_to_clip(src, 91, 100, "punchline")
+        compile_custom_montage(clip_paths=[a["output_path"], b["output_path"], c["output_path"]])
+
+    Args:
+      - `source_path`: absolute path to any .mp4 on disk.
+      - `start_seconds`, `end_seconds`: cut window.
+      - `name`: output filename stem (no extension). Omit to derive
+        from source name + range.
+      - `anchor_to_kill`: when True, snap the window to the nearest
+        ground-truth Overwolf kill anchor within 5s of the requested
+        midpoint. Uses per-payoff-type pre/post buffers (single kill:
+        3s/2.5s, ace: 6s/4s). Falls through unchanged when the source
+        isn't in Outplayed's dispatch log or no anchor is close. The
+        response includes `snapped`, `anchor_seconds`, `event_type`.
+
+    Output: `WORKSPACE/trims/<name>.mp4`. Stream-copy (no re-encode) so
+    it finishes in <1s regardless of clip length. Same source file
+    stays immutable.
+    """
+    body = {
+        "source_path": source_path,
+        "start_seconds": start_seconds,
+        "end_seconds": end_seconds,
+        "anchor_to_kill": anchor_to_kill,
+    }
+    if name:
+        body["name"] = name
+    with _client() as c:
+        r = c.post(f"{API}/clips/trim_source", json=body)
+        r.raise_for_status()
+        return r.json()
+
+
+@mcp.tool()
+def list_kill_anchors(
+    source_path: str,
+    include_clusters: bool = True,
+) -> dict:
+    """Preview ground-truth kill anchors from Outplayed's Overwolf log
+    for a source .mp4. Empty when the file isn't in the dispatch table
+    (log rotates ~2 weeks; user-clipped shorts skip the log; non-Val
+    games don't have this data).
+
+    Use this BEFORE `auto_cut_kills_from_source` to see what the log
+    contains -- lets you decide whether to trust the auto-cut or fall
+    back to hand-picked windows.
+
+    Args:
+      - `include_clusters`: include multi-kill anchors (double / triple
+        / quad / ace) alongside individual kills. Set False for
+        voice-over pacing where each frag should land separately.
+
+    Returns:
+        {
+          "count": int,
+          "anchors": [
+            {"anchor_seconds": float, "event_type": str,
+             "cluster_size": int|null, "headshot": bool}
+          ]
+        }
+    """
+    body = {"source_path": source_path, "include_clusters": include_clusters}
+    with _client() as c:
+        r = c.post(f"{API}/clips/list_kill_anchors", json=body)
+        r.raise_for_status()
+        return r.json()
+
+
+@mcp.tool()
+def mentor_record_correction(
+    game: str,
+    feedback: str,
+    rule: str,
+    clip_ref: str | None = None,
+    source_context: str | None = None,
+    tags: list[str] | None = None,
+) -> dict:
+    """Record a structured editorial correction so the NEXT compile
+    inherits it. Persisted to `vlm/game_hints/<game>_examples.jsonl`;
+    auto-loaded into every VLM system prompt for that game; its content
+    hash rolls into the effective PROMPT_VERSION so per-clip analyzer
+    caches invalidate cleanly.
+
+    This is the DSPy-style memory flywheel of the anchor+critic
+    pipeline. When the user says "kills should be off by less than 1s"
+    or "stop using scoreboard shots as endings", call this immediately
+    with the RULE, not just the feedback. Future compiles pattern-match
+    on it.
+
+    Args:
+      - `game`: 'valorant', 'league', etc. Case-insensitive.
+      - `feedback`: verbatim short quote of what the user said.
+      - `rule`: the actionable rule the LLM should apply next time.
+        Be specific: not "be better", but "sub-clip must include the
+        killfeed pop within 1s of the frag".
+      - `clip_ref`: optional -- filename or short-name of the clip
+        that triggered this correction.
+      - `tags`: freeform, for future filtering (e.g. ["anchor",
+        "may30", "punchline_timing"]).
+
+    Example -- capturing the "kills off by 1s" issue from THIS session:
+
+        mentor_record_correction(
+            game="valorant",
+            feedback="kills were off by 1s",
+            rule="every sub-clip must include the killfeed pop; extend "
+                 "the end by 1-2s if the frag lands near the boundary",
+            clip_ref="may30_captioned_v3.mp4",
+            tags=["anchor", "killfeed_pop"],
+        )
+    """
+    body: dict = {"game": game, "feedback": feedback, "rule": rule}
+    if clip_ref:
+        body["clip_ref"] = clip_ref
+    if source_context:
+        body["source_context"] = source_context
+    if tags:
+        body["tags"] = tags
+    with _client() as c:
+        r = c.post(f"{API}/mentor/record_correction", json=body)
+        r.raise_for_status()
+        return r.json()
+
+
+@mcp.tool()
+def mentor_recent_corrections(game: str, limit: int = 10) -> dict:
+    """List the most recent editorial corrections for a game, newest
+    first. Use this to audit the memory before it drives the next
+    compile -- catches stale / conflicting rules that need pruning."""
+    with _client() as c:
+        r = c.get(
+            f"{API}/mentor/recent_corrections",
+            params={"game": game, "limit": limit},
+        )
+        r.raise_for_status()
+        return r.json()
+
+
+@mcp.tool()
+def auto_cut_kills_from_source(
+    source_path: str,
+    include_clusters: bool = True,
+    name_prefix: str | None = None,
+) -> dict:
+    """Auto-cut one sub-clip per Overwolf kill anchor, ready to compile.
+    Zero LLM cost -- pure ground-truth + per-payoff-type buffers.
+
+    Windows use per-type buffers so the payoff lands in the sweet spot:
+    single kill = 3s pre / 2.5s post; ace = 6s pre / 4s post. Overlapping
+    windows (adjacent kills in a burst) merge into one bigger window --
+    an ace becomes one clip, not four.
+
+    Empty `clips` when the source isn't dispatched (with `reason` set).
+    In that case, fall back to `trim_source_to_clip` for hand-picked
+    windows.
+
+    Chains with `compile_custom_montage` for the full hands-off flow:
+
+        cuts = auto_cut_kills_from_source(source_path=src)
+        compile_custom_montage(
+            clip_paths=[c["output_path"] for c in cuts["clips"]],
+            game="Valorant",
+        )
+    """
+    body = {"source_path": source_path, "include_clusters": include_clusters}
+    if name_prefix:
+        body["name_prefix"] = name_prefix
+    with _client() as c:
+        r = c.post(f"{API}/clips/auto_cut_kills", json=body)
+        r.raise_for_status()
+        return r.json()
+
+
+@mcp.tool()
+def caption_video(
+    source_path: str,
+    segments: list[dict],
+    name: str | None = None,
+    aspect: str = "9:16",
+) -> dict:
+    """Burn drawtext overlays onto ANY .mp4 file by path (no asset row
+    required). Companion to `trim_source_to_clip` -- together they
+    let you jump-cut a source into sub-clips, compile, and then
+    overlay comedy captions on the final montage.
+
+    `segments` is a list of dicts, each with:
+      - `text`: the caption text
+      - `start_seconds`, `end_seconds`: OUTPUT-timeline times (t=0 =
+        first frame of `source_path`)
+      - `style` (optional): {fontsize, color, y_position, ...}
+      - `font_path` (optional): full path to a .ttf. For emoji glyphs
+        pass Segoe UI Emoji on Windows: `C:/Windows/Fonts/seguiemj.ttf`.
+        Renders as monochrome outlines which look cleaner over gameplay
+        than color emoji anyway. Different segments at the same
+        timestamp can use different fonts (emoji glyph + text side by
+        side by placing them at slightly different X positions via
+        the style's y_position and letting drawtext auto-center each).
+
+    `aspect`: '9:16', '16:9', or 'source' (no aspect change).
+
+    Output: `WORKSPACE/captions/<name>.mp4`. Sync -- returns the path
+    when the encode finishes (~5-20s depending on clip length).
+    """
+    body = {
+        "source_path": source_path,
+        "segments": segments,
+        "aspect": aspect,
+    }
+    if name:
+        body["name"] = name
+    with _client() as c:
+        r = c.post(f"{API}/clips/caption_video", json=body, timeout=180.0)
+        r.raise_for_status()
+        return r.json()
+
+
+@mcp.tool()
+def add_sfx_at(
+    source_path: str,
+    sfx: list[dict],
+    name: str | None = None,
+) -> dict:
+    """Layer one or more sound-effect one-shots onto any .mp4's audio
+    track. Sync -- returns the output path when the encode finishes.
+
+    `sfx` is a list of dicts:
+      - `sfx_path`: absolute path to a .wav/.mp3/.ogg
+      - `at_seconds`: when to trigger (source-timeline seconds)
+      - `volume` (optional, default 1.0): 0.0-4.0 linear gain
+
+    Example -- vine boom on the punchline of a comedy short:
+
+        add_sfx_at(
+            source_path="C:/...may30_captioned.mp4",
+            sfx=[{
+                "sfx_path": "C:/sfx/vine_boom.mp3",
+                "at_seconds": 17.5,
+                "volume": 1.2,
+            }],
+            name="may30_boom",
+        )
+
+    Chains with `trim_source_to_clip` + `compile_custom_montage` +
+    `caption_video` for the full TikTok-style edit pipeline.
+
+    Output: `WORKSPACE/sfx_overlays/<name>.mp4`. Video stream is
+    stream-copied (no re-encode), audio is remixed via ffmpeg
+    `adelay` + `amix`. Missing sfx files are skipped -- the encode
+    still succeeds as long as at least one overlay is valid.
+    """
+    body = {
+        "source_path": source_path,
+        "sfx": sfx,
+    }
+    if name:
+        body["name"] = name
+    with _client() as c:
+        r = c.post(f"{API}/sfx/overlay", json=body, timeout=180.0)
+        r.raise_for_status()
+        return r.json()
+
+
+@mcp.tool()
+def watch_montage(
+    custom_name: str | None = None,
+    montage_path: str | None = None,
+    save_markdown: bool = True,
+) -> dict:
+    """Have Claude Haiku 4.5 WATCH a compiled montage end-to-end and
+    return per-interval structured critique.
+
+    This is the "did the montage actually work?" tool. Unlike the
+    per-clip and whole-comp validators (which spot-check 8-15 frames),
+    this panel-packs the ENTIRE compiled `.mp4` at 1 fps into 2x2
+    mosaics (4 seconds per panel) and sends the whole sequence to
+    the VLM in one call. The VLM returns:
+
+      - `overall_verdict`: ship_it | needs_edits | start_over
+      - `opener_strength`, `climax_strength`: 1-5 gut ratings
+      - `pacing`: too_slow | just_right | too_fast
+      - `top_recommendation`: the single biggest change
+      - `flags`: list of `{start_s, end_s, category, why}` where
+        category is one of dead_air, scoreboard, own_death,
+        teammate_kill_only, payoff_lands, good_buildup, great_moment,
+        abrupt_cut, boring_pacing.
+
+    Args:
+      - `custom_name`: name of a custom-compile output (e.g.
+        `Valorant_best_of_v1`). Resolved to
+        `WORKSPACE/shorts/_custom/<name>/<name>.mp4`.
+      - `montage_path`: absolute path to any rendered `.mp4` on disk
+        (overrides `custom_name` if both are set — but pass one, not
+        both).
+      - `save_markdown`: when True (default), also writes
+        `critique.md` next to the montage.
+
+    Cost / latency: ~$0.02 and ~5 seconds for a 60s montage
+    (Haiku 4.5 vision @ 15 panels). Cheap enough to re-run after
+    every edit.
+
+    Returns the parsed critique dict + `panel_count` +
+    `total_seconds`, or `error` if ffmpeg / VLM was unavailable.
+    """
+    if not custom_name and not montage_path:
+        return {
+            "status": "failed",
+            "error": "provide custom_name or montage_path",
+        }
+    body: dict = {"save_markdown": save_markdown}
+    if montage_path:
+        body["montage_path"] = montage_path
+    if custom_name:
+        body["custom_name"] = custom_name
+    with _client() as c:
+        # This endpoint runs inline (no job queue) -- give it its own
+        # bump above the default 30s client timeout so a slow model
+        # response doesn't false-fail the tool.
+        resp = c.post(f"{API}/shorts/watch", json=body, timeout=180.0)
+        resp.raise_for_status()
+        return resp.json()
 
 
 @mcp.tool()

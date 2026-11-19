@@ -380,6 +380,70 @@ class VerifiedMoment:
     """The killfeed timestamp that matched, if any."""
 
 
+def verify_windows_have_kill(
+    video_path: Path | str,
+    player_name: str,
+    game: str | None,
+    anchor_times: list[float],
+    *,
+    lookahead_seconds: tuple[float, ...] = (2.0, 3.5, 5.0),
+) -> list[bool]:
+    """For each anchor in `anchor_times`, sample the killfeed a few
+    seconds later and return True iff `player_name` appears as killer
+    (LEFT half of a killfeed row) in at least one sampled frame.
+
+    Overwolf's kill event `time` is when the killfeed row appears, so
+    we shifted the anchor back by 3s in the candidate source. This
+    verifier samples FORWARD from the anchor at `lookahead_seconds`
+    offsets to hit the killfeed's visible window (which persists ~5s).
+
+    Returns `[True] * len(anchor_times)` when the verifier can't run
+    (tesseract / ffmpeg missing, empty player_name, disabled setting).
+    Missing OCR should never drop real candidates.
+
+    Cheap: no whole-clip scan. For 20 events, ~60 OCR calls total.
+    """
+    n = len(anchor_times)
+    if n == 0:
+        return []
+    path = Path(video_path)
+    stripped = (player_name or "").split("#", 1)[0].strip()
+    if not path.is_file() or not stripped:
+        return [True] * n
+    if not settings.killfeed_verifier_enabled:
+        return [True] * n
+    backend = _resolve_backend()
+    if backend is None or not _ffmpeg_available():
+        return [True] * n
+
+    crop_expr = _killfeed_crop_expr(game)
+    threshold = settings.killfeed_name_match_threshold
+    tmpdir = Path(tempfile.gettempdir()) / f"killfeed_win_{path.stem}"
+    tmpdir.mkdir(parents=True, exist_ok=True)
+
+    results: list[bool] = []
+    try:
+        for i, anchor in enumerate(anchor_times):
+            hit = False
+            for j, lookahead in enumerate(lookahead_seconds):
+                png = tmpdir / f"w_{i:04d}_{j}.png"
+                try:
+                    if _extract_frame(str(path), anchor + lookahead, crop_expr, png):
+                        text = backend(png)
+                        if _count_player_rows(text, stripped, threshold) > 0:
+                            hit = True
+                            break
+                finally:
+                    png.unlink(missing_ok=True)
+            results.append(hit)
+    finally:
+        for f in tmpdir.glob("*.png"):
+            f.unlink(missing_ok=True)
+        with contextlib.suppress(OSError):
+            tmpdir.rmdir()
+    return results
+
+
 def verify_anchor(
     original_anchor: float,
     track: KillfeedTrack | None,

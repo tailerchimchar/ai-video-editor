@@ -22,6 +22,12 @@ class Settings(BaseSettings):
     # (no fontconfig there). Arial is shipped with every Windows install
     # so it's a safe default; override if you want a different look.
     caption_font_path: str = "C:/Windows/Fonts/arial.ttf"
+    # Emoji-capable font. Segoe UI Emoji ships with Windows and renders
+    # emoji glyphs as monochrome outlines through drawtext (color emoji
+    # requires libraqm+harfbuzz; monochrome is fine for editing use).
+    # Pass `font_path=<this>` per-segment in caption calls when you want
+    # emoji glyphs (💀 🎯 😎 etc).
+    caption_emoji_font_path: str = "C:/Windows/Fonts/seguiemj.ttf"
 
     # --- Phase 2: AI analyzer ---
     anthropic_api_key: str = ""
@@ -65,6 +71,16 @@ class Settings(BaseSettings):
     whisper_device: str = "cpu"  # cpu|cuda
     whisper_compute_type: str = "int8"  # int8 = CPU-friendly
     transcribe_max_seconds: float = 5400.0  # 90 min hard cap
+    # Transcription backend selector -- `local_whisper` (faster-whisper
+    # singleton, private, $0) or `groq` (cloud API, ~$0.02/full VOD via
+    # whisper-large-v3-turbo, ~30s wall-clock). The SaaS pilot path uses
+    # `groq`; desktop / local dev stays on `local_whisper`.
+    transcribe_backend: str = "local_whisper"  # local_whisper | groq
+    # Groq API key -- required when transcribe_backend=groq. Free-tier
+    # keys work fine for the pilot volume.
+    groq_api_key: str = ""
+    groq_transcribe_model: str = "whisper-large-v3-turbo"
+    groq_base_url: str = "https://api.groq.com/openai/v1"
 
     # RAG semantic search. Local ONNX embeddings (no upload). bge-small
     # is 384-dim, ~90MB, fast on CPU. Chunk transcripts in rolling
@@ -251,7 +267,12 @@ class Settings(BaseSettings):
     # output bytes. See docs/shorts.md (queued) or the plan file for
     # the full bucket rules.
     shorts_hype_threshold: float = 0.6
-    shorts_max_duration_seconds: float = 60.0
+    # Soft cap on rendered short duration -- ffmpeg `-t` argument.
+    # 60s was tuned for hype montages but chokes story shorts (a full
+    # round is 90-120s, a Spike Rush match is 5-7min). Raised to 180s.
+    # Per-call override via `max_duration_seconds` on the compile MCP
+    # tool when a specific short needs longer.
+    shorts_max_duration_seconds: float = 180.0
     shorts_min_duration_seconds: float = 15.0
     # Empty string = no default music. If set, path is used for montage
     # mode when the caller doesn't pass its own `music_path`.
@@ -277,6 +298,17 @@ class Settings(BaseSettings):
     # Adds one VLM call (~$0.02) + one re-render (~30s) per iteration.
     shorts_auto_fix_enabled: bool = True
     shorts_max_review_iter: int = 2
+    # Alt whole-comp critic: instead of the sparse sampled-frames
+    # `validate_compilation` loop, panel-pack the entire rendered
+    # montage at 1 fps and run the `watch_montage` critic (see
+    # vlm/watch_montage.py). Drops clips whose panels flag as
+    # scoreboard / dead_air / own_death / teammate_kill_only /
+    # boring_pacing, then re-renders. Cheaper (one call, ~$0.02) and
+    # sees the whole video instead of 8 spot-check frames. Currently
+    # opt-in on the custom-compile path only; leaves the legacy loop
+    # in place for the other compile paths.
+    shorts_watch_refine_enabled: bool = False
+    shorts_watch_refine_max_iter: int = 5
     # Visual layout for shorts. `cropped_hud` (default) shrinks the
     # play area less than blur-fill by cropping to pure 9:16 from the
     # center + re-composites the League killfeed and minimap in the

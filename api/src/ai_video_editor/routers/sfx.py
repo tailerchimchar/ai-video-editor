@@ -12,14 +12,17 @@ app — poll `/jobs/{id}`.
 
 import asyncio
 import contextlib
+import re
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from ..config import settings
 from ..database import get_db
+from ..edits import apply_sfx
 from ..models import RankResponse
 from ..profiles import load_profile
 from ..sfx import extract_sfx
@@ -131,3 +134,58 @@ async def extract(req: ExtractSfxRequest):
     output_path, warning = _resolve_output_path(req.game, req.sound_name)
     _track(_run_extract_job(job_id, asset, req, output_path, warning))
     return RankResponse(job_id=job_id)
+
+
+# ---------------------------------------------------------------------
+# Overlay one or more SFX one-shots onto a rendered clip. Path-based --
+# reuse the trim/caption sanitizer pattern for output naming.
+# ---------------------------------------------------------------------
+
+
+class SfxHitIn(BaseModel):
+    """One SFX one-shot in the overlay stack."""
+
+    sfx_path: str = Field(..., description="Absolute path to a .wav/.mp3.")
+    at_seconds: float = Field(..., ge=0.0)
+    volume: float = Field(default=1.0, ge=0.0, le=4.0)
+
+
+class SfxOverlayBody(BaseModel):
+    source_path: str = Field(..., description="Absolute path to the input .mp4.")
+    sfx: list[SfxHitIn] = Field(..., min_length=1)
+    name: str | None = Field(default=None)
+
+
+_SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9_\-]+")
+
+
+def _sanitize(name: str) -> str:
+    return _SAFE_NAME_RE.sub("_", name).strip("_") or "sfx"
+
+
+@router.post("/overlay")
+async def sfx_overlay(body: SfxOverlayBody):
+    """Layer SFX one-shots on top of any .mp4's audio track. Sync --
+    returns the output path when the encode finishes.
+
+    Chain with `trim_source_to_clip` and `compile_custom_montage` to
+    build the classic 'joke lands + vine boom' TikTok gaming edit.
+    """
+    src = Path(body.source_path)
+    if not src.is_file():
+        raise HTTPException(404, f"source not found: {src}")
+
+    stem = _sanitize(body.name) if body.name else f"{_sanitize(src.stem)}_sfx"
+    out_dir = settings.workspace_dir / "sfx_overlays"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"{stem}.mp4"
+
+    ok, err = await asyncio.to_thread(
+        apply_sfx,
+        str(src),
+        str(out_path),
+        sfx=[s.model_dump() for s in body.sfx],
+    )
+    if not ok:
+        raise HTTPException(500, f"sfx overlay failed: {(err or '')[:500]}")
+    return {"ok": True, "output_path": str(out_path)}

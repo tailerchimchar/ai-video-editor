@@ -22,7 +22,19 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from .corrections import (
+    examples_hash,
+    load_recent_corrections,
+    render_corrections_section,
+)
+
 _HINTS_DIR = Path(__file__).parent / "game_hints"
+
+# Cap on corrections injected into any single prompt. 10 was enough for
+# a season's worth of feedback in our internal test — bump if the user
+# adds so many they never see the older ones. Recency-sorted so newest
+# wins even at the cap.
+_CORRECTIONS_LIMIT = 10
 
 
 # ---------------------------------------------------------------------
@@ -191,6 +203,27 @@ class ClipAnalysis(BaseModel):
 # ---------------------------------------------------------------------
 
 
+def _resolve_hint_file(game: str | None) -> tuple[Path | None, str]:
+    """Locate the .md file for `game`. Returns (`path or None`,
+    `resolved_name`). Never reads content — split so `load_game_hints`
+    and the corrections loader can share the resolution logic."""
+    if game:
+        g = game.lower().strip()
+        specific = _HINTS_DIR / f"{g}.md"
+        if specific.is_file():
+            return specific, specific.stem
+        for candidate in _HINTS_DIR.glob("*.md"):
+            stem = candidate.stem
+            if stem.startswith("_"):
+                continue
+            if stem in g:
+                return candidate, stem
+    default = _HINTS_DIR / "_default.md"
+    if default.is_file():
+        return default, "_default"
+    return None, "_missing"
+
+
 def load_game_hints(game: str | None) -> tuple[str, str]:
     """Return (`hint_text`, `resolved_hint_name`).
 
@@ -201,27 +234,22 @@ def load_game_hints(game: str | None) -> tuple[str, str]:
          `"League of Legends_05-29-2026_..."` -> `league.md`)
       3. `_default.md`
 
+    Automatically appends the game's recent corrections (from
+    `<game>_examples.jsonl` — see `corrections.py`) so any prompt
+    built from these hints inherits the DSPy-style few-shot memory
+    without caller changes. Bumping the examples file bumps the
+    effective PROMPT_VERSION (see `game_hints_prompt_version`) which
+    invalidates per-clip analyzer sidecars cleanly.
+
     Never raises — missing hints degrade to a minimal generic prompt
     rather than crashing the compile.
     """
-    if game:
-        g = game.lower().strip()
-        specific = _HINTS_DIR / f"{g}.md"
-        if specific.is_file():
-            return specific.read_text(encoding="utf-8"), specific.stem
-        # Substring match — Outplayed session folders / display names
-        # often carry the game as a prefix ("League of Legends", "Valorant")
-        # so a simple `<name> in game` catches most real-world inputs.
-        for candidate in _HINTS_DIR.glob("*.md"):
-            stem = candidate.stem
-            if stem.startswith("_"):
-                continue
-            if stem in g:
-                return candidate.read_text(encoding="utf-8"), stem
-    default = _HINTS_DIR / "_default.md"
-    if default.is_file():
-        return default.read_text(encoding="utf-8"), "_default"
-    return "", "_missing"
+    path, resolved = _resolve_hint_file(game)
+    base = path.read_text(encoding="utf-8") if path else ""
+    if resolved not in ("_missing", "_default") and game:
+        corrections = load_recent_corrections(resolved, limit=_CORRECTIONS_LIMIT)
+        base += render_corrections_section(corrections)
+    return base, resolved
 
 
 # ---------------------------------------------------------------------
@@ -491,3 +519,20 @@ def game_hints_prompt_version(game: str | None) -> int:
     hints_text, _ = load_game_hints(game)
     m = _PROMPT_VERSION_RE.search(hints_text)
     return int(m.group(1)) if m else 0
+
+
+def game_hints_effective_version(game: str | None) -> str:
+    """Composite version key that changes when EITHER the .md rubric
+    version changes OR a correction is appended. Use this as the cache
+    key for per-clip analyzer sidecars so recording a correction
+    invalidates them cleanly without touching the .md file.
+
+    Format: `v<md_version>-<examples_hash>` (hash empty when no
+    corrections yet). Stable string, safe for filenames.
+    """
+    md_version = game_hints_prompt_version(game)
+    _, resolved = _resolve_hint_file(game)
+    if resolved in ("_missing", "_default") or not game:
+        return f"v{md_version}"
+    h = examples_hash(resolved)
+    return f"v{md_version}-{h}" if h else f"v{md_version}"

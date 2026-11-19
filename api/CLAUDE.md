@@ -86,8 +86,9 @@ data; the folder name is a pure function of the asset + candidates
 | `outplayed_clip` | File ≤ `OUTPLAYED_CLIP_MAX_SECONDS` → it *is* an Outplayed event clip | $0 (one ffprobe) | High (Outplayed already detected it) |
 | `riot_api` | League MATCH-V5 timeline `CHAMPION_KILL` events, correlated to the recording's wall-clock window | $0 | Highest (ground truth) |
 | `audio_peak` | RMS energy peaks in a low-rate mono WAV | $0 (local ffmpeg+numpy) | Medium (loud ≈ action) |
-| `transcript_keyword` | Local Whisper STT (`transcribe` job → `transcripts` table) → spoken hype/funny cues | $0 (local CPU STT) | Medium (game-agnostic; cue-based) |
-| `overwolf_game_event` | Reserved — needs a live Overwolf capture app | — | (future) |
+| `transcript_keyword` | Local Whisper STT (`transcribe` job → `transcripts` table) → spoken hype/funny cues + VADER high-arousal branch | $0 (local CUDA/CPU STT via faster-whisper) | Medium (game-agnostic; cue-based) |
+| `cv_kda` | Scoreboard OCR via tesseract per game profile | $0 (local tesseract) | Medium |
+| `overwolf_game_event` | **Ground-truth kill/death/assist/spike/clutch from Outplayed's log**; killfeed OCR verifier drops teammate-kill / death frames | $0 | Highest (game-client data) |
 
 The duration split is empirically grounded: probing the library showed
 a clean gap (~39 s clips vs ~900 s+ recordings), so the cutoff is

@@ -364,3 +364,226 @@ def _review_comp_pass(
         n_frames=n_frames,
         backend=backend,
     )
+
+
+# ---------------------------------------------------------------------
+# Watch-montage refine loop -- panel-packed critic + drop-and-re-render
+# ---------------------------------------------------------------------
+
+
+from collections.abc import Callable, Sequence  # noqa: E402
+
+from .watch_montage import MomentFlag, MontageCritique, WatchResult, watch_montage  # noqa: E402
+
+# Flag categories that trigger dropping the clip they land in.
+# Positive categories (great_moment, payoff_lands, good_buildup) protect
+# a clip from being dropped even if a negative flag also lands on it.
+_NEGATIVE_CATEGORIES = frozenset(
+    {"dead_air", "scoreboard", "own_death", "teammate_kill_only", "boring_pacing"}
+)
+_POSITIVE_CATEGORIES = frozenset({"great_moment", "payoff_lands", "good_buildup"})
+
+
+@dataclass
+class WatchLoopResult:
+    """Outcome of the watch-montage refine loop.
+
+    `ok` is True on any completion that produced a rendered file
+    (including cap_reached and no_drops_possible -- we still ship the
+    last render). False only when the initial render itself failed.
+    """
+
+    ok: bool
+    passes: int
+    final_verdict: str
+    """One of `ship_it`, `needs_edits`, `start_over`, or `vlm_unavailable`."""
+
+    stopped_reason: str
+    """Loop termination cause -- ship_it, start_over, cap_reached,
+    no_drops_possible, would_empty_plan, vlm_unavailable, render_failed."""
+
+    dropped_clips: list[str] = field(default_factory=list)
+    """File names of clips dropped across all passes, in order."""
+
+    final_critique: MontageCritique | None = None
+    render_error: str | None = None
+
+
+def _clip_indices_to_drop(
+    flags: Sequence[MomentFlag],
+    clip_timeline: Sequence[tuple[float, float]],
+) -> list[int]:
+    """Map flags to 0-based clip indices to drop.
+
+    Rule: a clip is dropped if any flag landing in its montage-time
+    range has a negative category AND no flag in that same range has a
+    positive category. This means one great_moment flag protects the
+    entire clip even if a scoreboard flag also lands there.
+
+    `clip_timeline` is (t_start, t_end) per clip in the OUTPUT montage
+    timeline (not source timeline).
+    """
+    negatives: set[int] = set()
+    positives: set[int] = set()
+    for f in flags:
+        for i, (t0, t1) in enumerate(clip_timeline):
+            # Overlap check -- flag interval intersects clip interval.
+            if f.end_s > t0 and f.start_s < t1:
+                if f.category in _NEGATIVE_CATEGORIES:
+                    negatives.add(i)
+                elif f.category in _POSITIVE_CATEGORIES:
+                    positives.add(i)
+    return sorted(negatives - positives)
+
+
+def _clip_timeline_from_durations(durations: Sequence[float]) -> list[tuple[float, float]]:
+    """Given per-clip durations, compute cumulative (start, end) ranges
+    in output-montage time. Pure -- no ffprobe needed."""
+    out: list[tuple[float, float]] = []
+    t = 0.0
+    for d in durations:
+        end = t + max(0.0, float(d))
+        out.append((t, end))
+        t = end
+    return out
+
+
+@observe(name="vlm-watch-refine-loop")
+def watch_and_refine_montage(
+    *,
+    initial_render: Callable[[], tuple[bool, str | None, Path]],
+    re_render_after_drop: Callable[[list[int]], tuple[bool, str | None, Path]],
+    clip_durations: Sequence[float],
+    clip_names: Sequence[str],
+    max_passes: int = 5,
+    watch_fn: Callable[[str | Path], WatchResult] | None = None,
+) -> WatchLoopResult:
+    """Watch -> flag -> drop -> re-render loop.
+
+    Callbacks isolate this module from the concrete render pipeline:
+
+    - `initial_render()` -> renders the first cut and returns
+      (ok, err, out_path). Called once at pass 1.
+    - `re_render_after_drop(kept_indices)` -> re-renders using only the
+      clips at those 0-based positions in the original list. Returns
+      (ok, err, out_path). Called on each pass after clips are dropped.
+    - `clip_durations` -- output-timeline duration of each clip in the
+      ORIGINAL plan (used to map flag timestamps back to clip indices).
+      Must be aligned with `clip_names`.
+    - `clip_names` -- for reporting which clips got dropped.
+
+    `watch_fn` defaults to `watch_montage` but can be injected for tests.
+    """
+    watch_fn = watch_fn or watch_montage
+    kept: list[int] = list(range(len(clip_durations)))
+    dropped_names: list[str] = []
+    last_critique: MontageCritique | None = None
+
+    for pass_num in range(1, max_passes + 1):
+        if pass_num == 1:
+            ok, err, out_path = initial_render()
+        else:
+            ok, err, out_path = re_render_after_drop(kept)
+        if not ok:
+            return WatchLoopResult(
+                ok=False,
+                passes=pass_num,
+                final_verdict="render_failed",
+                stopped_reason="render_failed",
+                dropped_clips=dropped_names,
+                final_critique=last_critique,
+                render_error=err,
+            )
+
+        result = _watch_refine_pass(pass_num, out_path, watch_fn)
+        critique = result.critique
+        last_critique = critique
+        if critique is None:
+            return WatchLoopResult(
+                ok=True,
+                passes=pass_num,
+                final_verdict="vlm_unavailable",
+                stopped_reason="vlm_unavailable",
+                dropped_clips=dropped_names,
+                final_critique=None,
+                render_error=result.error,
+            )
+
+        if critique.overall_verdict == "ship_it":
+            return WatchLoopResult(
+                ok=True,
+                passes=pass_num,
+                final_verdict="ship_it",
+                stopped_reason="ship_it",
+                dropped_clips=dropped_names,
+                final_critique=critique,
+            )
+        if critique.overall_verdict == "start_over":
+            # No amount of clip-dropping saves a fundamentally broken
+            # input -- bail rather than churn to the cap.
+            return WatchLoopResult(
+                ok=True,
+                passes=pass_num,
+                final_verdict="start_over",
+                stopped_reason="start_over",
+                dropped_clips=dropped_names,
+                final_critique=critique,
+            )
+
+        # needs_edits -- translate flags to clip drops.
+        # Build a timeline for the CURRENT `kept` subset.
+        current_durations = [clip_durations[i] for i in kept]
+        timeline = _clip_timeline_from_durations(current_durations)
+        drop_in_kept = _clip_indices_to_drop(critique.flags, timeline)
+
+        if not drop_in_kept:
+            return WatchLoopResult(
+                ok=True,
+                passes=pass_num,
+                final_verdict="needs_edits",
+                stopped_reason="no_drops_possible",
+                dropped_clips=dropped_names,
+                final_critique=critique,
+            )
+
+        # Guardrail -- never let the loop empty the plan or drop it
+        # below 2 clips. Better to ship a montage with a scoreboard
+        # than to ship one clip.
+        remaining = len(kept) - len(drop_in_kept)
+        if remaining < 2:
+            return WatchLoopResult(
+                ok=True,
+                passes=pass_num,
+                final_verdict="needs_edits",
+                stopped_reason="would_empty_plan",
+                dropped_clips=dropped_names,
+                final_critique=critique,
+            )
+
+        # Translate positions in `kept` back to original clip indices,
+        # record names, update kept.
+        drop_originals = {kept[i] for i in drop_in_kept}
+        for i in sorted(drop_originals):
+            dropped_names.append(clip_names[i])
+        kept = [i for i in kept if i not in drop_originals]
+
+    return WatchLoopResult(
+        ok=True,
+        passes=max_passes,
+        final_verdict="needs_edits",
+        stopped_reason="cap_reached",
+        dropped_clips=dropped_names,
+        final_critique=last_critique,
+    )
+
+
+@observe(name="vlm-watch-refine-pass")
+def _watch_refine_pass(
+    pass_num: int,
+    out_path: Path,
+    watch_fn: Callable[[str | Path], WatchResult],
+) -> WatchResult:
+    """Thin @observe wrapper -- one pass = one Langfuse span. Argument
+    `pass_num` is captured in the observation for tree readability."""
+    _ = pass_num
+    return watch_fn(out_path)

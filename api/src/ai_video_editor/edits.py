@@ -420,13 +420,18 @@ def caption_filters(
     """
     if fontfile is None:
         fontfile = settings.caption_font_path
-    ff = _escape_fontfile_path(fontfile)
+    default_ff = _escape_fontfile_path(fontfile)
     parts: list[str] = []
     for s in segments or []:
         text = _escape_drawtext((s.get("text") or "").strip())
         if not text:
             continue
         style = resolve_caption_style(s.get("style"))
+        # Per-segment font override -- pass `font_path` for a specific
+        # font (e.g. `settings.caption_emoji_font_path` when the segment
+        # is an emoji glyph). Falls back to the caption default.
+        seg_font = s.get("font_path")
+        ff = _escape_fontfile_path(seg_font) if seg_font else default_ff
         min_dur = float(style.get("min_duration_seconds") or 0.1)
         a = max(0.0, float(s["start_seconds"]) - clip_start_offset)
         b = max(a + min_dur, float(s["end_seconds"]) - clip_start_offset)
@@ -628,6 +633,64 @@ def apply_focus(
         ",".join(chain),
         "-c:a",
         "copy",
+        out_path,
+    ]
+    return _run_ffmpeg(cmd)
+
+
+def apply_sfx(
+    source_path: str,
+    out_path: str,
+    *,
+    sfx: list[dict],
+) -> tuple[bool, str | None]:
+    """Overlay one or more SFX one-shots onto `source_path`'s audio.
+
+    `sfx` is a list of dicts, each shaping:
+      - `sfx_path`: absolute path to a .wav/.mp3/.ogg file
+      - `at_seconds`: playback time (source-timeline) to trigger
+      - `volume` (optional, default 1.0): 0.0..2.0 linear gain
+
+    Video stream is copied unchanged (no re-encode). Audio is remixed
+    via ffmpeg's `adelay` per SFX + a single `amix`. Missing sfx files
+    are skipped -- other overlays still land. Returns (False, reason)
+    when zero SFX entries are valid so the caller sees the misconfig.
+
+    Extension pattern: the same shape supports SFX libraries later --
+    higher layers can resolve names like "vine_boom" to a path in a
+    WORKSPACE/sfx/ dir before calling. Keep this primitive path-based.
+    """
+    valid = [s for s in (sfx or []) if Path(s.get("sfx_path", "")).is_file()]
+    if not valid:
+        return False, "no valid sfx entries (paths missing?)"
+
+    inputs: list[str] = ["-i", source_path]
+    filter_parts: list[str] = []
+    mix_ins: list[str] = ["[0:a]"]
+    for idx, s in enumerate(valid, start=1):
+        inputs.extend(["-i", s["sfx_path"]])
+        at_ms = max(0, round(float(s.get("at_seconds") or 0.0) * 1000))
+        vol = float(s.get("volume") or 1.0)
+        label = f"[sfx{idx}]"
+        # adelay=Nms|Nms delays BOTH channels; volume per SFX after that.
+        filter_parts.append(
+            f"[{idx}:a]adelay={at_ms}|{at_ms},volume={vol:.3f}{label}"
+        )
+        mix_ins.append(label)
+    # amix -- normalize=0 preserves per-SFX levels; dropout_transition=0
+    # keeps gain constant when a track ends.
+    filter_parts.append(
+        f"{''.join(mix_ins)}amix=inputs={len(mix_ins)}:"
+        f"dropout_transition=0:normalize=0[aout]"
+    )
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        settings.ffmpeg_path, "-y",
+        *inputs,
+        "-filter_complex", ";".join(filter_parts),
+        "-map", "0:v", "-map", "[aout]",
+        "-c:v", "copy",
+        "-c:a", "aac", "-b:a", "192k",
         out_path,
     ]
     return _run_ffmpeg(cmd)

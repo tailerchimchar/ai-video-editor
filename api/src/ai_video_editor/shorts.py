@@ -38,7 +38,7 @@ import logging
 import re
 import subprocess
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -828,6 +828,7 @@ def render_short(
     beat_flash: bool | None = None,
     beat_flash_source: str | None = None,
     game: str | None = None,
+    max_seconds: float | None = None,
 ) -> tuple[bool, str | None]:
     """Render one short from its plan. Returns (ok, error_message_or_none).
 
@@ -839,6 +840,10 @@ def render_short(
     a subtle white pulse. `beat_flash_source` selects what to flash on:
     `kills` (default), `downbeats`, or `beats`. `kills` doesn't need
     music; the others do.
+
+    `max_seconds` overrides `settings.shorts_max_duration_seconds` for
+    this render. Story shorts need a full round (90-120s); hype shorts
+    stay at the config default. `None` uses the config setting.
     """
     if not plan.clips:
         return False, "empty plan"
@@ -917,7 +922,11 @@ def render_short(
         "-b:a",
         "128k",
         "-t",
-        str(settings.shorts_max_duration_seconds),
+        str(
+            max_seconds
+            if max_seconds is not None
+            else settings.shorts_max_duration_seconds
+        ),
         str(out_path),
     ]
 
@@ -1276,6 +1285,122 @@ def _apply_window_fixes(
     return tuple(clip_list), applied
 
 
+def _render_and_watch_refine(
+    plan: ShortPlan,
+    out_path: Path,
+    *,
+    mode: str,
+    asset: dict,
+    music_path: str | None,
+    run_vlm_check: bool,
+    max_iter: int,
+    layout: str | None = None,
+    beat_flash: bool | None = None,
+    beat_flash_source: str | None = None,
+    max_seconds: float | None = None,
+) -> RenderResult:
+    """Alt whole-comp refine loop -- watch the whole rendered montage
+    with `watch_montage`, drop clips whose panels flag as negative
+    categories, and re-render.
+
+    Same signature and RenderResult shape as `_render_and_refine` so
+    callers can swap between the two via `shorts_watch_refine_enabled`.
+
+    Skips the VLM step entirely when `run_vlm_check` is False or
+    `settings.vlm_enabled` is False -- renders once and returns.
+    """
+    from .vlm.loops import watch_and_refine_montage
+
+    game_hint = asset.get("game")
+    music_out = music_path if mode == "montage" else None
+
+    clip_names = [c.file for c in plan.clips]
+    clip_durations = [
+        max(0.0, c.end_seconds - c.start_seconds) for c in plan.clips
+    ]
+
+    # Bag mutable state for the callback closures. `current_plan` gets
+    # rebuilt from the ORIGINAL plan's clips using kept-indices, so a
+    # dropped-clip pass never accumulates unexpected mutations.
+    original_clips = plan.clips
+
+    def _do_render(kept_indices: list[int] | None) -> tuple[bool, str | None, Path]:
+        if kept_indices is None:
+            current = plan
+        else:
+            current = replace(
+                plan,
+                clips=tuple(original_clips[i] for i in kept_indices),
+            )
+        ok, err = render_short(
+            current, out_path, mode=mode, music_path=music_path,
+            layout=layout, beat_flash=beat_flash,
+            beat_flash_source=beat_flash_source, game=game_hint,
+            max_seconds=max_seconds,
+        )
+        return ok, err, out_path
+
+    if not run_vlm_check or not settings.vlm_enabled:
+        ok, err, _ = _do_render(None)
+        return RenderResult(
+            plan=plan, out_path=out_path, ok=ok, error=err,
+            music_path=music_out,
+            extras={"refine_iterations": 0, "watch_refine": True},
+        )
+
+    loop_result = watch_and_refine_montage(
+        initial_render=lambda: _do_render(None),
+        re_render_after_drop=lambda kept: _do_render(kept),
+        clip_durations=clip_durations,
+        clip_names=clip_names,
+        max_passes=max_iter,
+    )
+
+    if not loop_result.ok:
+        return RenderResult(
+            plan=plan, out_path=out_path, ok=False,
+            error=loop_result.render_error,
+            music_path=music_out,
+            extras={
+                "refine_iterations": loop_result.passes,
+                "refine_stopped": loop_result.stopped_reason,
+                "watch_refine": True,
+            },
+        )
+
+    # Reconstruct the FINAL plan from the dropped-clip trail so
+    # downstream (index.md, extras) reflects what was actually rendered.
+    dropped_set = set(loop_result.dropped_clips)
+    final_clips = tuple(c for c in original_clips if c.file not in dropped_set)
+    final_plan = replace(plan, clips=final_clips) if final_clips else plan
+
+    verdict_map = {
+        "ship_it": "pass",
+        "needs_edits": "needs_review",
+        "start_over": "start_over",
+        "vlm_unavailable": None,
+    }
+    vlm_verdict = verdict_map.get(loop_result.final_verdict, loop_result.final_verdict)
+    vlm_why: str | None = None
+    if loop_result.final_critique is not None:
+        vlm_why = loop_result.final_critique.top_recommendation
+
+    return RenderResult(
+        plan=final_plan,
+        out_path=out_path,
+        ok=True,
+        vlm_verdict=vlm_verdict,
+        vlm_why=vlm_why,
+        music_path=music_out,
+        extras={
+            "refine_iterations": loop_result.passes,
+            "refine_stopped": loop_result.stopped_reason,
+            "dropped_clips": loop_result.dropped_clips,
+            "watch_refine": True,
+        },
+    )
+
+
 def _render_and_refine(
     plan: ShortPlan,
     out_path: Path,
@@ -1288,6 +1413,7 @@ def _render_and_refine(
     layout: str | None = None,
     beat_flash: bool | None = None,
     beat_flash_source: str | None = None,
+    max_seconds: float | None = None,
 ) -> RenderResult:
     """Render → VLM whole-comp review → refine loop.
 
@@ -1320,6 +1446,7 @@ def _render_and_refine(
             beat_flash=beat_flash,
             beat_flash_source=beat_flash_source,
             game=game_hint,
+            max_seconds=max_seconds,
         )
         if not ok:
             return RenderResult(
@@ -3023,6 +3150,7 @@ def build_custom_montage(
     beat_flash_source: str | None = None,
     use_clip_analyzer: bool | None = None,
     run_vlm_check: bool = True,
+    max_seconds: float | None = None,
 ) -> dict:
     """Compile ONE montage from an EXPLICIT list of clip paths — no
     scanning, no ranking, no bucketing. Clips can come from anywhere:
@@ -3071,62 +3199,40 @@ def build_custom_montage(
 
     resolved_name = name or f"custom_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
-    def _wrap_multi(p: Path, duration: float) -> list[ShortClip]:
-        """Run the analyzer directly + split into sub-clips per
-        moment. Reuses the same logic as the outplayed compile."""
-        enabled = (
-            settings.shorts_use_clip_analyzer
-            if use_clip_analyzer is None
-            else use_clip_analyzer
-        )
-        analysis = None
-        if enabled:
-            try:
-                from .vlm.clip_analyzer import analyze_source_clip
+    def _wrap_single(p: Path, duration: float) -> ShortClip:
+        """User-picked custom paths get ONE clip out per path.
 
-                analysis = analyze_source_clip(
-                    p, game=game, clip_duration_seconds=duration
-                )
-            except Exception as exc:
-                _log.warning(
-                    "custom analyzer crashed on %s (non-fatal): %s", p.name, exc
-                )
-        # Fake an OutplayedClipRef so we can reuse the splitter.
-        pseudo_ref = OutplayedClipRef(
-            path=p, duration_seconds=duration, mtime_epoch=0.0
-        )
-        clips = _ref_to_short_clips_from_analysis(
-            pseudo_ref, analysis, game=game
-        )
-        # Retag event_type from "outplayed_clip" → "custom" for
-        # untrimmed fallbacks. The multi-moment splits already carry
-        # their payoff_type.
-        return [
-            (
-                c
-                if c.event_type != "outplayed_clip"
-                else ShortClip(
-                    file=c.file,
-                    path=c.path,
-                    event_type="custom",
-                    start_seconds=c.start_seconds,
-                    end_seconds=c.end_seconds,
-                    hype_score=c.hype_score,
-                    funny_score=c.funny_score,
-                    story_score=c.story_score,
-                    reason=c.reason.replace(
-                        "Outplayed auto-cut event clip", "user-supplied clip"
-                    ),
-                    anchor_offset_seconds=c.anchor_offset_seconds,
-                )
-            )
-            for c in clips
-        ]
+        Different from the outplayed direct compile, which splits
+        long raw event clips into multiple sub-clips per detected
+        moment. Custom compile trusts the user's picks — if they
+        supplied 8 paths, they get 8 clips (not 16 with hidden
+        multi-moment splits from the same source).
 
-    sub_clips: list[ShortClip] = []
-    for p, duration in resolved:
-        sub_clips.extend(_wrap_multi(p, duration))
-    tup = tuple(sub_clips)
+        Uses the analyzer's PRIMARY moment to trim the window (still
+        beneficial — analyzer cuts padding around the payoff even for
+        highlight-folder clips). Falls back to whole-clip if analyzer
+        is disabled / low-confidence.
+        """
+        start, end, anchor_offset, description = _analyze_and_window(
+            p, duration, game, use_analyzer=use_clip_analyzer
+        )
+        reason = "user-supplied clip"
+        if description:
+            reason = f"{reason} — {description}"
+        return ShortClip(
+            file=p.name,
+            path=p,
+            event_type="custom",
+            start_seconds=start,
+            end_seconds=end,
+            hype_score=1.0,
+            funny_score=0.5,
+            story_score=0.5,
+            reason=reason,
+            anchor_offset_seconds=anchor_offset,
+        )
+
+    tup = tuple(_wrap_single(p, duration) for p, duration in resolved)
     plan = ShortPlan(
         bucket=_CUSTOM_BUCKET,
         clips=tup,
@@ -3154,22 +3260,42 @@ def build_custom_montage(
     # `path: "multi"` signals _render_and_refine that each clip has
     # its own source (see asset_src handling in the refine block).
     fake_asset = {"path": "multi", "game": game}
-    result = _render_and_refine(
-        plan,
-        out_path,
-        mode="montage",
-        asset=fake_asset,
-        music_path=resolved_music,
-        run_vlm_check=run_vlm_check,
-        max_iter=(
-            settings.shorts_max_review_iter
-            if settings.shorts_auto_fix_enabled
-            else 0
-        ),
-        layout=layout,
-        beat_flash=beat_flash,
-        beat_flash_source=beat_flash_source,
-    )
+    # Two whole-comp critics available. `shorts_watch_refine_enabled`
+    # switches to the panel-packed watch_montage critic that sees the
+    # entire rendered video and drops flagged clips before re-render.
+    # Currently opt-in and only wired here on the custom-compile path.
+    if settings.shorts_watch_refine_enabled and run_vlm_check:
+        result = _render_and_watch_refine(
+            plan,
+            out_path,
+            mode="montage",
+            asset=fake_asset,
+            music_path=resolved_music,
+            run_vlm_check=run_vlm_check,
+            max_iter=settings.shorts_watch_refine_max_iter,
+            layout=layout,
+            beat_flash=beat_flash,
+            beat_flash_source=beat_flash_source,
+            max_seconds=max_seconds,
+        )
+    else:
+        result = _render_and_refine(
+            plan,
+            out_path,
+            mode="montage",
+            asset=fake_asset,
+            music_path=resolved_music,
+            run_vlm_check=run_vlm_check,
+            max_iter=(
+                settings.shorts_max_review_iter
+                if settings.shorts_auto_fix_enabled
+                else 0
+            ),
+            layout=layout,
+            beat_flash=beat_flash,
+            beat_flash_source=beat_flash_source,
+            max_seconds=max_seconds,
+        )
 
     _write_custom_index_md(
         out_folder,

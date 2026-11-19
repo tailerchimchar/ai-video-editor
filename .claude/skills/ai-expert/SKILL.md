@@ -137,6 +137,51 @@ than `parse`, keep the same manual-usage attach pattern OR add
 Langfuse tracking with the SDK's plain `messages.create` (which
 IS instrumented).
 
+## Corrections memory — the DSPy-inspired flywheel (SHIPPED 2026-07-14)
+
+`vlm/corrections.py` + `routers/mentor.py` + MCP `mentor_record_correction`.
+Structured user corrections accumulate into a per-game JSONL, auto-load
+into every VLM system prompt for that game, and their content hash rolls
+into a composite PROMPT_VERSION so caches invalidate cleanly. Steal-the-
+concept from Stanford's DSPy (declarative self-improvement); no DSPy
+dependency — the win is that rules are structured examples the LLM
+pattern-matches, not just prose.
+
+Contract to preserve:
+
+1. **File-order recency, not timestamp.** `load_recent_corrections`
+   reverses the file lines. Multiple appends in the same microsecond
+   don't confuse the sort — the last line wins. Same guarantee if a
+   user hand-edits the file to reorder.
+2. **Malformed lines are dropped silently.** One bad append doesn't
+   kneecap the whole prompt. Never `raise` from the read path.
+3. **Cache key is composite.** `game_hints_effective_version(game)`
+   returns `v<md_version>-<examples_hash>`. A code path that keys its
+   sidecar on `md_version` alone will silently stale after a
+   correction. Use the effective version.
+4. **The write is append-only.** No edit / delete in the tool surface.
+   If the user wants to prune, `mentor_recent_corrections` + a manual
+   `.jsonl` edit is the escape hatch. Adding a `delete_correction`
+   tool would need to justify not breaking file-order recency.
+5. **`clip_ref` is provenance, not routing.** The VLM sees the rule
+   regardless of the clip it's currently reviewing — the ref is just
+   for auditability. Do not filter corrections by "matching clip"
+   unless we've evaluated it worth the complexity.
+
+When to record a correction:
+
+- User pushes back on a specific pipeline output in chat.
+- User introduces a new rule ("kills need ≥1s post-buffer").
+- User explicitly says "remember this for next time."
+
+When NOT to record a correction:
+
+- Compliments / ships-it feedback (no rule to encode).
+- One-off requests ("just this one time make it 30s"). Corrections
+  are RULES; one-offs are just requests.
+- Anything already covered by an existing recent correction (would
+  just dilute the top-K cut).
+
 ## Prompt caching — frozen system, volatile user
 
 `ranker.py:39-95` is a **frozen** system prompt — no timestamps, no

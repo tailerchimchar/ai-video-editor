@@ -215,6 +215,31 @@ def test_detect_clamps_windows_to_video_bounds(
     assert candidates[1]["end_seconds"] <= 60.0
 
 
+def test_detect_verifier_no_op_when_video_missing(
+    tmp_path, monkeypatch
+) -> None:
+    """When the video file doesn't exist on disk, killfeed verifier
+    can't OCR anything — it returns pass-through and all kill
+    candidates are kept. Real ffmpeg + tesseract path is exercised by
+    end-to-end analyze pass; this test just proves the guard fires."""
+    clear_dispatch_cache()
+    log_dir = tmp_path / "Overwolf" / "Log" / "Apps" / "Outplayed"
+    log_dir.mkdir(parents=True)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+
+    target = r"C:\Val\match.mp4"
+    events = [
+        _make_event("kill", 125000, "1"),
+        _make_event("kill", 200000, "2"),
+    ]
+    _write_log(log_dir, [_make_dispatch(target, events=events)])
+
+    candidates = detect_overwolf_events(target, duration_seconds=600.0)
+    # Both kills preserved (video path doesn't exist → verifier no-ops).
+    kill_types = [c["event_type"] for c in candidates if c["event_type"] == "kill"]
+    assert len(kill_types) == 2
+
+
 def test_detect_skips_events_past_duration(tmp_path, monkeypatch) -> None:
     """Log occasionally has events slightly past the video's actual
     duration (encoder rounding). Drop them cleanly."""

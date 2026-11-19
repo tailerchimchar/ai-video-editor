@@ -182,7 +182,9 @@ _VISIBLE_SOURCES = frozenset({"riot_api", "cv_kda", "overwolf_game_event"})
 _VISIBLE_EVENTS = frozenset({"kill", "death", "assist", "ace", "pentakill",
                              "quadrakill", "doublekill", "teamfight",
                              "baron", "dragon", "objective",
-                             "clutch", "victory"})
+                             "clutch", "victory",
+                             # Multi-kill clusters from overwolf_events.
+                             "multi_kill_2", "multi_kill_3", "multi_kill_4"})
 
 
 # Seconds of slack around a visible event for the audio promoter to
