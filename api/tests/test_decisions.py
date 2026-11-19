@@ -1,15 +1,17 @@
 """Typed decision adapter: rules / Haiku / Jev backends, selection,
-fallback, spend guard, tracing and the pre-filter. No network."""
+batching, fallback, spend guard, tracing and the pre-filter. No network."""
 
 from __future__ import annotations
 
+import json
+import math
 from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
 
 from ai_video_editor import anthropic_surface, decisions
-from ai_video_editor.bucketing import prefilter_candidates, route_clip
+from ai_video_editor.bucketing import classify_formats, prefilter_candidates, route_clip
 from ai_video_editor.config import settings
 from ai_video_editor.decisions import (
     Answer,
@@ -19,7 +21,7 @@ from ai_video_editor.decisions import (
     ask,
     select_backend,
 )
-from ai_video_editor.decisions.backends import BACKENDS, haiku, jev
+from ai_video_editor.decisions.backends import BACKENDS, Backend, haiku, jev
 from ai_video_editor.taxonomy import Format, Topic
 
 
@@ -35,19 +37,21 @@ FORMAT_Q = ChoiceQuestion(prompt="Which format?", options=Format)
 
 
 class FakeClient:
-    """Stands in for anthropic.Anthropic; `replies` are consumed per call."""
+    """Stands in for anthropic.Anthropic. Each reply is None (malformed) or
+    a list of `(value, probability)`, one per item in that call."""
 
-    def __init__(self, replies):
-        self.replies = list(replies)
+    def __init__(self, replies=None):
+        self.replies = list(replies or [])
         self.calls: list[dict] = []
         self.messages = SimpleNamespace(parse=self._parse)
 
     def _parse(self, **kwargs):
         self.calls.append(kwargs)
-        reply = self.replies.pop(0)
+        reply = self.replies.pop(0) if self.replies else None
         if reply is None:
             return _response(None)
-        return _response(kwargs["output_format"](**reply))
+        results = [{"index": i, "value": v, "probability": p} for i, (v, p) in enumerate(reply)]
+        return _response(kwargs["output_format"](results=results))
 
 
 def _response(parsed):
@@ -60,6 +64,11 @@ def _response(parsed):
 
 def _use_client(monkeypatch, client):
     monkeypatch.setattr(haiku, "make_client", lambda: client)
+
+
+def _explicit_haiku(monkeypatch):
+    monkeypatch.setattr(settings, "decisions_backend", "haiku")
+    monkeypatch.setattr(settings, "anthropic_api_key", "sk-test")
 
 
 # --- models + rules ---
@@ -112,43 +121,45 @@ def test_rules_bool_includes_by_default():
 
 
 def test_haiku_choice_schema_is_literal_of_enum_values(monkeypatch):
-    client = FakeClient([{"value": "hype", "probability": 0.8}])
+    client = FakeClient([[("hype", 0.8)]])
     _use_client(monkeypatch, client)
     answer = haiku.answer(FORMAT_Q, {"clip": {"event": "ace"}})
     assert answer == Answer(value=Format.hype, probability=0.8, backend="haiku")
     call = client.calls[0]
     assert call["model"] == settings.ranker_model
     assert call["system"][0]["cache_control"] == {"type": "ephemeral"}
-    schema = call["output_format"].model_json_schema()
-    assert set(schema["properties"]["value"]["enum"]) == {f.value for f in Format}
+    item = call["output_format"].model_json_schema()["$defs"]["DecisionItem"]
+    assert set(item["properties"]["value"]["enum"]) == {f.value for f in Format}
 
 
 def test_haiku_bool_and_score(monkeypatch):
-    client = FakeClient(
-        [
-            {"value": False, "probability": 0.9},
-            {"value": 7, "probability": 0.6},
-        ]
-    )
+    client = FakeClient([[(False, 0.9)], [(7, 0.6)]])
     _use_client(monkeypatch, client)
     assert haiku.answer(BoolQuestion(prompt="b"), {}).value is False
-    score = haiku.answer(ScoreQuestion(prompt="s", lo=1, hi=10), {})
-    assert score.value == 7
-    bounded = client.calls[1]["output_format"]
+    assert haiku.answer(ScoreQuestion(prompt="s", lo=1, hi=10), {}).value == 7
+    batch = client.calls[1]["output_format"]
     with pytest.raises(ValidationError):
-        bounded(value=11, probability=0.5)
+        batch(results=[{"index": 0, "value": 11, "probability": 0.5}])
 
 
 def test_haiku_retries_once_on_malformed_then_succeeds(monkeypatch):
-    client = FakeClient([None, {"value": "funny", "probability": 0.7}])
+    client = FakeClient([None, [("funny", 0.7)]])
     _use_client(monkeypatch, client)
     answer = haiku.answer(FORMAT_Q, {})
     assert answer.value == Format.funny
     assert len(client.calls) == 2
 
 
+def test_haiku_reply_with_wrong_item_count_is_malformed(monkeypatch):
+    client = FakeClient([[("hype", 0.5)], [("hype", 0.5), ("funny", 0.5)]])
+    _use_client(monkeypatch, client)
+    answers = haiku.answer_many([(FORMAT_Q, {}), (FORMAT_Q, {})])
+    assert [a.value for a in answers] == [Format.hype, Format.funny]
+    assert len(client.calls) == 2
+
+
 def test_haiku_malformed_twice_falls_back_to_rules(monkeypatch):
-    monkeypatch.setattr(settings, "anthropic_api_key", "sk-test")
+    _explicit_haiku(monkeypatch)
     client = FakeClient([None, None])
     _use_client(monkeypatch, client)
     answer = ask(FORMAT_Q, {"clip": {"event": "ace"}})
@@ -157,15 +168,38 @@ def test_haiku_malformed_twice_falls_back_to_rules(monkeypatch):
     assert len(client.calls) == 2
 
 
+def test_100_candidates_cost_ceil_100_over_batch_size_calls(monkeypatch):
+    _explicit_haiku(monkeypatch)
+    monkeypatch.setattr(settings, "decisions_batch_size", 40)
+    client = FakeClient([[(True, 0.9)] * 40, [(True, 0.9)] * 40, [(True, 0.9)] * 20])
+    _use_client(monkeypatch, client)
+    cands = [{"id": str(i)} for i in range(100)]
+    kept, dropped = prefilter_candidates(cands)
+    assert len(client.calls) == math.ceil(100 / 40) == 3
+    assert anthropic_surface._calls["decisions"] == 3
+    assert len(kept) == 100 and dropped == []
+
+
+def test_haiku_batch_keeps_item_order_and_state(monkeypatch):
+    client = FakeClient([[(False, 0.9), (True, 0.8)]])
+    _use_client(monkeypatch, client)
+    answers = haiku.answer_many(
+        [(BoolQuestion(prompt="b"), {"n": "first"}), (BoolQuestion(prompt="b"), {"n": "second"})]
+    )
+    assert [a.value for a in answers] == [False, True]
+    sent = json.loads(client.calls[0]["messages"][0]["content"])
+    assert [i["state"]["n"] for i in sent["items"]] == ["first", "second"]
+
+
 def test_every_haiku_call_is_counted_by_the_spend_guard(monkeypatch):
-    client = FakeClient([None, {"value": "hype", "probability": 0.5}])
+    client = FakeClient([None, [("hype", 0.5)]])
     _use_client(monkeypatch, client)
     haiku.answer(FORMAT_Q, {})
     assert anthropic_surface._calls["decisions"] == 2
 
 
 def test_spend_cap_falls_back_to_rules_without_calling_anthropic(monkeypatch):
-    monkeypatch.setattr(settings, "anthropic_api_key", "sk-test")
+    _explicit_haiku(monkeypatch)
     monkeypatch.setattr(settings, "decisions_max_calls", 0)
     client = FakeClient([])
     _use_client(monkeypatch, client)
@@ -185,7 +219,7 @@ def test_haiku_call_is_traced_with_backend_metadata(monkeypatch):
             seen["trace"] = kw
 
     monkeypatch.setattr(anthropic_surface, "get_client", lambda: FakeLangfuse())
-    _use_client(monkeypatch, FakeClient([{"value": "hype", "probability": 0.8}]))
+    _use_client(monkeypatch, FakeClient([[("hype", 0.8)]]))
     haiku.answer(FORMAT_Q, {})
     assert seen["generation"]["model"] == "claude-haiku-4-5"
     assert seen["generation"]["usage_details"] == {"input": 10, "output": 5}
@@ -239,11 +273,18 @@ def test_select_defaults_to_rules_with_no_keys():
     assert select_backend() == "rules"
 
 
-def test_select_auto_prefers_jev_then_haiku(monkeypatch):
+def test_auto_never_selects_haiku_even_with_anthropic_key(monkeypatch):
     monkeypatch.setattr(settings, "anthropic_api_key", "sk")
-    assert select_backend() == "haiku"
+    assert select_backend() == "rules"
+
+
+def test_auto_selects_jev_only_with_key_and_transport(monkeypatch):
     monkeypatch.setattr(settings, "typesafe_api_key", "ts")
+    assert select_backend() == "rules"  # key but no transport wired
+    monkeypatch.setattr(jev, "default_transport", lambda: FakeTransport())
     assert select_backend() == "jev"
+    monkeypatch.setattr(settings, "typesafe_api_key", None)
+    assert select_backend() == "rules"
 
 
 def test_select_explicit_without_credentials_falls_back_to_rules(monkeypatch):
@@ -254,34 +295,42 @@ def test_select_explicit_without_credentials_falls_back_to_rules(monkeypatch):
 
 
 def test_select_explicit_haiku_ignores_jev_key(monkeypatch):
-    monkeypatch.setattr(settings, "decisions_backend", "haiku")
-    monkeypatch.setattr(settings, "anthropic_api_key", "sk")
+    _explicit_haiku(monkeypatch)
     monkeypatch.setattr(settings, "typesafe_api_key", "ts")
     assert select_backend() == "haiku"
 
 
 def test_ask_uses_the_selected_backend(monkeypatch):
     monkeypatch.setitem(
-        BACKENDS, "rules", lambda q, s: Answer(value=1, probability=1.0, backend="rules")
+        BACKENDS,
+        "rules",
+        Backend(lambda q, s: Answer(value=1, probability=1.0, backend="rules")),
     )
     assert ask(ScoreQuestion(prompt="s", lo=0, hi=1), {}).value == 1
 
 
-# --- prefilter ---
+# --- prefilter + classification ---
 
 
-def _fake_ask(probabilities):
-    def _ask(question, state):
-        p = probabilities[state["candidate"]["id"]]
-        return Answer(value=p >= 0.5, probability=p if p >= 0.5 else 1 - p, backend="rules")
+def _fake_ask_many(probabilities):
+    def _ask_many(items):
+        answers = []
+        for _question, state in items:
+            p = probabilities[state["candidate"]["id"]]
+            answers.append(
+                Answer(value=p >= 0.5, probability=p if p >= 0.5 else 1 - p, backend="rules")
+            )
+        return answers
 
-    return _ask
+    return _ask_many
 
 
 def test_prefilter_splits_on_include_probability(monkeypatch):
     monkeypatch.setattr(settings, "prefilter_min_probability", 0.35)
     cands = [{"id": "a"}, {"id": "b"}, {"id": "c"}]
-    kept, dropped = prefilter_candidates(cands, ask=_fake_ask({"a": 0.9, "b": 0.2, "c": 0.4}))
+    kept, dropped = prefilter_candidates(
+        cands, ask_many=_fake_ask_many({"a": 0.9, "b": 0.2, "c": 0.4})
+    )
     assert [c["id"] for c in kept] == ["a", "c"]
     assert dropped == [{"id": "b", "prefilter_probability": 0.2}]
     assert "prefilter_probability" not in kept[0]
@@ -295,7 +344,24 @@ def test_prefilter_with_rules_keeps_everything(monkeypatch):
     assert dropped == []
 
 
-def test_compute_candidates_prefilters_and_reports_dropped(monkeypatch):
+def test_classify_formats_uses_one_batched_ask(monkeypatch):
+    monkeypatch.setattr(settings, "decisions_backend", "rules")
+    clips = [{"event": "ace"}, {"event": "funny_callout"}, {"event": "zzz"}]
+    assert classify_formats(clips) == [route_clip(c)[0] for c in clips]
+    sizes = []
+
+    def counting(items):
+        sizes.append(len(items))
+        return [Answer(value=None, probability=0.0, backend="rules")] * len(items)
+
+    assert classify_formats(clips, ask_many=counting) == ["skipped"] * 3
+    assert sizes == [3]
+
+
+# --- persistence of dropped candidates ---
+
+
+def test_compute_candidates_keeps_dropped_rows_flagged_in_metadata(monkeypatch):
     from ai_video_editor.candidates import service
 
     monkeypatch.setattr(service, "get_duration_seconds", lambda _p: 26.0)
@@ -305,6 +371,41 @@ def test_compute_candidates_prefilters_and_reports_dropped(monkeypatch):
         lambda rows: ([], [{**r, "prefilter_probability": 0.1} for r in rows]),
     )
     rows, diag = service.compute_candidates({"id": "v1", "path": "x.mp4", "game": None})
-    assert rows == []
-    assert diag["prefilter_dropped"][0]["prefilter_probability"] == 0.1
-    assert diag["prefilter_dropped"][0]["source"] == "outplayed_clip"
+    assert diag["prefilter_dropped"] == 1
+    assert rows[0]["metadata"]["prefilter_dropped"] is True
+    assert rows[0]["metadata"]["prefilter_probability"] == 0.1
+    assert "prefilter_probability" not in rows[0]
+
+
+def test_highlights_index_carries_prefilter_fields(monkeypatch, tmp_path):
+    from ai_video_editor import highlights
+
+    monkeypatch.setattr(settings, "workspace_dir", tmp_path)
+    monkeypatch.setattr(highlights, "get_duration_seconds", lambda _p: 100.0)
+    monkeypatch.setattr(highlights, "trim_clip", lambda *a, **k: (True, None))
+    monkeypatch.setattr(highlights, "_vlm_enabled", lambda: False)
+    asset = {"id": "v1", "path": "x.mp4", "filename": "Valorant_05-15-2026_21-19-8-0.mp4"}
+    flagged = {
+        "id": "c1",
+        "event_type": "kill",
+        "start_seconds": 1.0,
+        "end_seconds": 9.0,
+        "metadata": {"prefilter_dropped": True, "prefilter_probability": 0.2},
+    }
+    plain = {**flagged, "id": "c2", "metadata": {}}
+    rankings = [
+        {
+            "candidate_id": cid,
+            "keep": True,
+            "suggested_start_seconds": 1.0,
+            "suggested_end_seconds": 9.0,
+        }
+        for cid in ("c1", "c2")
+    ]
+    summary = highlights.build_highlights(asset, rankings, [flagged, plain])
+    assert summary["clips"][0]["prefilter_dropped"] is True
+    assert summary["clips"][0]["prefilter_probability"] == 0.2
+    assert "prefilter_dropped" not in summary["clips"][1]
+    index = (settings.workspace_dir / summary["folder"]).joinpath("index.json")
+    written = json.loads(index.read_text("utf-8"))
+    assert written["clips"][0]["prefilter_probability"] == 0.2

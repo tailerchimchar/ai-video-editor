@@ -29,12 +29,16 @@ class JevTransport(Protocol):
     def bool(self, prompt: str, state: dict) -> tuple[bool, float]: ...
 
 
-def _default_transport() -> JevTransport:
-    raise DecisionError("Jev transport is not wired yet: no typesafe-sdk client configured")
+def default_transport() -> JevTransport | None:
+    """The real typesafe-sdk transport, or None until it is wired (needs
+    TYPESAFE_API_KEY and the SDK). `auto` selection requires it."""
+    return None
 
 
 def answer(question: TypedQuestion, state: dict, transport: JevTransport | None = None) -> Answer:
-    transport = transport or _default_transport()
+    transport = transport or default_transport()
+    if transport is None:
+        raise DecisionError("Jev transport is not wired yet: no typesafe-sdk client configured")
     if isinstance(question, ChoiceQuestion):
         options = [member.value for member in question.options]
         raw, probability = transport.choice(question.prompt, options, state)

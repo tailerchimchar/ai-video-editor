@@ -173,9 +173,17 @@ def compute_candidates(
 
     # Cheap decision first: drop noise before any ranker/VLM spend. Free
     # (keeps everything) unless an LLM decision backend is configured.
-    rows, dropped = prefilter_candidates(rows)
+    kept, dropped = prefilter_candidates(rows)
+    # Dropped rows are kept (flagged in metadata) rather than discarded, so
+    # the decision stays auditable; the rank job skips them.
+    for row in dropped:
+        row["metadata"] = {
+            **(row.get("metadata") or {}),
+            "prefilter_dropped": True,
+            "prefilter_probability": row.pop("prefilter_probability"),
+        }
 
-    return rows, {"riot": riot_status, "prefilter_dropped": dropped}
+    return kept + dropped, {"riot": riot_status, "prefilter_dropped": len(dropped)}
 
 
 _AUDIO_SOURCES = frozenset({"audio_peak", "transcript_keyword"})

@@ -62,6 +62,15 @@ def _riot_correlation(candidates: list[dict]) -> dict | None:
     return None
 
 
+def _prefilter_fields(cand: dict) -> dict:
+    """Pre-filter audit fields for index.json; empty unless the candidate
+    was flagged by the pre-filter."""
+    meta = cand.get("metadata") or {}
+    if not meta.get("prefilter_dropped"):
+        return {}
+    return {"prefilter_dropped": True, "prefilter_probability": meta.get("prefilter_probability")}
+
+
 def _mmss(seconds: float) -> str:
     s = int(seconds)
     return f"{s // 60}m{s % 60:02d}s"
@@ -273,6 +282,7 @@ def build_highlights(asset: dict, rankings: list[dict], candidates: list[dict]) 
                 "vlm_verdict": loop_result.final_verdict.verdict,
                 "vlm_why": loop_result.final_verdict.why,
                 "vlm_iterations": loop_result.iterations,
+                **_prefilter_fields(cand),
             }
             clips.append(clip_entry)
         else:
@@ -289,6 +299,7 @@ def build_highlights(asset: dict, rankings: list[dict], candidates: list[dict]) 
                     "reason": r.get("reason"),
                     "ok": ok,
                     "error": err,
+                    **_prefilter_fields(cand),
                 }
             )
 

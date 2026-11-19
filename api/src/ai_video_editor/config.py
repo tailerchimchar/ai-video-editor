@@ -42,11 +42,13 @@ class Settings(BaseSettings):
 
     # Typed decisions (decisions/): which backend answers Format/Topic
     # and include/exclude questions. `auto` = Jev if TYPESAFE_API_KEY is
-    # set, else Haiku if ANTHROPIC_API_KEY is set, else free local rules.
+    # set and wired, else free local rules. Haiku only when explicit.
     typesafe_api_key: str | None = None
     decisions_backend: Literal["auto", "jev", "haiku", "rules"] = "auto"
-    # Own call budget so per-candidate pre-filter asks can't starve the ranker.
+    # Own call budget (counts batch calls) so decisions can't starve the ranker.
     decisions_max_calls: int = 200
+    # Items answered per Haiku call.
+    decisions_batch_size: int = 40
     # A candidate is dropped before any agent/VLM call when its
     # include-probability is below this.
     prefilter_min_probability: float = 0.35

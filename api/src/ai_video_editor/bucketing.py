@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .config import settings
-from .decisions import Answer, BoolQuestion, ask
+from .decisions import Answer, BoolQuestion, ChoiceQuestion, ask_many
 from .taxonomy import Format, PayoffType
 
 _log = logging.getLogger(__name__)
@@ -199,21 +199,37 @@ def _include_probability(answer: Answer) -> float:
 
 
 def prefilter_candidates(
-    candidates: list[dict], ask: Callable[..., Answer] = ask
+    candidates: list[dict], ask_many: Callable[..., list[Answer]] = ask_many
 ) -> tuple[list[dict], list[dict]]:
     """Split candidates into (kept, dropped) before any agent or VLM call.
 
     A candidate is dropped when its include-probability is below
     `PREFILTER_MIN_PROBABILITY`. Dropped copies carry
-    `prefilter_probability` so the decision stays auditable. Pure given
-    `ask`; with the rules backend everything is kept.
+    `prefilter_probability` so the decision stays auditable. One batched
+    ask for the whole list; with the rules backend everything is kept.
     """
+    answers = ask_many([(_INCLUDE_QUESTION, {"candidate": c}) for c in candidates])
     kept: list[dict] = []
     dropped: list[dict] = []
-    for candidate in candidates:
-        probability = _include_probability(ask(_INCLUDE_QUESTION, {"candidate": candidate}))
+    for candidate, answer in zip(candidates, answers, strict=True):
+        probability = _include_probability(answer)
         if probability >= settings.prefilter_min_probability:
             kept.append(candidate)
         else:
             dropped.append({**candidate, "prefilter_probability": round(probability, 4)})
     return kept, dropped
+
+
+_FORMAT_QUESTION = ChoiceQuestion(
+    prompt="Which editorial format fits this clip: hype, story, voice_over, funny or arc_montage?",
+    options=Format,
+)
+
+
+def classify_formats(
+    clips: list[dict], ask_many: Callable[..., list[Answer]] = ask_many
+) -> list[Format | str]:
+    """Format for each clip via one batched ask. Falls back to `SKIPPED`
+    when the backend has no opinion."""
+    answers = ask_many([(_FORMAT_QUESTION, {"clip": clip}) for clip in clips])
+    return [a.value if a.value is not None else SKIPPED for a in answers]
