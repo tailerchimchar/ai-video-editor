@@ -13,7 +13,7 @@ import logging
 from collections.abc import Callable
 from pathlib import Path
 
-from ..compile import add_effect as spec_add_effect
+from ..compile import add_effects as spec_add_effects
 from ..compile import load_spec, resolve_clip_ref
 from ..compile import reorder_clips_explicit as spec_reorder_clips_explicit
 from ..compile_journal import read_journal
@@ -128,19 +128,33 @@ class EditsPlanExecutor:
         """Nothing to do: `preflight` rejects plans that contain cards."""
 
     def apply_effects(self, plan: EditPlan) -> None:
-        for effect in plan.effects:
-            clip_id = self._clip_id(effect.clip_ref)
-            idx = resolve_clip_ref(load_spec(self._folder), clip_id)
-            payload = effect_payload(_effect_body(effect))
-
-            def mutator(s: dict, idx=idx, payload=payload) -> tuple[dict, set[str]]:
-                return spec_add_effect(s, idx, payload)
-
-            self._edit(
-                mutator,
-                f"plan:effect:{effect.kind}",
-                {"clip_ref": effect.clip_ref, "effect": payload},
+        """All effects in one mutation, one render and one journal entry, so
+        the step is atomic: a failure adds none of them and a resume cannot
+        apply any twice."""
+        if not plan.effects:
+            return
+        spec = load_spec(self._folder)
+        batch = [
+            (
+                resolve_clip_ref(spec, self._clip_id(effect.clip_ref)),
+                effect_payload(_effect_body(effect)),
             )
+            for effect in plan.effects
+        ]
+
+        def mutator(s: dict) -> tuple[dict, set[str]]:
+            return spec_add_effects(s, batch)
+
+        self._edit(
+            mutator,
+            "plan:effects",
+            {
+                "effects": [
+                    {"clip_ref": effect.clip_ref, "effect": payload}
+                    for effect, (_idx, payload) in zip(plan.effects, batch, strict=True)
+                ]
+            },
+        )
 
     def apply_sfx(self, plan: EditPlan) -> None:
         """Nothing to do: `preflight` rejects plans that contain sfx."""

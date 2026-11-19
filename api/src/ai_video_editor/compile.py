@@ -307,9 +307,8 @@ def _build_clip_filterchain(
     # new model — explode + style at READ TIME so they keep rendering the
     # same way without touching the persisted spec.
     segs = list(clip.get("caption_segments", []) or [])
-    legacy_tiktok = (
-        clip.get("caption_mode", "").lower() == "tiktok"
-        and not any(s.get("style") for s in segs)
+    legacy_tiktok = clip.get("caption_mode", "").lower() == "tiktok" and not any(
+        s.get("style") for s in segs
     )
     if legacy_tiktok:
         from .edits import explode_segments_to_words
@@ -824,6 +823,16 @@ def add_effect(spec: dict, clip_idx: int, effect: dict) -> tuple[dict, set[str]]
     return spec, {clip["id"]}
 
 
+def add_effects(spec: dict, effects: list[tuple[int, dict]]) -> tuple[dict, set[str]]:
+    """Append several `(clip_idx, effect)` pairs in one mutation, so a caller
+    re-renders once and journals one entry for all of them."""
+    dirty: set[str] = set()
+    for clip_idx, effect in effects:
+        spec, ids = add_effect(spec, clip_idx, effect)
+        dirty |= ids
+    return spec, dirty
+
+
 def extend_clip(spec: dict, clip_idx: int, before: float, after: float) -> tuple[dict, set[str]]:
     """Grow a clip's source window. Caller should clamp to asset duration."""
     spec = json.loads(json.dumps(spec))
@@ -1034,9 +1043,7 @@ def reorder_clips_explicit(spec: dict, clip_ids: list[str]) -> tuple[dict, set[s
             parts.append(f"missing: {sorted(missing)}")
         if extra:
             parts.append(f"unknown: {sorted(extra)}")
-        raise ValueError(
-            f"reorder_clips_explicit: id sets don't match. {' '.join(parts)}"
-        )
+        raise ValueError(f"reorder_clips_explicit: id sets don't match. {' '.join(parts)}")
 
     spec["clips"] = [by_id[cid] for cid in clip_ids]
     return spec, set(clip_ids)
@@ -1065,9 +1072,7 @@ def reorder_clips(spec: dict, mode: str) -> tuple[dict, set[str]]:
     cached parts will be reused — only concat order changes.
     """
     if mode not in _VALID_REORDER_MODES:
-        raise ValueError(
-            f"unknown reorder mode {mode!r}; expected one of {_VALID_REORDER_MODES}"
-        )
+        raise ValueError(f"unknown reorder mode {mode!r}; expected one of {_VALID_REORDER_MODES}")
 
     spec = json.loads(json.dumps(spec))
     clips = spec.get("clips") or []
@@ -1163,9 +1168,7 @@ def add_caption_segment(
     return spec, {clip["id"]}
 
 
-def remove_caption_segment(
-    spec: dict, clip_idx: int, segment_idx: int
-) -> tuple[dict, set[str]]:
+def remove_caption_segment(spec: dict, clip_idx: int, segment_idx: int) -> tuple[dict, set[str]]:
     """Drop a single caption segment from a clip by its 0-based index.
 
     Idempotent on out-of-range — silently no-ops rather than raising,
@@ -1205,9 +1208,7 @@ def tiktokify_clip(spec: dict, clip_idx: int) -> tuple[dict, set[str]]:
     return spec, {clip["id"]}
 
 
-def set_clip_captions(
-    spec: dict, clip_idx: int, segments: list[dict]
-) -> tuple[dict, set[str]]:
+def set_clip_captions(spec: dict, clip_idx: int, segments: list[dict]) -> tuple[dict, set[str]]:
     """Replace a clip's caption_segments with user-edited content.
 
     Each segment is `{start_seconds, end_seconds, text}` plus optionally

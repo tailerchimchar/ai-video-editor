@@ -388,6 +388,68 @@ def test_preflight_dry_runs_every_effect(compilation, params, expected):
     assert expected in problem
 
 
+def _two_effect_plan() -> EditPlan:
+    return EditPlan.model_validate(
+        _http_plan(
+            effects=[
+                {"clip_ref": "2", "kind": "zoom", "at": 3.0, "params": {"factor": 1.5}},
+                {"clip_ref": "1", "kind": "caption", "at": 1.0, "params": {"text": "gg"}},
+            ]
+        )
+    )
+
+
+def _effect_counts(folder: Path) -> list[int]:
+    import json
+
+    spec = json.loads((folder / "spec.json").read_text(encoding="utf-8"))
+    return [len(c.get("effects") or []) for c in spec["clips"]]
+
+
+def test_effects_step_is_atomic_when_its_render_fails(compilation, monkeypatch):
+    """A failed effects render adds nothing, so a resume cannot apply twice."""
+    from ai_video_editor.routers.plan_executor import EditsPlanExecutor
+
+    comp_id, folder = compilation
+    calls: list[str] = []
+
+    def render(spec, fld, dirty_clip_ids=None):
+        calls.append("render")
+        if any(c.get("effects") for c in spec["clips"]):
+            raise RuntimeError("ffmpeg died")
+        return {"output": (folder / "compilation.mp4").as_posix()}
+
+    monkeypatch.setattr("ai_video_editor.routers.edits.render_spec", render)
+    plan = _two_effect_plan()
+    with pytest.raises(RuntimeError, match="ffmpeg died"):
+        execute_plan(plan, comp_id, EditsPlanExecutor(folder, comp_id))
+
+    assert _effect_counts(folder) == [0, 0]
+    assert load_progress(folder).completed_steps == STEPS.index("effects")
+    assert len(read_journal(folder)) == 2  # compile + order
+    assert calls == ["render", "render"]  # order once, effects batch once
+
+
+def test_effects_step_applies_every_effect_in_one_journal_entry(compilation, monkeypatch):
+    from ai_video_editor.routers.plan_executor import EditsPlanExecutor
+
+    comp_id, folder = compilation
+    renders: list[set] = []
+
+    def render(spec, fld, dirty_clip_ids=None):
+        renders.append(dirty_clip_ids)
+        return {"output": (folder / "compilation.mp4").as_posix()}
+
+    monkeypatch.setattr("ai_video_editor.routers.edits.render_spec", render)
+    execute_plan(_two_effect_plan(), comp_id, EditsPlanExecutor(folder, comp_id))
+
+    assert _effect_counts(folder) == [1, 1]  # c-bbb (zoom) then c-aaa (caption)
+    effect_entries = [e for e in read_journal(folder) if e["action"].startswith("plan:effect")]
+    assert [e["action"] for e in effect_entries] == ["plan:effects"]
+    assert renders[-1] == {"c-aaa", "c-bbb"}
+    assert len(renders) == 2  # order + one effects render
+
+
 def test_plan_on_a_compilation_without_journal_is_refused(client, compilation):
     comp_id, folder = compilation
     (folder / "spec_history.jsonl").unlink()

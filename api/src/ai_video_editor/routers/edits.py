@@ -584,9 +584,13 @@ def _do_edit(
     action: str = "edit",
     details: dict | None = None,
 ) -> dict:
-    """Load spec, apply mutator (returns new spec + dirty ids), save spec,
-    re-render, journal the new state. Synchronous because per-clip
+    """Load spec, apply mutator (returns new spec + dirty ids), re-render,
+    save spec, journal the new state. Synchronous because per-clip
     re-encodes in seconds.
+
+    The spec is saved only after the render returns, so an edit whose
+    render raises leaves `spec.json` as it was (no half-applied edit to
+    re-apply on retry).
 
     `action` and `details` are recorded in the spec history journal so
     `list_compilation_history` can show *what* the user did, not just
@@ -594,8 +598,8 @@ def _do_edit(
     """
     spec = load_spec(folder)
     new_spec, dirty = mutator(spec)
-    save_spec(folder, new_spec)
     summary = render_spec(new_spec, folder, dirty_clip_ids=dirty)
+    save_spec(folder, new_spec)
     summary["clips"] = _summarise_clips(new_spec)
     # Journal the post-edit state. Append is best-effort — a journal
     # write failure doesn't break the edit (the spec is already saved
