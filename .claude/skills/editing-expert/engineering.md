@@ -90,9 +90,10 @@ caller-side critique caches invalidate.
 - `vlm/prompts.py::load_game_hints` auto-appends a "## Recent
   corrections you've received" section. Every VLM system prompt for
   that game inherits it — no caller changes.
-- `game_hints_effective_version(game)` returns `v<md>-<examples_hash>`
-  which folds file content hash into the cache key. Any append
-  invalidates per-clip analyzer sidecars cleanly.
+- `corrections.effective_prompt_version(game)` hashes `RUBRIC_VERSION`
+  + the hint file bytes + the top-K rendered corrections
+  (`CORRECTIONS_TOP_K`, default 12) into the cache key. A correction
+  entering the top-K invalidates per-clip analyzer sidecars cleanly.
 - `POST /mentor/record_correction` + MCP `mentor_record_correction`
   is the write path. Call IT (not just conversation) whenever the
   user corrects the pipeline in chat, so the next compile learns.
