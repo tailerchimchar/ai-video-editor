@@ -3,12 +3,13 @@
 Each step re-renders through `_do_edit`, which journals the new state, so the
 journal version recorded before the plan is a valid revert point.
 
-Supported today: verifying `source_clips` refs, `order`, and clip effects
-(zoom, focus, caption). Sections the existing mutators cannot express
-(cards, sfx, music, other effect kinds) raise `UnsupportedPlanStepError` instead of
-being silently skipped; progress then stays at the last completed step.
+Supported today: verifying `source_clips` refs, `order`, clip effects (zoom,
+focus, caption) and music (`music_path` on the spec). Cards, sfx and other
+effect kinds cannot be expressed by the existing mutators; `preflight` reports
+them so `execute_plan` refuses the whole plan before changing anything.
 """
 
+import logging
 from collections.abc import Callable
 from pathlib import Path
 
@@ -17,7 +18,10 @@ from ..compile import load_spec, resolve_clip_ref
 from ..compile import reorder_clips_explicit as spec_reorder_clips_explicit
 from ..compile_journal import read_journal
 from ..edit_plan import EditPlan, load_progress
+from ..music.library import Library
 from .edits import AddEffectBody, _do_edit, _effect_from_body
+
+logger = logging.getLogger(__name__)
 
 _MUTATOR_KINDS = ("zoom", "focus", "caption")
 
@@ -27,10 +31,33 @@ class UnsupportedPlanStepError(RuntimeError):
 
 
 class EditsPlanExecutor:
-    def __init__(self, folder: Path, compilation_id: str):
+    def __init__(self, folder: Path, compilation_id: str, library: Library | None = None):
         self._folder = folder
         self._compilation_id = compilation_id
+        self._library = library or Library()
         self.last_output: str | None = None
+
+    def preflight(self, plan: EditPlan) -> list[str]:
+        problems = []
+        if not read_journal(self._folder):
+            problems.append("compilation has no journal entries")
+        if plan.cards:
+            problems.append("cards cannot be applied yet")
+        if plan.sfx:
+            problems.append("sfx cannot be applied yet")
+        problems += [
+            f"effect '{kind}' cannot be applied yet"
+            for kind in sorted({e.kind for e in plan.effects} - set(_MUTATOR_KINDS))
+        ]
+        if plan.music and self._music_file(plan.music.song_id) is None:
+            problems.append(f"music: song '{plan.music.song_id}' not found")
+        return problems
+
+    def _music_file(self, song_id: str) -> Path | None:
+        """Library song first, then a plain file path."""
+        row = self._library.get(song_id)
+        candidate = Path(row["audio_path"]) if row and row.get("audio_path") else Path(song_id)
+        return candidate if candidate.is_file() else None
 
     def compilation_folder(self, compilation_id: str) -> Path:
         return self._folder
@@ -76,13 +103,10 @@ class EditsPlanExecutor:
         self._edit(mutator, "plan:order", {"clip_ids": ordered + rest})
 
     def apply_cards(self, plan: EditPlan) -> None:
-        if plan.cards:
-            raise UnsupportedPlanStepError("cards cannot be applied yet")
+        """Nothing to do: `preflight` rejects plans that contain cards."""
 
     def apply_effects(self, plan: EditPlan) -> None:
         for effect in plan.effects:
-            if effect.kind not in _MUTATOR_KINDS:
-                raise UnsupportedPlanStepError(f"effect '{effect.kind}' cannot be applied yet")
             clip_id = self._clip_id(effect.clip_ref)
             body = AddEffectBody(clip_ref=clip_id, kind=effect.kind, **effect.params)
             idx = resolve_clip_ref(load_spec(self._folder), clip_id)
@@ -98,9 +122,17 @@ class EditsPlanExecutor:
             )
 
     def apply_sfx(self, plan: EditPlan) -> None:
-        if plan.sfx:
-            raise UnsupportedPlanStepError("sfx cannot be applied yet")
+        """Nothing to do: `preflight` rejects plans that contain sfx."""
 
     def apply_music(self, plan: EditPlan) -> None:
-        if plan.music:
-            raise UnsupportedPlanStepError("music cannot be applied yet")
+        if not plan.music:
+            return
+        music = plan.music
+        if music.trim_to_peak or music.trim_start_s is not None or music.trim_end_s is not None:
+            logger.info("music trimming is not applied yet; using the full song")
+        music_path = self._music_file(music.song_id).as_posix()
+
+        def mutator(s: dict) -> tuple[dict, set[str]]:
+            return {**s, "music_path": music_path}, set()
+
+        self._edit(mutator, "plan:music", {"song_id": music.song_id, "music_path": music_path})

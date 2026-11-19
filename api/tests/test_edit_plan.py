@@ -10,6 +10,7 @@ from ai_video_editor.compile_journal import append_journal, read_journal, revert
 from ai_video_editor.edit_plan import (
     STEPS,
     EditPlan,
+    PlanNotExecutableError,
     PlanProgress,
     execute_plan,
     load_progress,
@@ -113,6 +114,9 @@ class FakeExecutor:
 
     def compilation_folder(self, compilation_id: str) -> Path:
         return self.folder
+
+    def preflight(self, plan) -> list[str]:
+        return []
 
     def current_version(self, compilation_id: str) -> str:
         return str(len(read_journal(self.folder)))
@@ -304,9 +308,98 @@ def test_plan_endpoint_rejects_invalid_plan_before_rendering(client, compilation
     assert len(read_journal(folder)) == 1
 
 
-def test_plan_endpoint_reports_unsupported_sections(client, compilation):
-    comp_id, _ = compilation
+def test_plan_with_cards_is_refused_before_anything_changes(client, compilation):
+    comp_id, folder = compilation
     plan = _http_plan(cards=[{"text": "hi", "seconds": 2.5}])
     r = client.post(f"/api/v1/compilations/{comp_id}/plan", json=plan)
     assert r.status_code == 409
-    assert "cards" in r.json()["detail"]
+    assert r.json()["detail"]["unsupported"] == ["cards cannot be applied yet"]
+    assert len(read_journal(folder)) == 1
+    assert not (folder / "plan_progress.json").exists()
+
+
+def test_plan_music_sets_music_path_on_the_spec(client, compilation, tmp_path):
+    import json
+
+    comp_id, folder = compilation
+    song = tmp_path / "song.mp3"
+    song.write_bytes(b"")
+    plan = _http_plan(music={"song_id": str(song), "trim_to_peak": True})
+    r = client.post(f"/api/v1/compilations/{comp_id}/plan", json=plan)
+    assert r.status_code == 200, r.text
+    spec = json.loads((folder / "spec.json").read_text(encoding="utf-8"))
+    assert spec["music_path"] == song.as_posix()
+
+
+def test_plan_music_resolves_a_library_song_id(client, compilation, tmp_path):
+    import json
+
+    from ai_video_editor.music.library import Library
+
+    comp_id, folder = compilation
+    song = tmp_path / "lib.mp3"
+    song.write_bytes(b"")
+    library_file = tmp_path / "library.json"
+    library_file.write_text(
+        json.dumps([{"song_id": "s-1", "audio_path": str(song), "tags": []}]), encoding="utf-8"
+    )
+    from ai_video_editor.routers.plan_executor import EditsPlanExecutor
+
+    executor = EditsPlanExecutor(folder, comp_id, library=Library(path=library_file))
+    assert executor.preflight(_plan(cards=[], sfx=[], music={"song_id": "s-1"})) == []
+    assert executor.preflight(_plan(cards=[], sfx=[], music={"song_id": "missing"})) == [
+        "music: song 'missing' not found"
+    ]
+
+
+def test_plan_on_a_compilation_without_journal_is_refused(client, compilation):
+    comp_id, folder = compilation
+    (folder / "spec_history.jsonl").unlink()
+    r = client.post(f"/api/v1/compilations/{comp_id}/plan", json=_http_plan())
+    assert r.status_code == 409
+    assert "no journal entries" in r.json()["detail"]["unsupported"][0]
+
+
+def test_reposting_a_completed_plan_is_a_noop_until_reverted(client, compilation):
+    comp_id, folder = compilation
+    url = f"/api/v1/compilations/{comp_id}/plan"
+    first = client.post(url, json=_http_plan()).json()["progress"]
+    journal_len = len(read_journal(folder))
+
+    client.post(url, json=_http_plan())
+    assert len(read_journal(folder)) == journal_len  # unchanged plan: no-op by design
+
+    client.post(f"/api/v1/edit/compile/{comp_id}/revert", json={"to_version": 1})
+    assert not (folder / "plan_progress.json").exists()
+    again = client.post(url, json=_http_plan()).json()["progress"]
+    assert again["completed_steps"] == len(STEPS)
+    assert len(read_journal(folder)) > journal_len + 1
+    assert first["snapshot_version"] == "1"
+
+
+def test_execute_discards_progress_when_journal_is_shorter_than_snapshot(tmp_path: Path):
+    for name in ("a", "b", "c"):
+        append_journal(tmp_path, {"clips": []}, action=name)
+    plan = _plan()
+    with pytest.raises(RuntimeError):
+        execute_plan(plan, "comp-1", FakeExecutor(tmp_path, fail_on_step=3))
+    (tmp_path / "spec_history.jsonl").write_text("", encoding="utf-8")
+    append_journal(tmp_path, {"clips": []}, action="rewound")
+
+    fresh = FakeExecutor(tmp_path)
+    progress = execute_plan(plan, "comp-1", fresh)
+
+    assert len(fresh.calls) == len(STEPS)
+    assert progress.snapshot_version == "1"
+
+
+def test_preflight_refusal_changes_nothing(tmp_path: Path):
+    class Refusing(FakeExecutor):
+        def preflight(self, plan):
+            return ["nope"]
+
+    executor = Refusing(tmp_path)
+    with pytest.raises(PlanNotExecutableError):
+        execute_plan(_plan(), "comp-1", executor)
+    assert executor.calls == []
+    assert load_progress(tmp_path) is None

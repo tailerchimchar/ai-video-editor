@@ -12,16 +12,15 @@ calls the real mutators, tests inject fakes.
 
 import hashlib
 import os
-from collections.abc import Collection
+from collections.abc import Callable, Collection
 from pathlib import Path
 from typing import Protocol
 
 from pydantic import BaseModel, Field, ValidationError
 
+from .compile_journal import PLAN_PROGRESS_FILENAME
 from .config import settings
 from .registry import FORMATS, NOT_RENDERABLE, REGISTRY
-
-PROGRESS_FILENAME = "plan_progress.json"
 
 
 class SourceClip(BaseModel):
@@ -127,6 +126,10 @@ class PlanExecutor(Protocol):
     and one apply method per plan section."""
 
     def compilation_folder(self, compilation_id: str) -> Path: ...
+    def preflight(self, plan: EditPlan) -> list[str]:
+        """Reasons this executor cannot apply `plan`; checked before anything mutates."""
+        ...
+
     def current_version(self, compilation_id: str) -> str: ...
     def apply_source_clips(self, plan: EditPlan) -> None: ...
     def apply_order(self, plan: EditPlan) -> None: ...
@@ -136,7 +139,23 @@ class PlanExecutor(Protocol):
     def apply_music(self, plan: EditPlan) -> None: ...
 
 
-STEPS = ("source_clips", "order", "cards", "effects", "sfx", "music")
+_APPLY: dict[str, Callable[[PlanExecutor, EditPlan], None]] = {
+    "source_clips": lambda ex, plan: ex.apply_source_clips(plan),
+    "order": lambda ex, plan: ex.apply_order(plan),
+    "cards": lambda ex, plan: ex.apply_cards(plan),
+    "effects": lambda ex, plan: ex.apply_effects(plan),
+    "sfx": lambda ex, plan: ex.apply_sfx(plan),
+    "music": lambda ex, plan: ex.apply_music(plan),
+}
+STEPS = tuple(_APPLY)
+
+
+class PlanNotExecutableError(RuntimeError):
+    """The executor refused the plan up front; nothing was changed."""
+
+    def __init__(self, problems: list[str]):
+        super().__init__("; ".join(problems))
+        self.problems = problems
 
 
 def plan_hash(plan: EditPlan) -> str:
@@ -144,7 +163,7 @@ def plan_hash(plan: EditPlan) -> str:
 
 
 def load_progress(folder: Path) -> PlanProgress | None:
-    path = folder / PROGRESS_FILENAME
+    path = folder / PLAN_PROGRESS_FILENAME
     if not path.is_file():
         return None
     try:
@@ -154,7 +173,7 @@ def load_progress(folder: Path) -> PlanProgress | None:
 
 
 def _save_progress(folder: Path, progress: PlanProgress) -> None:
-    path = folder / PROGRESS_FILENAME
+    path = folder / PLAN_PROGRESS_FILENAME
     tmp = path.with_suffix(".tmp")
     tmp.write_text(progress.model_dump_json(indent=2), encoding="utf-8")
     os.replace(tmp, path)
@@ -163,19 +182,29 @@ def _save_progress(folder: Path, progress: PlanProgress) -> None:
 def execute_plan(plan: EditPlan, compilation_id: str, executor: PlanExecutor) -> PlanProgress:
     """Apply `plan` step by step, resuming a prior run of the same plan.
 
-    A fresh run first records the current journal version as the revert
-    point. A step that raises leaves progress at the last completed step.
+    The executor's pre-flight runs first, so an unsupported plan changes
+    nothing. A fresh run then records the current journal version as the
+    revert point. A step that raises leaves progress at the last completed
+    step. Progress is discarded when the plan differs or when the journal is
+    shorter than the recorded snapshot (the compilation was reverted); an
+    unchanged, fully applied plan is a no-op by design.
     """
+    problems = executor.preflight(plan)
+    if problems:
+        raise PlanNotExecutableError(problems)
     folder = executor.compilation_folder(compilation_id)
     digest = plan_hash(plan)
+    version = executor.current_version(compilation_id)
     progress = load_progress(folder)
-    if progress is None or progress.plan_hash != digest:
-        progress = PlanProgress(
-            plan_hash=digest, snapshot_version=executor.current_version(compilation_id)
-        )
+    if (
+        progress is None
+        or progress.plan_hash != digest
+        or int(version) < int(progress.snapshot_version)
+    ):
+        progress = PlanProgress(plan_hash=digest, snapshot_version=version)
         _save_progress(folder, progress)
     for step in STEPS[progress.completed_steps :]:
-        getattr(executor, f"apply_{step}")(plan)
+        _APPLY[step](executor, plan)
         progress.completed_steps += 1
         _save_progress(folder, progress)
     return progress

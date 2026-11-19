@@ -40,6 +40,7 @@ from pathlib import Path
 
 _JOURNAL_FILENAME = "spec_history.jsonl"
 _SPEC_FILENAME = "spec.json"
+PLAN_PROGRESS_FILENAME = "plan_progress.json"
 
 
 def journal_path(folder: Path) -> Path:
@@ -273,6 +274,8 @@ def revert_to_version(folder: Path, version: int) -> dict:
     if not isinstance(restored, dict):
         raise RevertError(f"journal entry {version} has no usable spec snapshot")
     spec_path(folder).write_text(json.dumps(restored, indent=2), encoding="utf-8")
+    # A revert invalidates any edit-plan progress: re-posting must apply again.
+    (Path(folder) / PLAN_PROGRESS_FILENAME).unlink(missing_ok=True)
     return restored
 
 
