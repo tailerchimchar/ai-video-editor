@@ -341,6 +341,16 @@ class Settings(BaseSettings):
     shorts_beat_flash_intensity: float = 0.2
     shorts_beat_flash_duration_seconds: float = 0.10
 
+    # Clip intensity scorer (intensity.py). Raw weights; the score is
+    # clamped to [0, 1] so they only need to be relative to each other.
+    intensity_kill_weight: float = 0.15
+    intensity_multi_kill_bonus: dict[int, float] = Field(
+        default_factory=lambda: {2: 0.15, 3: 0.3, 4: 0.5, 5: 0.7}
+    )
+    intensity_vlm_weight: float = 0.2
+    intensity_voice_weight: float = 0.1
+    intensity_death_penalty: float = 0.1
+
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",
