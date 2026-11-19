@@ -77,7 +77,7 @@ class EditsPlanExecutor:
 
     def apply_cards(self, plan: EditPlan) -> None:
         if plan.cards:
-            raise UnsupportedPlanStepError("cards cannot be applied by the compilation mutators yet")
+            raise UnsupportedPlanStepError("cards cannot be applied yet")
 
     def apply_effects(self, plan: EditPlan) -> None:
         for effect in plan.effects:
@@ -99,8 +99,8 @@ class EditsPlanExecutor:
 
     def apply_sfx(self, plan: EditPlan) -> None:
         if plan.sfx:
-            raise UnsupportedPlanStepError("sfx cannot be applied by the compilation mutators yet")
+            raise UnsupportedPlanStepError("sfx cannot be applied yet")
 
     def apply_music(self, plan: EditPlan) -> None:
         if plan.music:
-            raise UnsupportedPlanStepError("music cannot be applied by the compilation mutators yet")
+            raise UnsupportedPlanStepError("music cannot be applied yet")
