@@ -1,0 +1,108 @@
+{
+  "session": "07-07-2026_23h44",
+  "hype": [
+    {
+      "file": "03_ace.mp4",
+      "event_type": "ace",
+      "hype_score": 0.95,
+      "funny_score": 0.2,
+      "story_score": 0.3,
+      "reason": "event_type=ace -> hype (multi-kill / ace)"
+    },
+    {
+      "file": "08_pent.mp4",
+      "event_type": "pentakill",
+      "hype_score": 0.99,
+      "funny_score": 0.2,
+      "story_score": 0.3,
+      "reason": "event_type=pentakill -> hype (multi-kill / ace)"
+    }
+  ],
+  "story": [],
+  "voice_over": [
+    {
+      "file": "01_kill.mp4",
+      "event_type": "kill",
+      "hype_score": 0.9,
+      "funny_score": 0.2,
+      "story_score": 0.3,
+      "reason": "event_type=kill -> voice_over pool"
+    },
+    {
+      "file": "02_kill.mp4",
+      "event_type": "kill",
+      "hype_score": 0.8,
+      "funny_score": 0.2,
+      "story_score": 0.3,
+      "reason": "event_type=kill -> voice_over pool"
+    },
+    {
+      "file": "06_kill.mp4",
+      "event_type": "kill",
+      "hype_score": 0.75,
+      "funny_score": 0.2,
+      "story_score": 0.3,
+      "reason": "event_type=kill -> voice_over pool"
+    },
+    {
+      "file": "09_assist.mp4",
+      "event_type": "assist",
+      "hype_score": 0.6,
+      "funny_score": 0.2,
+      "story_score": 0.3,
+      "reason": "event_type=assist -> voice_over pool"
+    },
+    {
+      "file": "11_audio.mp4",
+      "event_type": "audio_peak",
+      "hype_score": 0.4,
+      "funny_score": 0.2,
+      "story_score": 0.3,
+      "reason": "event_type=audio_peak -> voice_over pool"
+    }
+  ],
+  "funny": [
+    {
+      "file": "07_funny.mp4",
+      "event_type": "funny_callout",
+      "hype_score": 0.4,
+      "funny_score": 0.2,
+      "story_score": 0.3,
+      "reason": "event_type=funny_callout -> funny"
+    },
+    {
+      "file": "10_fun_kill.mp4",
+      "event_type": "kill",
+      "hype_score": 0.5,
+      "funny_score": 0.9,
+      "story_score": 0.3,
+      "reason": "funny_score=0.90 -> funny override"
+    }
+  ],
+  "skipped": [
+    {
+      "file": "04_baron.mp4",
+      "event_type": "baron",
+      "hype_score": 0.7,
+      "funny_score": 0.2,
+      "story_score": 0.3,
+      "reason": "event_type='baron' did not match any bucket"
+    },
+    {
+      "file": "05_dragon.mp4",
+      "event_type": "dragon",
+      "hype_score": 0.7,
+      "funny_score": 0.2,
+      "story_score": 0.3,
+      "reason": "event_type='dragon' did not match any bucket"
+    },
+    {
+      "file": "12_weird.mp4",
+      "event_type": "mystery",
+      "hype_score": 0.4,
+      "funny_score": 0.2,
+      "story_score": 0.3,
+      "reason": "event_type='mystery' did not match any bucket"
+    }
+  ]
+}

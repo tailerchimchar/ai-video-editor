@@ -41,6 +41,7 @@ from pydantic import BaseModel, Field
 
 from ..candidates.probe import get_duration_seconds
 from ..config import settings
+from ..taxonomy import FlagCategory
 
 _log = logging.getLogger(__name__)
 
@@ -48,26 +49,6 @@ _log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------
 # Structured output schema -- what the VLM emits
 # ---------------------------------------------------------------------
-
-
-# Categories tuned for gameplay-highlight critique. Extend as needed --
-# adding a value here alone is safe (Pydantic + JSON schema pick it up),
-# no other code branches on the value.
-FlagCategory = Literal[
-    "dead_air",               # walking, empty hallway, nothing happens
-    "scoreboard",             # post-round KDA / spectator board
-    "own_death",              # player dies (killfeed shows them as victim)
-    "teammate_kill_only",     # killfeed shows a teammate's kill, not user's
-    "payoff_lands",           # user's kill / plant / clutch actually happens
-    "good_buildup",           # peek prep, angle hold, ability setup
-    "great_moment",           # ace / multikill / clutch -- flag as a keeper
-    "abrupt_cut",             # transition into the next clip feels wrong
-    "boring_pacing",          # nothing wrong but low energy for too long
-    "kill_anchor_misplaced",  # killfeed pop straddles a cut / off by ~1s
-    "killfeed_pop_cut_off",   # kill happens but killfeed row cut before it draws
-    "cut_too_early",          # sub-clip ends before the payoff resolves
-    "cut_too_late",           # dead frames after the payoff before next clip
-]
 
 
 # Deterministic ops the refine loop can perform on a sub-clip. `drop`

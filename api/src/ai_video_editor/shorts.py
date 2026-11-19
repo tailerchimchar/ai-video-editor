@@ -52,6 +52,7 @@ from .edits import (
     blur_fill_9x16,
     cropped_hud_9x16,
 )
+from .taxonomy import LEGACY_ALIASES, LEGACY_SLUGS, Phase, Topic
 
 _log = logging.getLogger(__name__)
 
@@ -104,16 +105,8 @@ _TURNAROUND_PATTERN = re.compile(
 )
 
 
-BUCKET_ORDER = (
-    "first_blood",
-    "outplay",
-    "multikill",
-    "teamfight",
-    "objective_steal",
-    "laning_phase",
-    "mid_game",
-    "late_game",
-)
+# Public slug list, in output order: topics first, then phases.
+BUCKET_ORDER = tuple(LEGACY_SLUGS[m] for m in (*Topic, *Phase) if m in LEGACY_SLUGS)
 
 
 # ---------------------------------------------------------------------
@@ -274,12 +267,12 @@ def load_clips(folder: Path) -> list[ShortClip]:
     return out
 
 
-def _phase_bucket(anchor_s: float) -> str:
+def _phase_of(anchor_s: float) -> Phase:
     if anchor_s < _LANING_END_SECONDS:
-        return "laning_phase"
+        return Phase.laning
     if anchor_s < _MID_END_SECONDS:
-        return "mid_game"
-    return "late_game"
+        return Phase.mid
+    return Phase.late
 
 
 def _is_kill_event(event: str) -> bool:
@@ -342,7 +335,7 @@ def categorize_clips(
     # Sort by anchor for deterministic downstream ordering
     by_anchor = sorted(clips, key=lambda c: (c.anchor_seconds, c.file))
 
-    out: dict[str, list[ShortClip]] = {b: [] for b in BUCKET_ORDER}
+    out: dict[Topic | Phase, list[ShortClip]] = {m: [] for m in (*Topic, *Phase)}
 
     # first_blood — the very first kill event. Computed against the
     # FULL clip list when caller passes one, so a below-threshold first
@@ -353,16 +346,16 @@ def categorize_clips(
     # Only tag as first_blood if the actual first kill made it past the
     # caller's filter (i.e. it's in `clips`).
     if first_kill is not None and any(c.file == first_kill.file for c in clips):
-        out["first_blood"].append(first_kill)
+        out[Topic.first_blood].append(first_kill)
 
     # Phase buckets — every clip lands in exactly one
     for c in by_anchor:
-        out[_phase_bucket(c.anchor_seconds)].append(c)
+        out[_phase_of(c.anchor_seconds)].append(c)
 
     # objective_steal
     for c in by_anchor:
         if c.event_type in _OBJECTIVE_EVENTS:
-            out["objective_steal"].append(c)
+            out[Topic.objective_steal].append(c)
 
     # multikill — every clip in a >= 2-clip adjacency group where all
     # are kill-ish events. Groups computed once (deterministic).
@@ -370,21 +363,25 @@ def categorize_clips(
     groups = _find_adjacent_indices(kill_ish, _MULTIKILL_ADJACENCY_SECONDS)
     for g in groups:
         if len(g) >= 2:
-            out["multikill"].extend(kill_ish[i] for i in g)
+            out[Topic.multikill].extend(kill_ish[i] for i in g)
 
     # teamfight — 3+ adjacent clips (any event) within a 60s window
     tf_groups = _find_adjacent_indices(by_anchor, _TEAMFIGHT_WINDOW_SECONDS)
     for g in tf_groups:
         if len(g) >= _TEAMFIGHT_MIN_ADJACENT:
-            out["teamfight"].extend(by_anchor[i] for i in g)
+            out[Topic.teamfight].extend(by_anchor[i] for i in g)
 
     # outplay — reason text match
     for c in by_anchor:
         if _matches_outplay(c.reason):
-            out["outplay"].append(c)
+            out[Topic.outplay].append(c)
 
-    # Drop empty buckets, preserve insertion order (which is BUCKET_ORDER)
-    return {k: v for k, v in out.items() if v}
+    # Emit legacy slugs in BUCKET_ORDER; empty buckets are dropped.
+    return {
+        slug: out[LEGACY_ALIASES[slug]]
+        for slug in BUCKET_ORDER
+        if out[LEGACY_ALIASES[slug]]
+    }
 
 
 # ---------------------------------------------------------------------

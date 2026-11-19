@@ -1,0 +1,18 @@
+{
+  "folder": "C:/ws/highlights/Valorant/07-07-2026_23h44",
+  "clips": [
+    {"file": "01_kill.mp4", "ok": true, "event": "kill", "start_seconds": 100, "end_seconds": 110, "hype_score": 0.9, "funny_score": 0.2, "story_score": 0.3, "reason": ""},
+    {"file": "02_kill.mp4", "ok": true, "event": "kill", "start_seconds": 110, "end_seconds": 120, "hype_score": 0.8, "funny_score": 0.2, "story_score": 0.3, "reason": "clutch comeback 1v3"},
+    {"file": "03_ace.mp4", "ok": true, "event": "ace", "start_seconds": 920, "end_seconds": 930, "hype_score": 0.95, "funny_score": 0.2, "story_score": 0.3, "reason": ""},
+    {"file": "04_baron.mp4", "ok": true, "event": "baron", "start_seconds": 1000, "end_seconds": 1010, "hype_score": 0.7, "funny_score": 0.2, "story_score": 0.3, "reason": ""},
+    {"file": "05_dragon.mp4", "ok": true, "event": "dragon", "start_seconds": 1020, "end_seconds": 1030, "hype_score": 0.7, "funny_score": 0.2, "story_score": 0.3, "reason": ""},
+    {"file": "06_kill.mp4", "ok": true, "event": "kill", "start_seconds": 1030, "end_seconds": 1040, "hype_score": 0.75, "funny_score": 0.2, "story_score": 0.3, "reason": ""},
+    {"file": "07_funny.mp4", "ok": true, "event": "funny_callout", "start_seconds": 1600, "end_seconds": 1610, "hype_score": 0.4, "funny_score": 0.2, "story_score": 0.3, "reason": ""},
+    {"file": "08_pent.mp4", "ok": true, "event": "pentakill", "start_seconds": 1700, "end_seconds": 1710, "hype_score": 0.99, "funny_score": 0.2, "story_score": 0.3, "reason": ""},
+    {"file": "09_assist.mp4", "ok": true, "event": "assist", "start_seconds": 1720, "end_seconds": 1730, "hype_score": 0.6, "funny_score": 0.2, "story_score": 0.3, "reason": ""},
+    {"file": "10_fun_kill.mp4", "ok": true, "event": "kill", "start_seconds": 1800, "end_seconds": 1810, "hype_score": 0.5, "funny_score": 0.9, "story_score": 0.3, "reason": ""},
+    {"file": "11_audio.mp4", "ok": true, "event": "audio_peak", "start_seconds": 1900, "end_seconds": 1910, "hype_score": 0.4, "funny_score": 0.2, "story_score": 0.3, "reason": ""},
+    {"file": "12_weird.mp4", "ok": true, "event": "mystery", "start_seconds": 2000, "end_seconds": 2010, "hype_score": 0.4, "funny_score": 0.2, "story_score": 0.3, "reason": ""},
+    {"file": "13_bad.mp4", "ok": false, "event": "kill"}
+  ]
+}

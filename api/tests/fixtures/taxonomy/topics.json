@@ -1,0 +1,163 @@
+{
+  "ok": true,
+  "highlights_folder": "<folder>",
+  "clip_count_total": 12,
+  "clip_count_above_threshold": 8,
+  "hype_threshold": 0.6,
+  "buckets": {
+    "first_blood": {
+      "count": 1,
+      "clips": [
+        {
+          "file": "01_kill.mp4",
+          "event_type": "kill",
+          "hype_score": 0.9,
+          "anchor_mmss": "1m45s"
+        }
+      ]
+    },
+    "outplay": {
+      "count": 1,
+      "clips": [
+        {
+          "file": "02_kill.mp4",
+          "event_type": "kill",
+          "hype_score": 0.8,
+          "anchor_mmss": "1m55s"
+        }
+      ]
+    },
+    "multikill": {
+      "count": 4,
+      "clips": [
+        {
+          "file": "01_kill.mp4",
+          "event_type": "kill",
+          "hype_score": 0.9,
+          "anchor_mmss": "1m45s"
+        },
+        {
+          "file": "02_kill.mp4",
+          "event_type": "kill",
+          "hype_score": 0.8,
+          "anchor_mmss": "1m55s"
+        },
+        {
+          "file": "08_pent.mp4",
+          "event_type": "pentakill",
+          "hype_score": 0.99,
+          "anchor_mmss": "28m25s"
+        },
+        {
+          "file": "09_assist.mp4",
+          "event_type": "assist",
+          "hype_score": 0.6,
+          "anchor_mmss": "28m45s"
+        }
+      ]
+    },
+    "teamfight": {
+      "count": 3,
+      "clips": [
+        {
+          "file": "04_baron.mp4",
+          "event_type": "baron",
+          "hype_score": 0.7,
+          "anchor_mmss": "16m45s"
+        },
+        {
+          "file": "05_dragon.mp4",
+          "event_type": "dragon",
+          "hype_score": 0.7,
+          "anchor_mmss": "17m05s"
+        },
+        {
+          "file": "06_kill.mp4",
+          "event_type": "kill",
+          "hype_score": 0.75,
+          "anchor_mmss": "17m15s"
+        }
+      ]
+    },
+    "objective_steal": {
+      "count": 2,
+      "clips": [
+        {
+          "file": "04_baron.mp4",
+          "event_type": "baron",
+          "hype_score": 0.7,
+          "anchor_mmss": "16m45s"
+        },
+        {
+          "file": "05_dragon.mp4",
+          "event_type": "dragon",
+          "hype_score": 0.7,
+          "anchor_mmss": "17m05s"
+        }
+      ]
+    },
+    "laning_phase": {
+      "count": 2,
+      "clips": [
+        {
+          "file": "01_kill.mp4",
+          "event_type": "kill",
+          "hype_score": 0.9,
+          "anchor_mmss": "1m45s"
+        },
+        {
+          "file": "02_kill.mp4",
+          "event_type": "kill",
+          "hype_score": 0.8,
+          "anchor_mmss": "1m55s"
+        }
+      ]
+    },
+    "mid_game": {
+      "count": 4,
+      "clips": [
+        {
+          "file": "03_ace.mp4",
+          "event_type": "ace",
+          "hype_score": 0.95,
+          "anchor_mmss": "15m25s"
+        },
+        {
+          "file": "04_baron.mp4",
+          "event_type": "baron",
+          "hype_score": 0.7,
+          "anchor_mmss": "16m45s"
+        },
+        {
+          "file": "05_dragon.mp4",
+          "event_type": "dragon",
+          "hype_score": 0.7,
+          "anchor_mmss": "17m05s"
+        },
+        {
+          "file": "06_kill.mp4",
+          "event_type": "kill",
+          "hype_score": 0.75,
+          "anchor_mmss": "17m15s"
+        }
+      ]
+    },
+    "late_game": {
+      "count": 2,
+      "clips": [
+        {
+          "file": "08_pent.mp4",
+          "event_type": "pentakill",
+          "hype_score": 0.99,
+          "anchor_mmss": "28m25s"
+        },
+        {
+          "file": "09_assist.mp4",
+          "event_type": "assist",
+          "hype_score": 0.6,
+          "anchor_mmss": "28m45s"
+        }
+      ]
+    }
+  }
+}

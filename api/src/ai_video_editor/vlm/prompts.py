@@ -22,6 +22,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from ..taxonomy import PayoffType
 from .corrections import (
     examples_hash,
     load_recent_corrections,
@@ -98,12 +99,6 @@ class CompilationReview(BaseModel):
     fixes: list[CompilationFix] = Field(default_factory=list)
 
 
-PayoffType = Literal[
-    "kill", "multi_kill", "ace", "clutch",
-    "plant", "defuse", "save", "outplay", "other",
-]
-
-
 class PayoffMoment(BaseModel):
     """One trim-window recommendation inside a clip.
 
@@ -114,7 +109,7 @@ class PayoffMoment(BaseModel):
     payoff_anchor_seconds: float = Field(ge=0.0)
     buildup_start_seconds: float = Field(ge=0.0)
     resolution_end_seconds: float = Field(ge=0.0)
-    payoff_type: PayoffType = Field(default="other")
+    payoff_type: PayoffType = Field(default=PayoffType.other)
     description: str = Field(default="")
     confidence: float = Field(ge=0.0, le=1.0, default=0.5)
 
@@ -154,7 +149,7 @@ class ClipAnalysis(BaseModel):
         ),
     )
     payoff_type: PayoffType = Field(
-        default="other",
+        default=PayoffType.other,
         description="Category of the primary payoff.",
     )
     description: str = Field(

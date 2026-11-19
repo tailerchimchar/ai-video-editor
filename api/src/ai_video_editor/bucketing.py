@@ -28,6 +28,8 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .taxonomy import Format, PayoffType
+
 _log = logging.getLogger(__name__)
 
 
@@ -36,12 +38,12 @@ _log = logging.getLogger(__name__)
 # overwolf_events source + the League ace / pentakill signals +
 # clutches (mentor rule: 1v3+ clutches qualify for hype).
 _HYPE_EVENT_TYPES = frozenset({
-    "ace",
-    "pentakill",
+    PayoffType.ace,
+    "pentakill",   # League event names with no PayoffType member
     "quadrakill",
-    "multi_kill_4",
-    "multi_kill_3",
-    "clutch",
+    PayoffType.multi_kill_4,
+    PayoffType.multi_kill_3,
+    PayoffType.clutch,
 })
 
 # Event types for the funny bucket.
@@ -55,7 +57,7 @@ _FUNNY_EVENT_TYPES = frozenset({
 _VOICE_OVER_EVENT_TYPES = frozenset({
     "kill",
     "assist",
-    "multi_kill_2",   # 2Ks are voice-over material per mentor, not hype
+    PayoffType.multi_kill_2,   # 2Ks are voice-over material per mentor, not hype
     "hype_callout",
     "audio_peak",     # loud moments without a visible payoff
     "objective",      # spike plants without a frag
@@ -66,7 +68,8 @@ _VOICE_OVER_EVENT_TYPES = frozenset({
 })
 
 # Bucket names -- align with the mentor skill's taxonomy.
-BUCKETS = ("hype", "story", "voice_over", "funny")
+BUCKETS = (Format.hype, Format.story, Format.voice_over, Format.funny)
+SKIPPED = "skipped"
 
 
 @dataclass(frozen=True)
@@ -101,11 +104,11 @@ class BucketManifest:
         return len(self.hype) + len(self.story) + len(self.voice_over) + len(self.funny)
 
 
-def route_clip(clip: dict) -> tuple[str, str]:
+def route_clip(clip: dict) -> tuple[Format | str, str]:
     """Decide the bucket for ONE clip. Pure.
 
     Returns `(bucket_name, reason)`. Bucket is one of `BUCKETS` or the
-    string `"skipped"` when no rule matched. Bucket names match
+    `SKIPPED` when no rule matched. Bucket names match
     BucketManifest fields.
     """
     event = (clip.get("event") or clip.get("event_type") or "").lower()
@@ -113,18 +116,18 @@ def route_clip(clip: dict) -> tuple[str, str]:
     funny_score = float(clip.get("funny_score") or 0.0)
 
     if event in _HYPE_EVENT_TYPES:
-        return "hype", f"event_type={event} -> hype (multi-kill / ace)"
+        return Format.hype, f"event_type={event} -> hype (multi-kill / ace)"
     if event in _FUNNY_EVENT_TYPES:
-        return "funny", f"event_type={event} -> funny"
+        return Format.funny, f"event_type={event} -> funny"
     # High funny_score can push a `kill` into funny territory if the
     # ranker thought the moment was silly (e.g. an unusual weapon
     # or a whiff-then-hit sequence). Threshold tuned conservatively --
     # kills usually stay in voice_over unless funny is dominant.
     if funny_score >= 0.8 and hype_score < 0.7:
-        return "funny", f"funny_score={funny_score:.2f} -> funny override"
+        return Format.funny, f"funny_score={funny_score:.2f} -> funny override"
     if event in _VOICE_OVER_EVENT_TYPES:
-        return "voice_over", f"event_type={event} -> voice_over pool"
-    return "skipped", f"event_type={event!r} did not match any bucket"
+        return Format.voice_over, f"event_type={event} -> voice_over pool"
+    return SKIPPED, f"event_type={event!r} did not match any bucket"
 
 
 def _pick_from_clip(clip: dict, reason: str) -> BucketPick:
