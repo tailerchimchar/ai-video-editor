@@ -17,13 +17,35 @@ subscribes to).
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 from ..killfeed import verify_windows_have_kill
-from ..overwolf_log import events_for_video, player_identity
+from ..overwolf_log import (
+    dispatched_video_for,
+    events_for_video,
+    game_for_video,
+    player_identity,
+)
+from ..profiles import load_profile
 
 _log = logging.getLogger(__name__)
+
+# Canonical game key -> the name that appears as the killer in that
+# game's killfeed. Valorant shows the Riot ID; League shows the champion.
+# Add a game by adding an entry; unlisted games use the player name.
+_KILLFEED_NAME_BY_GAME: dict[str, Callable[[dict], str | None]] = {
+    "league": lambda identity: identity.get("champion"),
+}
+
+
+def _killfeed_name(identity: dict | None, game: str | None) -> str:
+    """Name to look for in the killfeed, or "" when none is known."""
+    if not identity:
+        return ""
+    pick = _KILLFEED_NAME_BY_GAME.get(load_profile(game).meta.game, lambda i: i.get("player_name"))
+    return pick(identity) or ""
 
 
 @dataclass(frozen=True)
@@ -61,7 +83,8 @@ def kill_anchors_for_video(
     All anchors are killfeed-OCR verified — teammate kills and death
     frames are already dropped upstream in `detect_overwolf_events`.
     """
-    rows = detect_overwolf_events(video_path, duration_seconds, game="Valorant")
+    game = game_for_video(video_path) or "Valorant"
+    rows = detect_overwolf_events(video_path, duration_seconds, game=game)
     if not rows:
         return []
     _kill_types = {"kill", "multi_kill_2", "multi_kill_3", "multi_kill_4", "ace"}
@@ -186,9 +209,7 @@ def detect_overwolf_events(
             continue
         # Shift back by _ANCHOR_OFFSET_SECONDS — killfeed appearance
         # lags the kill instant; we want the frag frame.
-        anchor_seconds = max(
-            0.0, ev["time_ms_in_video"] / 1000.0 - _ANCHOR_OFFSET_SECONDS
-        )
+        anchor_seconds = max(0.0, ev["time_ms_in_video"] / 1000.0 - _ANCHOR_OFFSET_SECONDS)
         # Clamp to the video's actual bounds (defensive — the log's
         # `duration` matches ffprobe within ~1s but we don't trust it
         # blindly).
@@ -224,14 +245,16 @@ def detect_overwolf_events(
     # spikes / clutches / victories aren't verifiable this way (the
     # player isn't the KILLER in the killfeed row). If tesseract or
     # ffmpeg is missing, verifier returns [True, ...] — never drops.
-    identity = player_identity()
-    player_name = (identity or {}).get("player_name") or ""
+    video = dispatched_video_for(path)
+    video_end_ms = video.start_time_ms + video.duration_ms if video else None
+    player_name = _killfeed_name(player_identity(game=game, at_ms=video_end_ms), game)
     kill_indices = [i for i, r in enumerate(rows) if r["event_type"] == "kill"]
+    if kill_indices and not player_name:
+        for i in kill_indices:
+            rows[i]["metadata"]["killfeed_verified"] = False
     if kill_indices and player_name:
         anchors = [rows[i]["metadata"]["anchor_seconds"] for i in kill_indices]
-        verdicts = verify_windows_have_kill(
-            str(path), player_name, game, anchors
-        )
+        verdicts = verify_windows_have_kill(str(path), player_name, game, anchors)
         keep = set()
         dropped = 0
         for idx, verified in zip(kill_indices, verdicts, strict=True):
@@ -240,13 +263,9 @@ def detect_overwolf_events(
                 rows[idx]["metadata"]["killfeed_verified"] = True
             else:
                 dropped += 1
-        rows = [
-            r for i, r in enumerate(rows)
-            if i not in kill_indices or i in keep
-        ]
+        rows = [r for i, r in enumerate(rows) if i not in kill_indices or i in keep]
         _log.info(
-            "overwolf_events: killfeed verifier dropped %d of %d kill rows "
-            "for %s (player=%s)",
+            "overwolf_events: killfeed verifier dropped %d of %d kill rows for %s (player=%s)",
             dropped,
             len(kill_indices),
             path.name,
@@ -323,13 +342,9 @@ def _cluster_multikills(
         last_anchor_v = cluster[-1]["metadata"]["anchor_seconds"]
         start = max(0.0, first_anchor - _MULTIKILL_LEAD_SECONDS)
         end = min(duration_seconds, last_anchor_v + _MULTIKILL_TRAIL_SECONDS)
-        headshot_count = sum(
-            1 for c in cluster if c["metadata"].get("headshot")
-        )
-        rationale = (
-            f"Multi-kill cluster: {size} kills in "
-            f"{last_anchor_v - first_anchor:.1f}s"
-            + (f" ({headshot_count} headshots)" if headshot_count else "")
+        headshot_count = sum(1 for c in cluster if c["metadata"].get("headshot"))
+        rationale = f"Multi-kill cluster: {size} kills in {last_anchor_v - first_anchor:.1f}s" + (
+            f" ({headshot_count} headshots)" if headshot_count else ""
         )
         out.append(
             {
@@ -343,9 +358,7 @@ def _cluster_multikills(
                 "metadata": {
                     # For strategies that anchor on a single moment,
                     # use the midpoint of the cluster.
-                    "anchor_seconds": round(
-                        (first_anchor + last_anchor_v) / 2.0, 2
-                    ),
+                    "anchor_seconds": round((first_anchor + last_anchor_v) / 2.0, 2),
                     "cluster_size": size,
                     "first_kill_seconds": round(first_anchor, 2),
                     "last_kill_seconds": round(last_anchor_v, 2),
