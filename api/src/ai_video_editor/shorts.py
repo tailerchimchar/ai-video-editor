@@ -815,6 +815,56 @@ def _compute_beat_flash_filter(
         return None
 
 
+_SNAP_TOLERANCE_SECONDS = 0.5
+
+
+def _snap_plan_to_beats(plan: ShortPlan, music_path: str) -> ShortPlan:
+    """Shift each clip's start so its payoff lands on the nearest beat
+    (`kill_on_beat`, bounded by `_SNAP_TOLERANCE_SECONDS`).
+
+    Only clips with an `anchor_offset_seconds` move: for the rest the
+    window is a source offset on a pre-cut file and is never trimmed.
+    Never aborts the render; any failure returns the plan unchanged.
+    """
+    from .music.analysis import load_or_analyze
+    from .music.sync import ClipWindow, snap_clips_to_beats
+
+    try:
+        beats = load_or_analyze(Path(music_path)).beats.beats
+        windows = [
+            ClipWindow(
+                file=c.file,
+                start_seconds=c.start_seconds,
+                end_seconds=c.end_seconds,
+                anchor_offset_seconds=(
+                    (c.end_seconds - c.start_seconds) / 2.0
+                    if c.anchor_offset_seconds is None
+                    else c.anchor_offset_seconds
+                ),
+            )
+            for c in plan.clips
+        ]
+        snapped = snap_clips_to_beats(
+            windows, beats, strategy="kill_on_beat", tolerance_seconds=_SNAP_TOLERANCE_SECONDS
+        )
+    except Exception as exc:
+        _log.warning("beat-snap failed (non-fatal, rendering unsnapped): %s", exc)
+        return plan
+    return replace(
+        plan,
+        clips=tuple(
+            c
+            if c.anchor_offset_seconds is None
+            else replace(
+                c,
+                start_seconds=s.new_start_seconds,
+                anchor_offset_seconds=c.anchor_offset_seconds + s.shift_seconds,
+            )
+            for c, s in zip(plan.clips, snapped.clips, strict=True)
+        ),
+    )
+
+
 def render_short(
     plan: ShortPlan,
     out_path: Path,
@@ -826,6 +876,7 @@ def render_short(
     beat_flash_source: str | None = None,
     game: str | None = None,
     max_seconds: float | None = None,
+    snap_to_beats: bool = False,
 ) -> tuple[bool, str | None]:
     """Render one short from its plan. Returns (ok, error_message_or_none).
 
@@ -841,9 +892,15 @@ def render_short(
     `max_seconds` overrides `settings.shorts_max_duration_seconds` for
     this render. Story shorts need a full round (90-120s); hype shorts
     stay at the config default. `None` uses the config setting.
+
+    `snap_to_beats` (montage with music only) moves each anchored clip's
+    start so its payoff lands on a beat; off by default, which leaves the
+    render exactly as before.
     """
     if not plan.clips:
         return False, "empty plan"
+    if snap_to_beats and mode == "montage" and music_path:
+        plan = _snap_plan_to_beats(plan, music_path)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
