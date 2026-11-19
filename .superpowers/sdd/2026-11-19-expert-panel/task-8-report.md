@@ -26,3 +26,12 @@ Full suite: `836 passed, 1 skipped`. `ruff check src/` clean; touched files form
 - 1K/2K are excluded only from the drop (per brief), not from rising/falling.
 - `ruff format --check src/` not run repo-wide (existing shorts.py was not ruff-formatted before; I did not reformat it).
 - MCP tool `plan_arc_montage` is a sibling-repo follow-up.
+
+## Fix report (review round 1)
+Merged master (Task 5) cleanly first.
+1. Executable plan: `plan_arc(..., target_seconds, *, song_id: str)` writes `song_id` verbatim to `music.song_id`; sha256 no longer used. Test runs the emitted plan through the real `EditsPlanExecutor.preflight` (file-path branch, temp song) and asserts no "music" message.
+2. Duration: shortfall/overshoot recorded as `Rejected(wanted="target_seconds ±5%", why="<total> s from <n> clips")`; ValueError only for empty pool ("no clips to plan", both modes) or no drop-eligible clip. Tests: sparse pool, drop clip longer than target, single on-target clip, empty list x2 modes.
+3. Clamp: `_place_and_trim` re-places once with the rising budget derived from the real drop position (`drop_s - trim_start`) when the trim clamped; remaining misalignment recorded as `Rejected(wanted="drop inside the peak clip", ...)`. Tests: clamped-start case aligns; late-drop single short clip records the reason.
+- Taxonomy: `PayoffType` has no `multi_kill_2` member, so the 1K/2K string set stays (not a one-liner).
+Covering: `cd api && OUTPLAYED_MEDIA_DIR=/tmp/om WORKSPACE_DIR=/tmp/ws uv run python -m pytest -q tests/test_music_arc.py tests/test_shorts_snap_to_beats.py tests/test_edit_plan.py` -> 50 passed.
+Full: `uv run python -m pytest -q` -> 884 passed, 1 skipped. `ruff check src/` clean.

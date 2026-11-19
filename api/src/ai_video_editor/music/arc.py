@@ -17,7 +17,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
-from ..edit_plan import EditPlan, PlanMusic, SourceClip
+from ..edit_plan import EditPlan, PlanMusic, Rejected, SourceClip
 from ..intensity import ClipWithIntensity
 from .analysis import SongAnalysis
 from .structure import SongStructure
@@ -31,8 +31,10 @@ _TARGET_TOLERANCE = 0.05
 @dataclass(frozen=True)
 class Placement:
     ordered: list[ClipWithIntensity]
+    peak_clip: ClipWithIntensity
+    """The clip the song's drop should land inside."""
     peak_at_s: float
-    """Where in the cut (seconds) the song's drop must land."""
+    """Where in the cut (seconds) the middle of `peak_clip` plays."""
 
 
 def _length(clip: ClipWithIntensity) -> float:
@@ -72,12 +74,23 @@ def _rising_share(structure: SongStructure) -> float:
 
 
 def _place_arc_montage(
-    clips: list[ClipWithIntensity], structure: SongStructure, target_seconds: float
+    clips: list[ClipWithIntensity],
+    structure: SongStructure,
+    target_seconds: float,
+    rising_budget_s: float | None,
 ) -> Placement:
-    """Build up to the drop clip in ascending intensity; the rest fall away."""
+    """Build up to the drop clip in ascending intensity; the rest fall away.
+
+    `rising_budget_s` pins how long the build-up may run (used when the song
+    trim clamps); by default it follows the song's rising/falling proportions.
+    """
     drop = _drop_clip(clips)
     rest = _fill_to_target(drop, [c for c in clips if c is not drop], target_seconds)
-    budget = sum(map(_length, rest)) * _rising_share(structure)
+    budget = (
+        sum(map(_length, rest)) * _rising_share(structure)
+        if rising_budget_s is None
+        else rising_budget_s
+    )
     rising: list[ClipWithIntensity] = []
     used = 0.0
     for clip in _by_intensity_desc(rest):
@@ -87,18 +100,21 @@ def _place_arc_montage(
     taken = {id(c) for c in rising}
     falling = [c for c in _by_intensity_desc(rest) if id(c) not in taken]
     rising.sort(key=lambda c: c.intensity)
-    return Placement([*rising, drop, *falling], used + _length(drop) / 2)
+    return Placement([*rising, drop, *falling], drop, used + _length(drop) / 2)
 
 
 def _place_story(
-    clips: list[ClipWithIntensity], structure: SongStructure, target_seconds: float
+    clips: list[ClipWithIntensity],
+    structure: SongStructure,
+    target_seconds: float,
+    rising_budget_s: float | None,
 ) -> Placement:
     """Chronological order is the story; only the song moves to the best clip."""
-    _ = structure, target_seconds
+    _ = structure, target_seconds, rising_budget_s
     ordered = sorted(clips, key=lambda c: c.start)
     best = max(ordered, key=lambda c: c.intensity)
     before = ordered[: ordered.index(best)]
-    return Placement(ordered, sum(map(_length, before)) + _length(best) / 2)
+    return Placement(ordered, best, sum(map(_length, before)) + _length(best) / 2)
 
 
 _PLACEMENTS: dict[str, tuple[str, Callable[..., Placement]]] = {
@@ -122,17 +138,72 @@ def trim_to_peak(
     return start, min(start + target_seconds, duration)
 
 
+def _place_and_trim(
+    place: Callable[..., Placement],
+    clips: list[ClipWithIntensity],
+    analysis: SongAnalysis,
+    target_seconds: float,
+) -> tuple[Placement, tuple[float, float]]:
+    """Place, trim, and when the trim clamped re-place once so the drop still
+    lands on the peak clip (the build-up is re-sized to the drop's real
+    position in the trimmed song)."""
+    structure = analysis.structure
+    placement = place(clips, structure, target_seconds, None)
+    trim = trim_to_peak(analysis, placement.peak_at_s, target_seconds)
+    drop_in_cut = structure.drop_s - trim[0]
+    if abs(drop_in_cut - placement.peak_at_s) > 1e-9:
+        budget = max(drop_in_cut - _length(placement.peak_clip) / 2, 0.0)
+        placement = place(clips, structure, target_seconds, budget)
+        trim = trim_to_peak(analysis, placement.peak_at_s, target_seconds)
+    return placement, trim
+
+
+def _shortfalls(
+    placement: Placement, trim: tuple[float, float], analysis: SongAnalysis, target_seconds: float
+) -> list[Rejected]:
+    """What the plan could not honour, for the panel to see."""
+    found: list[Rejected] = []
+    total = sum(map(_length, placement.ordered))
+    if abs(total - target_seconds) > target_seconds * _TARGET_TOLERANCE:
+        found.append(
+            Rejected(
+                wanted="target_seconds ±5%",
+                why=f"{total:.1f} s from {len(placement.ordered)} clips",
+            )
+        )
+    drop_in_cut = analysis.structure.drop_s - trim[0]
+    if abs(drop_in_cut - placement.peak_at_s) > _length(placement.peak_clip) / 2:
+        found.append(
+            Rejected(
+                wanted="drop inside the peak clip",
+                why=(
+                    f"drop plays at {drop_in_cut:.1f} s but peak clip "
+                    f"{placement.peak_clip.clip_ref} is centred at {placement.peak_at_s:.1f} s"
+                ),
+            )
+        )
+    return found
+
+
 def plan_arc(
     clips: list[ClipWithIntensity],
     analysis: SongAnalysis,
     format: Literal["story", "arc_montage"],
     target_seconds: float,
+    *,
+    song_id: str,
 ) -> EditPlan:
-    """Plan the cut order and song trim. The song is identified by the
-    sha256 of its bytes; callers map that to a library id if they need one."""
+    """Plan the cut order and song trim.
+
+    `song_id` is written verbatim to `music.song_id`: a library id or an
+    existing audio path, whatever the executor can resolve. Anything the
+    plan cannot honour (duration band, drop alignment) is recorded in
+    `rejected`; only an empty pool or one with no drop-eligible clip raises.
+    """
+    if not clips:
+        raise ValueError("no clips to plan")
     plan_format, place = _PLACEMENTS[format]
-    placement = place(clips, analysis.structure, target_seconds)
-    trim_start, trim_end = trim_to_peak(analysis, placement.peak_at_s, target_seconds)
+    placement, trim = _place_and_trim(place, clips, analysis, target_seconds)
     return EditPlan(
         format=plan_format,
         source_clips=[
@@ -141,9 +212,7 @@ def plan_arc(
         ],
         order=[c.clip_ref for c in placement.ordered],
         music=PlanMusic(
-            song_id=analysis.file_sha256,
-            trim_to_peak=True,
-            trim_start_s=trim_start,
-            trim_end_s=trim_end,
+            song_id=song_id, trim_to_peak=True, trim_start_s=trim[0], trim_end_s=trim[1]
         ),
+        rejected=_shortfalls(placement, trim, analysis, target_seconds),
     )

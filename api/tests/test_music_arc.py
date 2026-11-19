@@ -86,13 +86,13 @@ def test_trim_short_song_ends_at_song_end() -> None:
 
 def test_arc_best_clip_window_contains_drop() -> None:
     analysis = _analysis()
-    plan = plan_arc(_six_clips(), analysis, "arc_montage", 30.0)
+    plan = plan_arc(_six_clips(), analysis, "arc_montage", 30.0, song_id="s1")
     lo, hi = _window(plan, "c1")  # 0.9 is the best clip
     assert lo <= _drop_in_cut(plan, analysis) <= hi
 
 
 def test_arc_rising_ascends_and_falling_holds_remainder() -> None:
-    plan = plan_arc(_six_clips(), _analysis(), "arc_montage", 30.0)
+    plan = plan_arc(_six_clips(), _analysis(), "arc_montage", 30.0, song_id="s1")
     by_ref = {c.clip_ref: c.intensity for c in plan.source_clips}
     best_at = plan.order.index("c1")
     rising = [by_ref[r] for r in plan.order[:best_at]]
@@ -103,13 +103,13 @@ def test_arc_rising_ascends_and_falling_holds_remainder() -> None:
 
 def test_arc_total_within_five_percent_of_target() -> None:
     clips = [_clip(f"c{i}", i * 10.0, 0.1 * (i + 1), length=4.0 + i % 3) for i in range(10)]
-    plan = plan_arc(clips, _analysis(), "arc_montage", 30.0)
+    plan = plan_arc(clips, _analysis(), "arc_montage", 30.0, song_id="s1")
     total = sum(c.end - c.start for c in plan.source_clips)
     assert 28.5 <= total <= 31.5
 
 
 def test_arc_plan_is_valid_and_records_trim() -> None:
-    plan = plan_arc(_six_clips(), _analysis(), "arc_montage", 30.0)
+    plan = plan_arc(_six_clips(), _analysis(), "arc_montage", 30.0, song_id="s1")
     assert validate_plan(plan, known_sounds=()) == []
     assert plan.format == "arc_montage"
     assert plan.music is not None and plan.music.trim_to_peak is True
@@ -121,7 +121,7 @@ def test_arc_never_puts_one_or_two_kill_on_the_drop() -> None:
     clips[1] = _clip("c1", 110.0, 0.99, "multi_kill_2")  # would be best
     clips[3] = _clip("c3", 130.0, 0.95, "kill")
     analysis = _analysis()
-    plan = plan_arc(clips, analysis, "arc_montage", 30.0)
+    plan = plan_arc(clips, analysis, "arc_montage", 30.0, song_id="s1")
     drop_t = _drop_in_cut(plan, analysis)
     lo, hi = _window(plan, "c5")  # best eligible clip is 0.6
     assert lo <= drop_t <= hi
@@ -134,7 +134,7 @@ def test_arc_never_puts_one_or_two_kill_on_the_drop() -> None:
 def test_arc_with_only_small_kills_cannot_fill_the_drop() -> None:
     clips = [_clip("a", 0.0, 0.9, "kill"), _clip("b", 10.0, 0.8, "multi_kill_2")]
     with pytest.raises(ValueError, match="drop"):
-        plan_arc(clips, _analysis(), "arc_montage", 10.0)
+        plan_arc(clips, _analysis(), "arc_montage", 10.0, song_id="s1")
 
 
 # --- story -------------------------------------------------------------
@@ -142,9 +142,72 @@ def test_arc_with_only_small_kills_cannot_fill_the_drop() -> None:
 
 def test_story_is_chronological_and_only_music_moves() -> None:
     clips = _six_clips()
-    plan = plan_arc(list(reversed(clips)), _analysis(), "story", 30.0)
+    plan = plan_arc(list(reversed(clips)), _analysis(), "story", 30.0, song_id="s1")
     assert plan.format == "story_short"
     assert plan.order == [c.clip_ref for c in clips]
     assert plan.music.trim_to_peak is True
     assert plan.music.trim_start_s is not None
     assert validate_plan(plan, known_sounds=()) == []
+
+
+# --- shortfalls are recorded, not hidden -------------------------------
+
+
+def _duration_notes(plan) -> list:
+    return [r for r in plan.rejected if r.wanted == "target_seconds ±5%"]
+
+
+def test_sparse_pool_records_the_shortfall() -> None:
+    clips = [_clip("a", 0.0, 0.9, "teamfight", 4.0), _clip("b", 10.0, 0.5, "teamfight", 4.0)]
+    plan = plan_arc(clips, _analysis(), "arc_montage", 30.0, song_id="s1")
+    assert [r.why for r in _duration_notes(plan)] == ["8.0 s from 2 clips"]
+
+
+def test_drop_clip_longer_than_target_records_the_overshoot() -> None:
+    clips = [_clip("a", 0.0, 0.9, "teamfight", 20.0)]
+    plan = plan_arc(clips, _analysis(), "arc_montage", 10.0, song_id="s1")
+    assert [r.why for r in _duration_notes(plan)] == ["20.0 s from 1 clips"]
+
+
+def test_single_clip_on_target_records_nothing() -> None:
+    clips = [_clip("a", 0.0, 0.9, "teamfight", 30.0)]
+    plan = plan_arc(clips, _analysis(), "arc_montage", 30.0, song_id="s1")
+    assert plan.rejected == []
+
+
+@pytest.mark.parametrize("mode", ["arc_montage", "story"])
+def test_empty_pool_raises_clearly(mode) -> None:
+    with pytest.raises(ValueError, match="no clips to plan"):
+        plan_arc([], _analysis(), mode, 30.0, song_id="s1")
+
+
+# --- clamped trim ------------------------------------------------------
+
+
+def test_clamped_trim_replaces_so_the_drop_still_lands_on_the_best_clip() -> None:
+    analysis = _analysis(drop_s=5.0)  # drop is early: trim clamps at the song start
+    plan = plan_arc(_six_clips(), analysis, "arc_montage", 30.0, song_id="s1")
+    lo, hi = _window(plan, "c1")
+    assert lo <= _drop_in_cut(plan, analysis) <= hi
+    assert all(r.wanted == "target_seconds ±5%" for r in plan.rejected)
+
+
+def test_unalignable_drop_is_recorded() -> None:
+    analysis = _analysis(drop_s=58.0)  # late drop: the trim clamps at the song end
+    clips = [_clip("a", 0.0, 0.9, "teamfight", 5.0)]
+    plan = plan_arc(clips, analysis, "arc_montage", 30.0, song_id="s1")
+    assert any(r.wanted == "drop inside the peak clip" for r in plan.rejected)
+
+
+# --- the emitted plan is executable ------------------------------------
+
+
+def test_emitted_plan_passes_the_real_executor_music_preflight(tmp_path) -> None:
+    from ai_video_editor.music.library import Library
+    from ai_video_editor.routers.plan_executor import EditsPlanExecutor
+
+    song = tmp_path / "song.mp3"
+    song.write_bytes(b"")
+    plan = plan_arc(_six_clips(), _analysis(), "arc_montage", 30.0, song_id=str(song))
+    executor = EditsPlanExecutor(tmp_path, "c1", library=Library(path=tmp_path / "lib.json"))
+    assert [m for m in executor.preflight(plan) if m.startswith("music")] == []
