@@ -41,6 +41,7 @@ _HYPE_EVENT_TYPES = frozenset({
     PayoffType.ace,
     "pentakill",   # League event names with no PayoffType member
     "quadrakill",
+    PayoffType.multi_kill_5,
     PayoffType.multi_kill_4,
     PayoffType.multi_kill_3,
     PayoffType.clutch,

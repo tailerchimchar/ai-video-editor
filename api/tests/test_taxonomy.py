@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -18,7 +19,7 @@ from ai_video_editor.taxonomy import (
     Phase,
     Topic,
 )
-from ai_video_editor.vlm import prompts
+from ai_video_editor.vlm import prompts, watch_montage
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "taxonomy"
 
@@ -105,13 +106,33 @@ def test_categorize_clips_keeps_legacy_slugs() -> None:
 
 def test_prompts_use_taxonomy_enums() -> None:
     assert prompts.PayoffType is PayoffType
-    from ai_video_editor.vlm import watch_montage
-
     assert watch_montage.FlagCategory is FlagCategory
 
 
-def test_valorant_system_prompts_are_unchanged() -> None:
+def _sha(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def test_valorant_system_prompts_are_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Prompt text is cache-keyed; pin it with live corrections isolated out."""
+    monkeypatch.setattr(prompts, "load_recent_corrections", lambda *a, **k: [])
     expected = json.loads((FIXTURE_DIR / "valorant_prompts.json").read_text(encoding="utf-8"))
-    assert prompts.build_clip_system_prompt("valorant")[0] == expected["clip"]
-    assert prompts.build_comp_system_prompt("valorant")[0] == expected["comp"]
-    assert prompts.build_analyzer_system_prompt("valorant")[0] == expected["analyzer"]
+    assert _sha(prompts.build_clip_system_prompt("valorant")[0]) == expected["clip"]
+    assert _sha(prompts.build_comp_system_prompt("valorant")[0]) == expected["comp"]
+    assert _sha(prompts.build_analyzer_system_prompt("valorant")[0]) == expected["analyzer"]
+
+
+def test_vlm_schemas_match_snapshot() -> None:
+    """Any change to what the VLM may emit must show up in review."""
+    models = (
+        prompts.PayoffMoment,
+        prompts.ClipAnalysis,
+        watch_montage.MomentFlag,
+        watch_montage.MontageCritique,
+    )
+    expected = json.loads((FIXTURE_DIR / "vlm_schemas.json").read_text(encoding="utf-8"))
+    assert {m.__name__: m.model_json_schema() for m in models} == expected
+
+
+def test_five_kill_routes_to_hype() -> None:
+    assert bucketing.route_clip({"event": "multi_kill_5"})[0] == Format.hype
