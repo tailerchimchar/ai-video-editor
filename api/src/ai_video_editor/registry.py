@@ -17,6 +17,8 @@ from typing import Literal, NamedTuple
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .taxonomy import PLAN_FORMAT_BY_FORMAT
+
 EffectKind = Literal[
     "zoom",
     "focus",
@@ -34,9 +36,8 @@ Scope = Literal["clip", "compilation", "short"]
 # rendered today. The editor must reject or substitute them.
 NOT_RENDERABLE = ("slow_mo", "speed_ramp", "transition", "pulse_zoom", "beat_snap", "time_scoped")
 
-# Edit-plan format names (editing-expert SKILL.md). `edit_plan.validate_plan` reads this list.
-FORMATS = ("hype_montage", "story_short", "vo_short", "funny_short", "arc_montage")
-_FORMATS_NOT_RENDERABLE = ("arc_montage",)
+# Edit-plan format names, one per taxonomy Format. `edit_plan.validate_plan` reads this list.
+FORMATS = tuple(PLAN_FORMAT_BY_FORMAT.values())
 
 ARSENAL_PATH = (
     Path(__file__).resolve().parents[3] / ".claude" / "skills" / "editing-expert" / "arsenal.md"
@@ -374,11 +375,7 @@ _CARD_KINDS: tuple[EffectKind, ...] = ("card_text", "card_logo")
 
 
 def _formats_line() -> str:
-    parts = [
-        f"`{fmt}`" + (" (planned, not renderable yet)" if fmt in _FORMATS_NOT_RENDERABLE else "")
-        for fmt in FORMATS
-    ]
-    return " · ".join(parts)
+    return " · ".join(f"`{fmt}`" for fmt in FORMATS)
 
 
 def render_arsenal_md() -> str:
@@ -391,6 +388,9 @@ def render_arsenal_md() -> str:
         "",
         "## Formats (edit plan `format`)",
         _formats_line(),
+        "",
+        "Every format is a valid plan. The plan executor does not apply `cards` and `sfx`",
+        "yet: a plan that has them is refused before anything renders.",
         "",
         "## Per-clip and per-video effects (edit plan `effects[].kind`)",
         "",

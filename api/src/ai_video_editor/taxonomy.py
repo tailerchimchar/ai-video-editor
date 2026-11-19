@@ -48,6 +48,16 @@ class Format(StrEnum):
     arc_montage = "arc_montage"
 
 
+PLAN_FORMAT_BY_FORMAT: dict[Format, str] = {
+    Format.hype: "hype_montage",
+    Format.story: "story_short",
+    Format.voice_over: "vo_short",
+    Format.funny: "funny_short",
+    Format.arc_montage: "arc_montage",
+}
+"""Editorial bucket -> the edit plan `format` the editing-expert emits for it."""
+
+
 class Topic(StrEnum):
     """What the clip shows."""
 
