@@ -155,10 +155,11 @@ Contract to preserve:
    user hand-edits the file to reorder.
 2. **Malformed lines are dropped silently.** One bad append doesn't
    kneecap the whole prompt. Never `raise` from the read path.
-3. **Cache key is composite.** `game_hints_effective_version(game)`
-   returns `v<md_version>-<examples_hash>`. A code path that keys its
-   sidecar on `md_version` alone will silently stale after a
-   correction. Use the effective version.
+3. **Cache key is composite.** `corrections.effective_prompt_version(game)`
+   hashes `RUBRIC_VERSION` + the game hint file bytes + the top-K
+   rendered correction rows (`CORRECTIONS_TOP_K`, default 12). A path
+   that keys its sidecar on the hint file's PROMPT_VERSION alone will
+   silently stale after a correction. Use the effective version.
 4. **The write is append-only.** No edit / delete in the tool surface.
    If the user wants to prune, `mentor_recent_corrections` + a manual
    `.jsonl` edit is the escape hatch. Adding a `delete_correction`
@@ -167,6 +168,8 @@ Contract to preserve:
    regardless of the clip it's currently reviewing — the ref is just
    for auditability. Do not filter corrections by "matching clip"
    unless we've evaluated it worth the complexity.
+
+VLM schema snapshot: `api/tests/fixtures/taxonomy/vlm_schemas.json` pins what the VLM may emit. For an intended schema change, regenerate from `api/`: `uv run python -c "import json; from ai_video_editor.vlm import prompts, watch_montage as w; ms=(prompts.PayoffMoment, prompts.ClipAnalysis, w.MomentFlag, w.MontageCritique); open('tests/fixtures/taxonomy/vlm_schemas.json','w',encoding='utf-8',newline='\n').write(json.dumps({m.__name__: m.model_json_schema() for m in ms}, indent=2, sort_keys=True))"`, then review the diff.
 
 When to record a correction:
 
@@ -213,29 +216,21 @@ matters more than the cache hit.
 
 ## Spend guard — refuses at N+1, no HTTP call made
 
-`ranker.py:105-126`:
+`anthropic_surface.reserve_call(feature, cap, env_name)` keeps one
+counter per feature and raises `anthropic_surface.SpendCapError` before
+any API call once the feature hits its cap:
 
 ```python
-_rank_call_count = 0
-
-class SpendCapError(RuntimeError):
-    ...
-
-def rank_candidates(game, candidates):
-    global _rank_call_count
-    if _rank_call_count >= settings.anthropic_max_rank_calls:
-        raise SpendCapError(
-            f"rank-call cap reached ({settings.anthropic_max_rank_calls} per "
-            f"server run) — raise ANTHROPIC_MAX_RANK_CALLS or restart to reset. "
-            f"No Anthropic call was made."
-        )
-    _rank_call_count += 1
-    ...
+# ranker.rank_candidates
+reserve_call("rank", settings.anthropic_max_rank_calls, "ANTHROPIC_MAX_RANK_CALLS")
+# decisions/backends/haiku.py
+reserve_call("decisions", settings.decisions_max_calls, "DECISIONS_MAX_CALLS")
 ```
 
-- Process-level counter — resets when uvicorn restarts. That IS the
+- Process-level counters — reset when uvicorn restarts. That IS the
   intended granularity: a fresh process = a fresh budget.
-- Default cap: `ANTHROPIC_MAX_RANK_CALLS = 25` (`config.py:34`).
+- Default rank cap: `ANTHROPIC_MAX_RANK_CALLS = 25`; each feature's cap
+  is tuned on its own.
 - N+1 raises **before** the HTTP call. `SpendCapError` propagates
   through `asyncio.to_thread` and lands as a failed job with a clear
   error message.
@@ -439,9 +434,9 @@ If you must add one:
 
 - Read a validated key from `settings.anthropic_api_key`.
 - Reuse the bounded-client pattern (`max_retries`, `timeout`).
-- Add a NEW spend guard counter for the new endpoint. Do NOT share
-  `_rank_call_count` — the two limits should be independently
-  tunable.
+- Call `anthropic_surface.reserve_call` with a NEW feature name and
+  its own `*_MAX_CALLS` setting. Do NOT reuse `"rank"` — the limits
+  should be independently tunable.
 - Decorate with `@observe(name=..., as_type="generation")`.
 - If you use `messages.parse`, mirror the manual usage-attach block.
   If you use `messages.create`, `AnthropicInstrumentor` covers it
@@ -467,8 +462,8 @@ If you must add one:
   frame reads.
 - **Unbounded loops without a spend guard.** Anything that iterates
   and calls `rank_candidates` (or any future LLM function) inside a
-  loop must have its own N-per-process counter with clear-error
-  refusal, mirroring `SpendCapError`.
+  loop must have its own `reserve_call` feature cap (clear-error
+  `SpendCapError` refusal).
 - **A second LLM call in the same job path.** Two calls per video =
   2x the cost, 2x the latency, 2x the failure surface, and the
   spend-cap math no longer matches reality. Fold work into the

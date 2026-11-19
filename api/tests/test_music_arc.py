@@ -32,9 +32,21 @@ def _analysis(drop_s: float = 22.0, duration: float = 60.0) -> SongAnalysis:
     return SongAnalysis(beats=beats, structure=structure, file_sha256="abc")
 
 
-def _clip(ref: str, start: float, intensity: float, topic: str | None = None, length=5.0):
+def _clip(
+    ref: str,
+    start: float,
+    intensity: float,
+    topic: str | None = None,
+    length=5.0,
+    event_type: str | None = None,
+):
     return ClipWithIntensity(
-        clip_ref=ref, start=start, end=start + length, intensity=intensity, topic=topic
+        clip_ref=ref,
+        start=start,
+        end=start + length,
+        intensity=intensity,
+        topic=topic,
+        event_type=event_type,
     )
 
 
@@ -118,8 +130,8 @@ def test_arc_plan_is_valid_and_records_trim() -> None:
 
 def test_arc_never_puts_one_or_two_kill_on_the_drop() -> None:
     clips = _six_clips()
-    clips[1] = _clip("c1", 110.0, 0.99, "multi_kill_2")  # would be best
-    clips[3] = _clip("c3", 130.0, 0.95, "kill")
+    clips[1] = _clip("c1", 110.0, 0.99, event_type="multi_kill_2")  # would be best
+    clips[3] = _clip("c3", 130.0, 0.95, event_type="kill")
     analysis = _analysis()
     plan = plan_arc(clips, analysis, "arc_montage", 30.0, song_id="s1")
     drop_t = _drop_in_cut(plan, analysis)
@@ -132,9 +144,41 @@ def test_arc_never_puts_one_or_two_kill_on_the_drop() -> None:
 
 
 def test_arc_with_only_small_kills_cannot_fill_the_drop() -> None:
-    clips = [_clip("a", 0.0, 0.9, "kill"), _clip("b", 10.0, 0.8, "multi_kill_2")]
+    clips = [
+        _clip("a", 0.0, 0.9, event_type="kill"),
+        _clip("b", 10.0, 0.8, event_type="multi_kill_2"),
+        _clip("c", 20.0, 0.7, event_type="doublekill"),
+    ]
     with pytest.raises(ValueError, match="drop"):
         plan_arc(clips, _analysis(), "arc_montage", 10.0, song_id="s1")
+
+
+def test_session_index_to_arc_puts_the_3k_on_the_drop(tmp_path, monkeypatch) -> None:
+    """End to end: real index.json shape (only `event`, no `topic`) through
+    `score_session` into the arc planner; a lone kill outscoring a 3K
+    (a screaming 1K) still never carries the drop."""
+    import json
+
+    from ai_video_editor.config import settings
+    from ai_video_editor.intensity import score_session
+
+    monkeypatch.setattr(settings, "intensity_voice_weight", 1.0)
+
+    entries = [
+        {"file": "1k.mp4", "event": "kill", "start_seconds": 0, "end_seconds": 10,
+         "ok": True, "sentiment_score": 1.0},
+        {"file": "3k.mp4", "event": "multi_kill_3", "start_seconds": 50, "end_seconds": 60,
+         "ok": True},
+    ]  # fmt: skip
+    (tmp_path / "index.json").write_text(json.dumps({"clips": entries}), encoding="utf-8")
+    scored = score_session(tmp_path / "index.json")
+    by_ref = {c.clip_ref: c for c in scored}
+    assert by_ref["1k.mp4"].intensity > by_ref["3k.mp4"].intensity
+
+    analysis = _analysis()
+    plan = plan_arc(scored, analysis, "arc_montage", 20.0, song_id="s1")
+    lo, hi = _window(plan, "3k.mp4")
+    assert lo <= _drop_in_cut(plan, analysis) <= hi
 
 
 # --- story -------------------------------------------------------------

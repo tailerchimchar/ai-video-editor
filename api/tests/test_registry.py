@@ -118,6 +118,26 @@ def test_cli_without_flag_prints_and_writes_nothing(tmp_path, monkeypatch, capsy
     assert render_arsenal_md() in capsys.readouterr().out
 
 
+def test_plan_formats_come_from_the_taxonomy():
+    from ai_video_editor.taxonomy import PLAN_FORMAT_BY_FORMAT, Format
+
+    assert PLAN_FORMAT_BY_FORMAT == {
+        Format.hype: "hype_montage",
+        Format.story: "story_short",
+        Format.voice_over: "vo_short",
+        Format.funny: "funny_short",
+        Format.arc_montage: "arc_montage",
+    }
+    assert registry.FORMATS == tuple(PLAN_FORMAT_BY_FORMAT.values())
+
+
+def test_every_format_is_listed_as_a_valid_plan_format():
+    text = render_arsenal_md()
+    assert "planned, not renderable yet" not in text
+    assert "`arc_montage`" in text
+    assert "`cards` and `sfx`" in text
+
+
 @pytest.mark.parametrize("kind", ["zoom", "focus", "caption", "sfx", "music"])
 def test_core_kinds_are_registered(kind):
     assert kind in REGISTRY

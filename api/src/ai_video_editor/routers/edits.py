@@ -584,9 +584,13 @@ def _do_edit(
     action: str = "edit",
     details: dict | None = None,
 ) -> dict:
-    """Load spec, apply mutator (returns new spec + dirty ids), save spec,
-    re-render, journal the new state. Synchronous because per-clip
+    """Load spec, apply mutator (returns new spec + dirty ids), re-render,
+    save spec, journal the new state. Synchronous because per-clip
     re-encodes in seconds.
+
+    The spec is saved only after the render returns, so an edit whose
+    render raises leaves `spec.json` as it was (no half-applied edit to
+    re-apply on retry).
 
     `action` and `details` are recorded in the spec history journal so
     `list_compilation_history` can show *what* the user did, not just
@@ -594,8 +598,8 @@ def _do_edit(
     """
     spec = load_spec(folder)
     new_spec, dirty = mutator(spec)
-    save_spec(folder, new_spec)
     summary = render_spec(new_spec, folder, dirty_clip_ids=dirty)
+    save_spec(folder, new_spec)
     summary["clips"] = _summarise_clips(new_spec)
     # Journal the post-edit state. Append is best-effort — a journal
     # write failure doesn't break the edit (the spec is already saved
@@ -604,8 +608,12 @@ def _do_edit(
     return summary
 
 
-def _effect_from_body(body: AddEffectBody) -> dict:
-    """Pick only the fields relevant to the requested effect kind."""
+def effect_payload(body: AddEffectBody) -> dict:
+    """Pick only the fields relevant to the requested effect kind.
+
+    Pure; raises ValueError when the body cannot make that effect, so the
+    plan executor can dry-run it and the endpoint can turn it into a 400.
+    """
     if body.kind == "zoom":
         e: dict = {"kind": "zoom"}
         if body.factor is not None:
@@ -622,8 +630,15 @@ def _effect_from_body(body: AddEffectBody) -> dict:
         return e
     # caption
     if not body.text:
-        raise HTTPException(400, "caption effect requires `text`")
+        raise ValueError("caption effect requires `text`")
     return {"kind": "caption", "text": body.text}
+
+
+def _effect_from_body(body: AddEffectBody) -> dict:
+    try:
+        return effect_payload(body)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
 
 
 @router.post("/compile/{compilation_id}/effect")
@@ -1217,9 +1232,7 @@ class ReorderExplicitBody(BaseModel):
 
 
 @router.post("/compile/{compilation_id}/reorder_explicit")
-async def reorder_compilation_clips_explicit(
-    compilation_id: str, body: ReorderExplicitBody
-):
+async def reorder_compilation_clips_explicit(compilation_id: str, body: ReorderExplicitBody):
     """Reorder clips by an EXPLICIT user-provided order (drag-and-drop).
 
     Unlike `/reorder` (which sorts by a scoring mode and preserves intro

@@ -6,20 +6,21 @@ no opinion on questions it has no rule for (value None, probability 0),
 and includes every candidate in the pre-filter.
 """
 
-from ...taxonomy import Format, Topic
+from ...taxonomy import Format, Topic, kills_for_event
 from ..models import Answer, BoolQuestion, ChoiceQuestion, TypedQuestion
 
 _TOPIC_BY_EVENT = {
-    "ace": Topic.multikill,
-    "pentakill": Topic.multikill,
-    "quadrakill": Topic.multikill,
-    "multi_kill_2": Topic.multikill,
-    "multi_kill_3": Topic.multikill,
-    "multi_kill_4": Topic.multikill,
-    "multi_kill_5": Topic.multikill,
     "objective": Topic.objective_steal,
     "clutch": Topic.outplay,
 }
+"""Non-kill events with a topic; any 2K-and-up kill event is a multikill."""
+
+
+def _topic(event: str) -> Topic | None:
+    if kills_for_event(event) >= 2:
+        return Topic.multikill
+    return _TOPIC_BY_EVENT.get(event)
+
 
 _NO_OPINION = Answer(value=None, probability=0.0, backend="rules")
 
@@ -36,8 +37,9 @@ def _choose(question: ChoiceQuestion, state: dict) -> Answer:
 
         bucket, _reason = route_clip(state.get("clip") or {})
         return Answer(value=bucket, probability=1.0, backend="rules")
-    if question.options is Topic and _event(state) in _TOPIC_BY_EVENT:
-        return Answer(value=_TOPIC_BY_EVENT[_event(state)], probability=1.0, backend="rules")
+    topic = _topic(_event(state)) if question.options is Topic else None
+    if topic is not None:
+        return Answer(value=topic, probability=1.0, backend="rules")
     return _NO_OPINION
 
 

@@ -15,7 +15,9 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Literal, NamedTuple
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
+
+from .taxonomy import PLAN_FORMAT_BY_FORMAT
 
 EffectKind = Literal[
     "zoom",
@@ -34,56 +36,62 @@ Scope = Literal["clip", "compilation", "short"]
 # rendered today. The editor must reject or substitute them.
 NOT_RENDERABLE = ("slow_mo", "speed_ramp", "transition", "pulse_zoom", "beat_snap", "time_scoped")
 
-# Edit-plan format names (editing-expert SKILL.md). `edit_plan.validate_plan` reads this list.
-FORMATS = ("hype_montage", "story_short", "vo_short", "funny_short", "arc_montage")
-_FORMATS_NOT_RENDERABLE = ("arc_montage",)
+# Edit-plan format names, one per taxonomy Format. `edit_plan.validate_plan` reads this list.
+FORMATS = tuple(PLAN_FORMAT_BY_FORMAT.values())
 
 ARSENAL_PATH = (
     Path(__file__).resolve().parents[3] / ".claude" / "skills" / "editing-expert" / "arsenal.md"
 )
 
 
-class ZoomParams(BaseModel):
+class _Params(BaseModel):
+    """Effect params: unknown keys are a plan error, never silently dropped."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class ZoomParams(_Params):
     factor: float = 2.0
     roi: str = "center"
 
 
-class FocusParams(BaseModel):
+class FocusParams(_Params):
     x: float
     y: float
     radius: float
     dim: float
 
 
-class CaptionParams(BaseModel):
-    text: str | None = None  # None: caption from the transcript
-    aspect: str = "16:9"
+class CaptionParams(_Params):
+    # Required: the compilation mutator has no transcript path. The aspect
+    # is the compilation's, so a plan cannot set it per caption.
+    text: str = Field(min_length=1)
 
 
-class CaptionVideoParams(BaseModel):
+class CaptionVideoParams(_Params):
     segments: list[dict]
     aspect: str = "9:16"
 
 
-class BeatFlashParams(BaseModel):
+class BeatFlashParams(_Params):
     beat_flash: bool = True
     beat_flash_source: str = "kills"
 
 
-class SfxParams(BaseModel):
+class SfxParams(_Params):
     sfx: list[dict]
 
 
-class MusicParams(BaseModel):
+class MusicParams(_Params):
     music_path: str
 
 
-class CardTextParams(BaseModel):
+class CardTextParams(_Params):
     text: str
     duration: float = 2.5
 
 
-class CardLogoParams(BaseModel):
+class CardLogoParams(_Params):
     name: str
     preset: str | None = None
     duration: float = 2.5
@@ -132,7 +140,9 @@ REGISTRY: dict[EffectKind, EffectSpec] = _specs(
         scope="clip",
         mcp_tool="caption_clip",
         description=(
-            "Caption a whole clip; omit text to use the transcript. Classic style via "
+            "Caption a whole clip with `text` (required in a plan; only the standalone "
+            "`caption_clip` tool can caption from the transcript). The plan's `at` is "
+            "not applied: whole-clip effects ignore it today. Classic style via "
             "`caption_clip`, tiktok style via `tiktok_caption_clip`."
         ),
         also_tools=(
@@ -171,7 +181,11 @@ REGISTRY: dict[EffectKind, EffectSpec] = _specs(
         params_model=MusicParams,
         scope="short",
         mcp_tool="compile_shorts",
-        description="Music bed under a short or montage (flat mix, no envelope).",
+        description=(
+            "Music bed under a short or montage (flat mix, no envelope). A plan's music "
+            "trim (`trim_to_peak`, `trim_start_s`, `trim_end_s`) is not rendered yet: the "
+            "song plays from 0 s and the plan endpoint returns a warning in `problems`."
+        ),
     ),
     EffectSpec(
         kind="card_text",
@@ -361,11 +375,7 @@ _CARD_KINDS: tuple[EffectKind, ...] = ("card_text", "card_logo")
 
 
 def _formats_line() -> str:
-    parts = [
-        f"`{fmt}`" + (" (planned, not renderable yet)" if fmt in _FORMATS_NOT_RENDERABLE else "")
-        for fmt in FORMATS
-    ]
-    return " · ".join(parts)
+    return " · ".join(f"`{fmt}`" for fmt in FORMATS)
 
 
 def render_arsenal_md() -> str:
@@ -378,6 +388,9 @@ def render_arsenal_md() -> str:
         "",
         "## Formats (edit plan `format`)",
         _formats_line(),
+        "",
+        "Every format is a valid plan. The plan executor does not apply `cards` and `sfx`",
+        "yet: a plan that has them is refused before anything renders.",
         "",
         "## Per-clip and per-video effects (edit plan `effects[].kind`)",
         "",

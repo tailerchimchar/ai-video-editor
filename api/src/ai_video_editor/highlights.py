@@ -19,8 +19,10 @@ import re
 from datetime import date
 from pathlib import Path
 
+from .bucketing import prefilter_summary
 from .candidates.probe import get_duration_seconds
 from .config import settings
+from .decisions import select_backend
 from .editing import trim_clip
 
 _FN_RE = re.compile(
@@ -306,11 +308,12 @@ def build_highlights(asset: dict, rankings: list[dict], candidates: list[dict]) 
                     "reason": r.get("reason"),
                     "ok": ok,
                     "error": err,
-                    }
+                }
             )
 
     written = sum(1 for c in clips if c["ok"])
     game, _, _ = _parse_name(asset)
+    dropped = _dropped_entries(candidates)
     summary = {
         "game": game,
         "champion": champ,
@@ -320,7 +323,8 @@ def build_highlights(asset: dict, rankings: list[dict], candidates: list[dict]) 
         "clips_written": written,
         "clips_total": len(clips),
         "clips": clips,
-        "dropped": _dropped_entries(candidates),
+        "dropped": dropped,
+        "prefilter": prefilter_summary(len(dropped), select_backend()),
     }
 
     (dest / "index.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
@@ -400,6 +404,8 @@ def _render_md(s: dict) -> str:
         f"- Champion: {s.get('champion') or 'n/a'}",
         f"- Clips: {s.get('clips_written')}/{s.get('clips_total')} written",
     ]
+    if s.get("prefilter"):
+        lines.append(f"- Pre-filter: {s['prefilter']}")
     if corr:
         conf = (corr.get("confidence") or "?").upper()
         warn = (

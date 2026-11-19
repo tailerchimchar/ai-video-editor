@@ -12,8 +12,10 @@ from datetime import datetime, timezone
 
 from ..bucketing import prefilter_candidates
 from ..config import settings
+from ..decisions import select_backend
 from ..league import is_league
 from ..league.orchestrator import gather_lol_candidates
+from ..taxonomy import kills_for_event
 from .audio import energy_curve, peaks_from_energy
 from .cv_kda import detect_kda_events
 from .overwolf_events import detect_overwolf_events
@@ -148,9 +150,7 @@ def compute_candidates(
     # a fullMatch / fullSession recording, not a user-manually-clipped
     # short). Confidence: 1.0. Runs cross-game because Overwolf
     # supports many games via per-game event providers.
-    for ow in detect_overwolf_events(
-        video_path, duration, asset.get("game")
-    ):
+    for ow in detect_overwolf_events(video_path, duration, asset.get("game")):
         rows.append(
             _row(
                 "overwolf_game_event",
@@ -183,7 +183,11 @@ def compute_candidates(
             "prefilter_probability": row.pop("prefilter_probability"),
         }
 
-    return kept + dropped, {"riot": riot_status, "prefilter_dropped": len(dropped)}
+    return kept + dropped, {
+        "riot": riot_status,
+        "prefilter_dropped": len(dropped),
+        "prefilter_backend": select_backend(),
+    }
 
 
 _AUDIO_SOURCES = frozenset({"audio_peak", "transcript_keyword"})
@@ -192,12 +196,15 @@ _AUDIO_SOURCES = frozenset({"audio_peak", "transcript_keyword"})
 # visible-truth signal we have, stronger than cv_kda. Promoting audio
 # peaks near an Overwolf kill matches the LoL Riot pattern.
 _VISIBLE_SOURCES = frozenset({"riot_api", "cv_kda", "overwolf_game_event"})
-_VISIBLE_EVENTS = frozenset({"kill", "death", "assist", "ace", "pentakill",
-                             "quadrakill", "doublekill", "teamfight",
-                             "baron", "dragon", "objective",
-                             "clutch", "victory",
-                             # Multi-kill clusters from overwolf_events.
-                             "multi_kill_2", "multi_kill_3", "multi_kill_4"})
+# Non-kill gameplay events; every kill event (any game's name, see
+# `taxonomy.kills_for_event`) is visible too.
+_VISIBLE_EVENTS = frozenset(
+    {"death", "assist", "teamfight", "baron", "dragon", "objective", "clutch", "victory"}
+)
+
+
+def _is_visible_event(event_type: str | None) -> bool:
+    return event_type in _VISIBLE_EVENTS or kills_for_event(event_type) > 0
 
 
 # Seconds of slack around a visible event for the audio promoter to
@@ -243,8 +250,7 @@ def promote_audio_event_types(
     visible = [
         r
         for r in rows
-        if r.get("source") in _VISIBLE_SOURCES
-        and r.get("event_type") in _VISIBLE_EVENTS
+        if r.get("source") in _VISIBLE_SOURCES and _is_visible_event(r.get("event_type"))
     ]
     if not visible:
         return rows

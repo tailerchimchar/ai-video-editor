@@ -88,6 +88,21 @@ def test_bad_params_are_rejected():
     assert "bad params for 'focus'" in msg
 
 
+@pytest.mark.parametrize(
+    ("kind", "params"),
+    [
+        ("caption", {}),  # a plan caption needs its text
+        ("caption", {"text": "gg", "aspect": "9:16"}),  # aspect is the compilation's
+        ("zoom", {"factor": 1.5, "clip_ref": "2"}),  # extra keys never pass through
+        ("zoom", {"kind": "focus"}),
+    ],
+)
+def test_params_the_mutators_cannot_take_are_rejected(kind, params):
+    plan = _plan(effects=[{"clip_ref": "c1", "kind": kind, "at": 1.0, "params": params}])
+    (msg,) = validate_plan(plan, known_sounds=SOUNDS)
+    assert f"bad params for '{kind}'" in msg
+
+
 def test_order_must_reference_source_clips():
     (msg,) = validate_plan(_plan(order=["c1", "ghost"]), known_sounds=SOUNDS)
     assert "'ghost' is not in source_clips" in msg
@@ -331,6 +346,29 @@ def test_plan_music_sets_music_path_on_the_spec(client, compilation, tmp_path):
     assert spec["music_path"] == song.as_posix()
 
 
+def test_ignored_music_trim_is_reported_as_a_problem(client, compilation, tmp_path):
+    comp_id, folder = compilation
+    song = tmp_path / "song.mp3"
+    song.write_bytes(b"")
+    url = f"/api/v1/compilations/{comp_id}/plan"
+    trimmed = _http_plan(
+        music={"song_id": str(song), "trim_to_peak": True, "trim_start_s": 4.0, "trim_end_s": 34.0}
+    )
+    r = client.post(url, json=trimmed)
+    assert r.status_code == 200, r.text
+    (warning,) = r.json()["problems"]
+    assert "trim" in warning and "4.0" in warning and "not applied" in warning
+
+
+def test_plan_without_a_music_trim_reports_no_problems(client, compilation, tmp_path):
+    comp_id, _folder = compilation
+    song = tmp_path / "song.mp3"
+    song.write_bytes(b"")
+    plan = _http_plan(music={"song_id": str(song)})
+    r = client.post(f"/api/v1/compilations/{comp_id}/plan", json=plan)
+    assert r.json()["problems"] == []
+
+
 def test_plan_music_resolves_a_library_song_id(client, compilation, tmp_path):
     import json
 
@@ -350,6 +388,89 @@ def test_plan_music_resolves_a_library_song_id(client, compilation, tmp_path):
     assert executor.preflight(_plan(cards=[], sfx=[], music={"song_id": "missing"})) == [
         "music: song 'missing' not found"
     ]
+
+
+@pytest.mark.parametrize(
+    ("params", "expected"),
+    [
+        ({}, "requires `text`"),
+        ({"text": "gg", "clip_ref": "1"}, "caption"),
+        ({"text": "gg", "kind": "zoom"}, "caption"),
+    ],
+)
+def test_preflight_dry_runs_every_effect(compilation, params, expected):
+    """A plan that skipped validate_plan still fails before anything renders."""
+    from ai_video_editor.routers.plan_executor import EditsPlanExecutor
+
+    comp_id, folder = compilation
+    plan = EditPlan.model_validate(
+        _http_plan(effects=[{"clip_ref": "1", "kind": "caption", "at": 1.0, "params": params}])
+    )
+    (problem,) = EditsPlanExecutor(folder, comp_id).preflight(plan)
+    assert problem.startswith("effects[1@1.0]")
+    assert expected in problem
+
+
+def _two_effect_plan() -> EditPlan:
+    return EditPlan.model_validate(
+        _http_plan(
+            effects=[
+                {"clip_ref": "2", "kind": "zoom", "at": 3.0, "params": {"factor": 1.5}},
+                {"clip_ref": "1", "kind": "caption", "at": 1.0, "params": {"text": "gg"}},
+            ]
+        )
+    )
+
+
+def _effect_counts(folder: Path) -> list[int]:
+    import json
+
+    spec = json.loads((folder / "spec.json").read_text(encoding="utf-8"))
+    return [len(c.get("effects") or []) for c in spec["clips"]]
+
+
+def test_effects_step_is_atomic_when_its_render_fails(compilation, monkeypatch):
+    """A failed effects render adds nothing, so a resume cannot apply twice."""
+    from ai_video_editor.routers.plan_executor import EditsPlanExecutor
+
+    comp_id, folder = compilation
+    calls: list[str] = []
+
+    def render(spec, fld, dirty_clip_ids=None):
+        calls.append("render")
+        if any(c.get("effects") for c in spec["clips"]):
+            raise RuntimeError("ffmpeg died")
+        return {"output": (folder / "compilation.mp4").as_posix()}
+
+    monkeypatch.setattr("ai_video_editor.routers.edits.render_spec", render)
+    plan = _two_effect_plan()
+    with pytest.raises(RuntimeError, match="ffmpeg died"):
+        execute_plan(plan, comp_id, EditsPlanExecutor(folder, comp_id))
+
+    assert _effect_counts(folder) == [0, 0]
+    assert load_progress(folder).completed_steps == STEPS.index("effects")
+    assert len(read_journal(folder)) == 2  # compile + order
+    assert calls == ["render", "render"]  # order once, effects batch once
+
+
+def test_effects_step_applies_every_effect_in_one_journal_entry(compilation, monkeypatch):
+    from ai_video_editor.routers.plan_executor import EditsPlanExecutor
+
+    comp_id, folder = compilation
+    renders: list[set] = []
+
+    def render(spec, fld, dirty_clip_ids=None):
+        renders.append(dirty_clip_ids)
+        return {"output": (folder / "compilation.mp4").as_posix()}
+
+    monkeypatch.setattr("ai_video_editor.routers.edits.render_spec", render)
+    execute_plan(_two_effect_plan(), comp_id, EditsPlanExecutor(folder, comp_id))
+
+    assert _effect_counts(folder) == [1, 1]  # c-bbb (zoom) then c-aaa (caption)
+    effect_entries = [e for e in read_journal(folder) if e["action"].startswith("plan:effect")]
+    assert [e["action"] for e in effect_entries] == ["plan:effects"]
+    assert renders[-1] == {"c-aaa", "c-bbb"}
+    assert len(renders) == 2  # order + one effects render
 
 
 def test_plan_on_a_compilation_without_journal_is_refused(client, compilation):

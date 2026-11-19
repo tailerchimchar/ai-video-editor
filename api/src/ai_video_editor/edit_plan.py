@@ -43,6 +43,9 @@ class PlanEffect(BaseModel):
     clip_ref: str
     kind: str
     at: float
+    """Seconds into the clip the panel wants the effect. Accepted to record
+    the panel's intent, but not applied today: zoom, focus and caption are
+    whole-clip effects."""
     params: dict = Field(default_factory=dict)
 
 

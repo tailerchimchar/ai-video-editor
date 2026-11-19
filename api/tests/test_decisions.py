@@ -105,6 +105,17 @@ def test_rules_topic_maps_multikill_events():
     assert answer.value == Topic.multikill
 
 
+@pytest.mark.parametrize("event", ["doublekill", "triplekill", "multi_kill_5", "pentakill"])
+def test_rules_topic_maps_every_multikill_alias(event):
+    answer = ask(ChoiceQuestion(prompt="t", options=Topic), {"clip": {"event": event}})
+    assert answer.value == Topic.multikill
+
+
+def test_rules_topic_has_no_opinion_on_a_single_kill():
+    answer = ask(ChoiceQuestion(prompt="t", options=Topic), {"clip": {"event": "kill"}})
+    assert answer.value is None
+
+
 def test_rules_has_no_opinion_on_unknown_questions():
     answer = ask(ScoreQuestion(prompt="s", lo=0, hi=10), {})
     assert answer.backend == "rules"
@@ -417,6 +428,42 @@ def test_build_highlights_lists_dropped_candidates_in_index_json_and_md(monkeypa
         }
     ]
     assert "Dropped by pre-filter (1)" in (folder / "index.md").read_text("utf-8")
+
+
+def test_prefilter_summary_says_when_the_rules_backend_keeps_everything():
+    from ai_video_editor.bucketing import prefilter_summary
+
+    assert prefilter_summary(0, "rules") == "pre-filter inactive (rules backend keeps everything)"
+    assert prefilter_summary(0, "haiku") == "0 pre-filtered out"
+    assert prefilter_summary(3, "jev") == "3 pre-filtered out"
+
+
+def test_compute_candidates_reports_the_prefilter_backend(monkeypatch):
+    from ai_video_editor.candidates import service
+
+    monkeypatch.setattr(settings, "decisions_backend", "rules")
+    monkeypatch.setattr(service, "get_duration_seconds", lambda _p: 26.0)
+    _rows, diag = service.compute_candidates({"id": "v1", "path": "x.mp4", "game": None})
+    assert diag["prefilter_backend"] == "rules"
+
+
+def test_index_md_says_the_rules_prefilter_is_inactive(monkeypatch, tmp_path):
+    from ai_video_editor import highlights
+
+    monkeypatch.setattr(settings, "decisions_backend", "rules")
+    monkeypatch.setattr(settings, "workspace_dir", tmp_path)
+    monkeypatch.setattr(highlights, "get_duration_seconds", lambda _p: 100.0)
+    monkeypatch.setattr(highlights, "trim_clip", lambda *a, **k: (True, None))
+    monkeypatch.setattr(highlights, "_vlm_enabled", lambda: False)
+    asset = {"id": "v1", "path": "x.mp4", "filename": "Valorant_05-15-2026_21-19-8-0.mp4"}
+    kept = {
+        "id": "c1", "source": "audio_peak", "event_type": "audio_peak",
+        "start_seconds": 1.0, "end_seconds": 9.0, "metadata": {},
+    }  # fmt: skip
+    rankings = [{"candidate_id": "c1", "keep": True}]
+    summary = highlights.build_highlights(asset, rankings, [kept])
+    md = (settings.workspace_dir / summary["folder"] / "index.md").read_text("utf-8")
+    assert "- Pre-filter: pre-filter inactive (rules backend keeps everything)" in md
 
 
 # --- jev failures + ranker spend cap ---

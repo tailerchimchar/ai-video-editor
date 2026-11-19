@@ -48,6 +48,16 @@ class Format(StrEnum):
     arc_montage = "arc_montage"
 
 
+PLAN_FORMAT_BY_FORMAT: dict[Format, str] = {
+    Format.hype: "hype_montage",
+    Format.story: "story_short",
+    Format.voice_over: "vo_short",
+    Format.funny: "funny_short",
+    Format.arc_montage: "arc_montage",
+}
+"""Editorial bucket -> the edit plan `format` the editing-expert emits for it."""
+
+
 class Topic(StrEnum):
     """What the clip shows."""
 
@@ -90,6 +100,36 @@ class PayoffType(StrEnum):
     kite_escape = "kite_escape"
     tower_dive = "tower_dive"
     teamfight_turn = "teamfight_turn"
+
+
+EVENT_ALIASES: dict[str, PayoffType] = {
+    "doublekill": PayoffType.multi_kill_2,
+    "triplekill": PayoffType.multi_kill_3,
+    "quadrakill": PayoffType.multi_kill_4,
+    "pentakill": PayoffType.multi_kill_5,
+    "ace": PayoffType.multi_kill_5,
+}
+"""Game-specific event names (League's Riot names, Valorant's ace) -> the one
+canonical kill event. The only place kill vocabulary is spelled out."""
+
+_KILLS_BY_EVENT: dict[str, int] = {
+    PayoffType.kill: 1,
+    PayoffType.multi_kill_2: 2,
+    PayoffType.multi_kill_3: 3,
+    PayoffType.multi_kill_4: 4,
+    PayoffType.multi_kill_5: 5,
+}
+
+
+def canonical_event(event: str | None) -> str:
+    """Lower-cased event name with game aliases folded to their PayoffType."""
+    name = (event or "").lower()
+    return EVENT_ALIASES.get(name, name)
+
+
+def kills_for_event(event: str | None) -> int:
+    """How many kills an event stands for; 0 for any non-kill event."""
+    return _KILLS_BY_EVENT.get(canonical_event(event), 0)
 
 
 class FlagCategory(StrEnum):

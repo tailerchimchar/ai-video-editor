@@ -19,11 +19,13 @@ from typing import Literal
 
 from ..edit_plan import EditPlan, PlanMusic, Rejected, SourceClip
 from ..intensity import ClipWithIntensity
+from ..taxonomy import kills_for_event
 from .analysis import SongAnalysis
 from .structure import SongStructure
 
-NOT_ON_THE_DROP = frozenset({"kill", "multi_kill_2"})
-"""Topics for a 1K/2K; the mentor never lets these carry the drop."""
+MIN_DROP_KILLS = 3
+"""A kill clip carries the drop only from a 3K up (an ace counts as 5).
+Clips with no kill event (a clutch, an objective) are not kill clips."""
 
 _TARGET_TOLERANCE = 0.05
 
@@ -45,8 +47,13 @@ def _by_intensity_desc(clips: list[ClipWithIntensity]) -> list[ClipWithIntensity
     return sorted(clips, key=lambda c: c.intensity, reverse=True)
 
 
+def _can_carry_drop(clip: ClipWithIntensity) -> bool:
+    kills = kills_for_event(clip.event_type)
+    return kills == 0 or kills >= MIN_DROP_KILLS
+
+
 def _drop_clip(clips: list[ClipWithIntensity]) -> ClipWithIntensity:
-    eligible = [c for c in clips if c.topic not in NOT_ON_THE_DROP]
+    eligible = [c for c in clips if _can_carry_drop(c)]
     if not eligible:
         raise ValueError("no clip is eligible for the drop (1K/2K never carry it)")
     return max(eligible, key=lambda c: c.intensity)

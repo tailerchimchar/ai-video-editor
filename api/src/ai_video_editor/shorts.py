@@ -105,7 +105,9 @@ _TURNAROUND_PATTERN = re.compile(
 )
 
 
-# Public slug list, in output order: topics first, then phases.
+# Public slug list, in output order: topics first, then phases. New Topic
+# members (kite_escape, tower_dive, teamfight_turn) are left out on purpose
+# until the shorts consumers migrate to them.
 BUCKET_ORDER = tuple(LEGACY_SLUGS[m] for m in (*Topic, *Phase) if m in LEGACY_SLUGS)
 
 

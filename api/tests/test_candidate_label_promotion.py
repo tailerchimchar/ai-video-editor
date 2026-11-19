@@ -49,6 +49,13 @@ def test_visible_kill_overlap_promotes_audio_label() -> None:
     assert promoted["metadata"]["promoted_by_source"] == "riot_api"
 
 
+def test_every_kill_alias_counts_as_visible() -> None:
+    for event in ("triplekill", "multi_kill_5", "pentakill"):
+        out = promote_audio_event_types([_audio_row(10, 20), _riot_row(12, 13, event)])
+        promoted = next(r for r in out if r["source"] == "audio_peak")
+        assert promoted["event_type"] == event
+
+
 def test_no_overlap_leaves_audio_alone() -> None:
     audio = _audio_row(10, 20)
     kill = _riot_row(80, 81, "kill")  # far away — beyond tolerance

@@ -13,24 +13,8 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from .config import settings
+from .taxonomy import kills_for_event
 
-# TODO(taxonomy): replace these raw event_type strings with the
-# taxonomy.PayoffType / Topic enums once Task 1 is merged.
-_KILLS_PER_EVENT: dict[str, int] = {
-    "kill": 1,
-    "multi_kill_2": 2,
-    "multi_kill_3": 3,
-    "multi_kill_4": 4,
-    "ace": 5,
-    # LoL event names (Riot candidates)
-    "doublekill": 2,
-    "triplekill": 3,
-    "quadrakill": 4,
-    "pentakill": 5,
-}
-_MULTI_KILL_TIER: dict[str, int] = {
-    name: kills for name, kills in _KILLS_PER_EVENT.items() if kills > 1
-}
 _DEATH_EVENT = "death"
 
 
@@ -53,6 +37,8 @@ class ClipWithIntensity(BaseModel):
     end: float
     intensity: float
     topic: str | None = None
+    event_type: str | None = None
+    """The index entry's event (`kill`, `multi_kill_3`, `pentakill`, ...)."""
 
 
 def _event_type(event: dict) -> str:
@@ -68,8 +54,9 @@ def score_clip(
     """Intensity in [0, 1]. Absent optional signals contribute nothing."""
     w = weights or IntensityWeights()
     types = [_event_type(e) for e in events]
-    kills = sum(_KILLS_PER_EVENT.get(t, 0) for t in types)
-    tier = max((_MULTI_KILL_TIER.get(t, 0) for t in types), default=0)
+    per_event = [kills_for_event(t) for t in types]
+    kills = sum(per_event)
+    tier = max((k for k in per_event if k > 1), default=0)
     deaths = types.count(_DEATH_EVENT)
 
     raw = (
@@ -117,8 +104,9 @@ def score_session(index_json_path: Path) -> list[ClipWithIntensity]:
         file = entry.get("file")
         if not entry.get("ok") or not file:
             continue
+        event_type = entry.get("event") or entry.get("event_type")
         intensity = score_clip(
-            [{"event_type": entry.get("event") or entry.get("event_type")}],
+            [{"event_type": event_type}],
             _optional_float(entry.get("sentiment_score")),
             _vlm_payoff(folder / file),
         )
@@ -129,6 +117,7 @@ def score_session(index_json_path: Path) -> list[ClipWithIntensity]:
                 end=float(entry.get("end_seconds") or 0),
                 intensity=intensity,
                 topic=entry.get("topic"),
+                event_type=event_type,
             )
         )
     return result

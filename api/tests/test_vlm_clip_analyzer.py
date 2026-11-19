@@ -348,6 +348,30 @@ def test_legacy_int_version_sidecar_is_reused(tmp_path, monkeypatch) -> None:
     assert calls["n"] == 0
 
 
+def test_legacy_sidecar_is_restamped_then_expires_with_a_new_correction(
+    tmp_path, monkeypatch
+) -> None:
+    """A legacy hit is migrated to the current version (no VLM call), so it
+    stops being valid once a correction enters the top-K window."""
+    from ai_video_editor.vlm import corrections
+
+    clip, cache, backend, calls = _analyzer_env(tmp_path, monkeypatch)
+    cache.write_text(
+        json.dumps({"prompt_version": 7, "model": "claude-haiku-4-5", "analysis": _ANALYSIS}),
+        encoding="utf-8",
+    )
+    _run(clip, backend)
+    restamped = json.loads(cache.read_text(encoding="utf-8"))
+    assert restamped["prompt_version"] == corrections.effective_prompt_version("valorant")
+    assert restamped["analysis"]["description"] == "cached"
+    assert calls["n"] == 0
+
+    corrections.append_correction("valorant", feedback="fb", rule="a new lesson")
+    result = _run(clip, backend)
+    assert calls["n"] == 1
+    assert result is not None and result.description == "fresh"
+
+
 def test_correction_entering_top_k_reanalyzes_and_restamps(tmp_path, monkeypatch) -> None:
     from ai_video_editor.vlm import corrections
 

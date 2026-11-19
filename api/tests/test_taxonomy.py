@@ -88,9 +88,51 @@ def test_intensity_bands_and_range() -> None:
         Intensity(-0.1)
 
 
-def test_hype_routing_set_uses_payoff_members() -> None:
-    assert PayoffType.ace in bucketing._HYPE_EVENT_TYPES
+def test_hype_routing_uses_kill_vocabulary() -> None:
+    assert bucketing.route_clip({"event": PayoffType.ace})[0] == Format.hype
     assert bucketing.route_clip({"event": "multi_kill_3"})[0] == Format.hype
+    assert bucketing.route_clip({"event": "triplekill"})[0] == Format.hype
+    assert bucketing.route_clip({"event": "doublekill"})[0] == Format.voice_over
+
+
+@pytest.mark.parametrize(
+    ("event", "canonical"),
+    [
+        ("doublekill", "multi_kill_2"),
+        ("triplekill", "multi_kill_3"),
+        ("quadrakill", "multi_kill_4"),
+        ("pentakill", "multi_kill_5"),
+        ("ace", "multi_kill_5"),
+        ("PentaKill", "multi_kill_5"),
+        ("kill", "kill"),
+        ("baron", "baron"),
+    ],
+)
+def test_canonical_event_folds_game_aliases(event: str, canonical: str) -> None:
+    from ai_video_editor.taxonomy import canonical_event
+
+    assert canonical_event(event) == canonical
+
+
+@pytest.mark.parametrize(
+    ("event", "kills"),
+    [
+        ("kill", 1),
+        ("multi_kill_2", 2),
+        ("doublekill", 2),
+        ("triplekill", 3),
+        ("multi_kill_4", 4),
+        ("ace", 5),
+        ("pentakill", 5),
+        ("death", 0),
+        ("", 0),
+        (None, 0),
+    ],
+)
+def test_kills_for_event(event, kills: int) -> None:
+    from ai_video_editor.taxonomy import kills_for_event
+
+    assert kills_for_event(event) == kills
 
 
 def test_categorize_clips_keeps_legacy_slugs() -> None:

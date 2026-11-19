@@ -132,9 +132,9 @@ captions were too small", "don't use scoreboards as endings"),
 call `mentor_record_correction` IMMEDIATELY with the RULE — not just
 the feedback. It appends to `api/src/ai_video_editor/vlm/game_hints/
 <game>_examples.jsonl` which auto-loads into every VLM system prompt
-for that game. The examples file's content hash rolls into the
-effective PROMPT_VERSION so per-clip analyzer caches invalidate
-cleanly (`game_hints_effective_version`).
+for that game. The top-K (default 12) rendered corrections roll into
+the effective prompt version so per-clip analyzer caches invalidate
+cleanly (`corrections.effective_prompt_version`).
 
 Example:
 
