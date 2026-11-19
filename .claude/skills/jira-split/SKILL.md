@@ -13,13 +13,16 @@ Mac; if that file is ever brought over, reconcile this one against it.
 ## Site
 
 - Cloud: `hellomoshi.atlassian.net` · cloudId `9319da9f-b1f7-4726-ba88-65d823e0ef70`
-- Project: `MOSHI` (next-gen). Issue types: Epic, Task, Story, Feature, Bug, Subtask.
+- Projects: **`AVE` (AI Video Editor, this repo)** — created 2026-11-19, team-managed
+  Kanban, issue types Epic, Story, Task, Bug, Subtask, statuses To Do → In Progress → Done
+  (no In Review: leave a `Controller: waiting on Tailer` comment instead).
+  `MOSHI` is the day-job product; never file video-editor work there.
 - Tools: claude.ai Atlassian MCP (`createJiraIssue`, `editJiraIssue`,
   `addOrEditJiraIssueComment`, `transitionJiraIssue`, `getJiraIssue`,
-  `searchJiraIssuesUsingJql`). Statuses: To Do → In Progress → In Review → Done.
-- **Open question for ai-video-editor work**: same MOSHI project with a
-  label (e.g. `ai-video-editor`), or a second project? Ask the user the
-  first time; record the answer here.
+  `searchJiraIssuesUsingJql`). MOSHI statuses: To Do → In Progress → In Review → Done.
+- First split in AVE: `docs/specs/spec-expert-panel.md` (2026-11-19).
+  Contracts pinned there (module and enum names) are the ones every later
+  Task must reuse.
 
 ## Roles
 

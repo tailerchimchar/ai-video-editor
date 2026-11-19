@@ -5,7 +5,7 @@
 | Status | v2 (interview + red-team complete) |
 | Date | 2026-11-19 |
 | Baseline commit | `88b80a3` (July milestone committed; 700 tests passing) |
-| Jira | project **AVE** (to be created in the Jira UI), work split via `jira-split` |
+| Jira | project **AVE** (created 2026-11-19): Epics AVE-1 typed decisions (B=AVE-5, D=AVE-6, I=AVE-7) · AVE-2 registry + edit plans (C=AVE-8, E=AVE-9) · AVE-3 music arcs (G=AVE-10, F=AVE-11, H=AVE-12) · AVE-4 panel in use (S=AVE-13, T=AVE-14, K=AVE-15) |
 | Interview state | `.spec-expert-panel.interview.json` |
 | Preview | https://claude.ai/artifact/6dY4co2bHypPHDskbsvizD (private) |
 
@@ -211,7 +211,7 @@ After the stream: harvest Outplayed clips to the workspace immediately (retentio
 | librosa section detection is noisy on some genres | Sidecar with manual override; the drop timestamp is the only hard requirement. |
 | Taxonomy change breaks MCP tool outputs | Separate Format/Topic/Phase enums; old slugs as aliases; response-shape tests. |
 | Mentor's rules are Valorant-learned | LoL ties go to Noodlz for the first few videos; each becomes a logged lesson. |
-| Jira project AVE cannot be created through the Atlassian MCP | Noodlz creates it in the Jira UI (team-managed software project, key AVE). |
+| Jira project creation is not in the Atlassian MCP | Created through the browser 2026-11-19; the Epics and Tasks were then created via the connector. |
 
 ## Decisions Log
 
