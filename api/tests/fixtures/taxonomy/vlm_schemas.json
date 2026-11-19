@@ -1,0 +1,445 @@
+{
+  "ClipAnalysis": {
+    "$defs": {
+      "PayoffMoment": {
+        "description": "One trim-window recommendation inside a clip.\n\nAll times are seconds from clip start (offset within the clip\nfile, NOT the source recording).",
+        "properties": {
+          "buildup_start_seconds": {
+            "minimum": 0.0,
+            "title": "Buildup Start Seconds",
+            "type": "number"
+          },
+          "confidence": {
+            "default": 0.5,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence",
+            "type": "number"
+          },
+          "description": {
+            "default": "",
+            "title": "Description",
+            "type": "string"
+          },
+          "payoff_anchor_seconds": {
+            "minimum": 0.0,
+            "title": "Payoff Anchor Seconds",
+            "type": "number"
+          },
+          "payoff_type": {
+            "$ref": "#/$defs/PayoffType",
+            "default": "other"
+          },
+          "resolution_end_seconds": {
+            "minimum": 0.0,
+            "title": "Resolution End Seconds",
+            "type": "number"
+          }
+        },
+        "required": [
+          "payoff_anchor_seconds",
+          "buildup_start_seconds",
+          "resolution_end_seconds"
+        ],
+        "title": "PayoffMoment",
+        "type": "object"
+      },
+      "PayoffType": {
+        "description": "What a VLM-identified payoff moment is.",
+        "enum": [
+          "kill",
+          "multi_kill",
+          "ace",
+          "clutch",
+          "plant",
+          "defuse",
+          "save",
+          "outplay",
+          "other",
+          "first_blood",
+          "multi_kill_2",
+          "multi_kill_3",
+          "multi_kill_4",
+          "multi_kill_5",
+          "objective_steal",
+          "kite_escape",
+          "tower_dive",
+          "teamfight_turn"
+        ],
+        "title": "PayoffType",
+        "type": "string"
+      }
+    },
+    "description": "Per-clip source-analyzer response.\n\nContains the PRIMARY payoff (top-level fields) plus optional\n`additional_moments` for clips where the user got multiple kills.\nThe compile treats each moment as its own sub-clip in the final\nmontage \u2014 a 40s Outplayed clip with 3 kills becomes 3 tight\n~5s sub-clips.\n\nBackward compat: pre-v4 sidecars don't have `additional_moments`;\nthey still deserialize (Pydantic defaults it to []).",
+    "properties": {
+      "additional_moments": {
+        "description": "Extra payoffs in the same clip (kills at the beginning AND end, common when the user pre-clipped their own VOD). Each moment gets rendered as its own sub-clip in the montage. Windows may NOT overlap with the primary or each other.",
+        "items": {
+          "$ref": "#/$defs/PayoffMoment"
+        },
+        "title": "Additional Moments",
+        "type": "array"
+      },
+      "buildup_start_seconds": {
+        "description": "Where meaningful engagement begins for the primary payoff.",
+        "minimum": 0.0,
+        "title": "Buildup Start Seconds",
+        "type": "number"
+      },
+      "confidence": {
+        "description": "0..1 confidence in the primary payoff + its trim window. Below `vlm_clip_analyzer_min_confidence` the compile ignores the trim and uses the full clip as fallback.",
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "title": "Confidence",
+        "type": "number"
+      },
+      "description": {
+        "description": "One-sentence account of what happens in the clip.",
+        "title": "Description",
+        "type": "string"
+      },
+      "payoff_anchor_seconds": {
+        "description": "The single most impactful payoff frame. If nothing worth highlighting is in the clip, put the midpoint here and set confidence low.",
+        "minimum": 0.0,
+        "title": "Payoff Anchor Seconds",
+        "type": "number"
+      },
+      "payoff_type": {
+        "$ref": "#/$defs/PayoffType",
+        "default": "other",
+        "description": "Category of the primary payoff."
+      },
+      "resolution_end_seconds": {
+        "description": "Where the aftermath of the primary payoff resolves.",
+        "minimum": 0.0,
+        "title": "Resolution End Seconds",
+        "type": "number"
+      }
+    },
+    "required": [
+      "payoff_anchor_seconds",
+      "buildup_start_seconds",
+      "resolution_end_seconds",
+      "description",
+      "confidence"
+    ],
+    "title": "ClipAnalysis",
+    "type": "object"
+  },
+  "MomentFlag": {
+    "$defs": {
+      "FlagCategory": {
+        "description": "What a montage critic flags on an interval. Tuned for gameplay\ncritique; adding a member is safe, nothing branches on the value.",
+        "enum": [
+          "dead_air",
+          "scoreboard",
+          "own_death",
+          "teammate_kill_only",
+          "payoff_lands",
+          "good_buildup",
+          "great_moment",
+          "abrupt_cut",
+          "boring_pacing",
+          "kill_anchor_misplaced",
+          "killfeed_pop_cut_off",
+          "cut_too_early",
+          "cut_too_late"
+        ],
+        "title": "FlagCategory",
+        "type": "string"
+      }
+    },
+    "description": "One flag on a specific interval of the montage.",
+    "properties": {
+      "category": {
+        "$ref": "#/$defs/FlagCategory"
+      },
+      "end_s": {
+        "description": "End of the flagged interval, in seconds from montage start.",
+        "minimum": 0.0,
+        "title": "End S",
+        "type": "number"
+      },
+      "fix_seconds": {
+        "anyOf": [
+          {
+            "maximum": 5.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Magnitude of the fix in seconds, 0-5 range. Required when suggested_fix is anything other than drop/keep/None.",
+        "title": "Fix Seconds"
+      },
+      "start_s": {
+        "description": "Start of the flagged interval, in seconds from the beginning of the montage. Will be snapped to the nearest panel boundary.",
+        "minimum": 0.0,
+        "title": "Start S",
+        "type": "number"
+      },
+      "suggested_fix": {
+        "anyOf": [
+          {
+            "enum": [
+              "drop",
+              "extend_before",
+              "extend_after",
+              "trim_start",
+              "trim_end",
+              "shift_left",
+              "shift_right",
+              "keep"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "The deterministic op the refine loop should apply. Set for actionable flags (kill_anchor_misplaced -> shift, cut_too_early -> extend_after, boring_pacing -> trim). Leave None for positive flags (great_moment, payoff_lands) and observations that don't map to a mechanical fix.",
+        "title": "Suggested Fix"
+      },
+      "why": {
+        "description": "One-sentence, specific explanation. Reference what is visible: \"killfeed shows tpew killing HitTheQuang -- teammate frag, not user's\".",
+        "title": "Why",
+        "type": "string"
+      }
+    },
+    "required": [
+      "start_s",
+      "end_s",
+      "category",
+      "why"
+    ],
+    "title": "MomentFlag",
+    "type": "object"
+  },
+  "MontageCritique": {
+    "$defs": {
+      "FlagCategory": {
+        "description": "What a montage critic flags on an interval. Tuned for gameplay\ncritique; adding a member is safe, nothing branches on the value.",
+        "enum": [
+          "dead_air",
+          "scoreboard",
+          "own_death",
+          "teammate_kill_only",
+          "payoff_lands",
+          "good_buildup",
+          "great_moment",
+          "abrupt_cut",
+          "boring_pacing",
+          "kill_anchor_misplaced",
+          "killfeed_pop_cut_off",
+          "cut_too_early",
+          "cut_too_late"
+        ],
+        "title": "FlagCategory",
+        "type": "string"
+      },
+      "MomentFlag": {
+        "description": "One flag on a specific interval of the montage.",
+        "properties": {
+          "category": {
+            "$ref": "#/$defs/FlagCategory"
+          },
+          "end_s": {
+            "description": "End of the flagged interval, in seconds from montage start.",
+            "minimum": 0.0,
+            "title": "End S",
+            "type": "number"
+          },
+          "fix_seconds": {
+            "anyOf": [
+              {
+                "maximum": 5.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Magnitude of the fix in seconds, 0-5 range. Required when suggested_fix is anything other than drop/keep/None.",
+            "title": "Fix Seconds"
+          },
+          "start_s": {
+            "description": "Start of the flagged interval, in seconds from the beginning of the montage. Will be snapped to the nearest panel boundary.",
+            "minimum": 0.0,
+            "title": "Start S",
+            "type": "number"
+          },
+          "suggested_fix": {
+            "anyOf": [
+              {
+                "enum": [
+                  "drop",
+                  "extend_before",
+                  "extend_after",
+                  "trim_start",
+                  "trim_end",
+                  "shift_left",
+                  "shift_right",
+                  "keep"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The deterministic op the refine loop should apply. Set for actionable flags (kill_anchor_misplaced -> shift, cut_too_early -> extend_after, boring_pacing -> trim). Leave None for positive flags (great_moment, payoff_lands) and observations that don't map to a mechanical fix.",
+            "title": "Suggested Fix"
+          },
+          "why": {
+            "description": "One-sentence, specific explanation. Reference what is visible: \"killfeed shows tpew killing HitTheQuang -- teammate frag, not user's\".",
+            "title": "Why",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start_s",
+          "end_s",
+          "category",
+          "why"
+        ],
+        "title": "MomentFlag",
+        "type": "object"
+      }
+    },
+    "description": "The whole-montage critique response.",
+    "properties": {
+      "climax_strength": {
+        "description": "1-5: how strongly the biggest moment lands.",
+        "maximum": 5,
+        "minimum": 1,
+        "title": "Climax Strength",
+        "type": "integer"
+      },
+      "flags": {
+        "description": "Zero or more intervals worth flagging. Include BOTH problems (dead air, scoreboard shots, own deaths) AND highlights (great_moment, good_buildup) so the caller can see what worked. Chronological order preferred.",
+        "items": {
+          "$ref": "#/$defs/MomentFlag"
+        },
+        "title": "Flags",
+        "type": "array"
+      },
+      "opener_strength": {
+        "description": "1-5: how strongly the first ~5 seconds hook the viewer.",
+        "maximum": 5,
+        "minimum": 1,
+        "title": "Opener Strength",
+        "type": "integer"
+      },
+      "overall_verdict": {
+        "description": "`ship_it` -- no material issues, publish as-is. `needs_edits` -- a few flagged moments to fix. `start_over` -- pacing or content fundamentally broken.",
+        "enum": [
+          "ship_it",
+          "needs_edits",
+          "start_over"
+        ],
+        "title": "Overall Verdict",
+        "type": "string"
+      },
+      "pacing": {
+        "enum": [
+          "too_slow",
+          "just_right",
+          "too_fast"
+        ],
+        "title": "Pacing",
+        "type": "string"
+      },
+      "top_recommendation": {
+        "description": "One-sentence: the single biggest change that would improve the montage. Actionable -- name the interval and what to do.",
+        "title": "Top Recommendation",
+        "type": "string"
+      }
+    },
+    "required": [
+      "overall_verdict",
+      "opener_strength",
+      "climax_strength",
+      "pacing",
+      "top_recommendation"
+    ],
+    "title": "MontageCritique",
+    "type": "object"
+  },
+  "PayoffMoment": {
+    "$defs": {
+      "PayoffType": {
+        "description": "What a VLM-identified payoff moment is.",
+        "enum": [
+          "kill",
+          "multi_kill",
+          "ace",
+          "clutch",
+          "plant",
+          "defuse",
+          "save",
+          "outplay",
+          "other",
+          "first_blood",
+          "multi_kill_2",
+          "multi_kill_3",
+          "multi_kill_4",
+          "multi_kill_5",
+          "objective_steal",
+          "kite_escape",
+          "tower_dive",
+          "teamfight_turn"
+        ],
+        "title": "PayoffType",
+        "type": "string"
+      }
+    },
+    "description": "One trim-window recommendation inside a clip.\n\nAll times are seconds from clip start (offset within the clip\nfile, NOT the source recording).",
+    "properties": {
+      "buildup_start_seconds": {
+        "minimum": 0.0,
+        "title": "Buildup Start Seconds",
+        "type": "number"
+      },
+      "confidence": {
+        "default": 0.5,
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "title": "Confidence",
+        "type": "number"
+      },
+      "description": {
+        "default": "",
+        "title": "Description",
+        "type": "string"
+      },
+      "payoff_anchor_seconds": {
+        "minimum": 0.0,
+        "title": "Payoff Anchor Seconds",
+        "type": "number"
+      },
+      "payoff_type": {
+        "$ref": "#/$defs/PayoffType",
+        "default": "other"
+      },
+      "resolution_end_seconds": {
+        "minimum": 0.0,
+        "title": "Resolution End Seconds",
+        "type": "number"
+      }
+    },
+    "required": [
+      "payoff_anchor_seconds",
+      "buildup_start_seconds",
+      "resolution_end_seconds"
+    ],
+    "title": "PayoffMoment",
+    "type": "object"
+  }
+}
