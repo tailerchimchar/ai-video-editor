@@ -17,7 +17,6 @@ game-agnostic.
 from __future__ import annotations
 
 import re
-from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -25,12 +24,10 @@ from pydantic import BaseModel, Field
 from ..config import settings
 from ..taxonomy import PayoffType
 from .corrections import (
-    effective_prompt_version,
     load_recent_corrections,
     render_corrections_section,
 )
-
-_HINTS_DIR = Path(__file__).parent / "game_hints"
+from .hint_files import resolve_hint_file
 
 # ---------------------------------------------------------------------
 # Verdict schemas
@@ -182,27 +179,6 @@ class ClipAnalysis(BaseModel):
 # ---------------------------------------------------------------------
 
 
-def _resolve_hint_file(game: str | None) -> tuple[Path | None, str]:
-    """Locate the .md file for `game`. Returns (`path or None`,
-    `resolved_name`). Never reads content — split so `load_game_hints`
-    and the corrections loader can share the resolution logic."""
-    if game:
-        g = game.lower().strip()
-        specific = _HINTS_DIR / f"{g}.md"
-        if specific.is_file():
-            return specific, specific.stem
-        for candidate in _HINTS_DIR.glob("*.md"):
-            stem = candidate.stem
-            if stem.startswith("_"):
-                continue
-            if stem in g:
-                return candidate, stem
-    default = _HINTS_DIR / "_default.md"
-    if default.is_file():
-        return default, "_default"
-    return None, "_missing"
-
-
 def load_game_hints(game: str | None) -> tuple[str, str]:
     """Return (`hint_text`, `resolved_hint_name`).
 
@@ -223,7 +199,7 @@ def load_game_hints(game: str | None) -> tuple[str, str]:
     Never raises — missing hints degrade to a minimal generic prompt
     rather than crashing the compile.
     """
-    path, resolved = _resolve_hint_file(game)
+    path, resolved = resolve_hint_file(game)
     base = path.read_text(encoding="utf-8") if path else ""
     if resolved not in ("_missing", "_default") and game:
         corrections = load_recent_corrections(resolved, limit=settings.corrections_top_k)
@@ -496,8 +472,3 @@ def game_hints_prompt_version(game: str | None) -> int:
     hints_text, _ = load_game_hints(game)
     m = _PROMPT_VERSION_RE.search(hints_text)
     return int(m.group(1)) if m else 0
-
-
-def game_hints_effective_version(game: str | None) -> str:
-    """Per-clip sidecar cache key; see `corrections.effective_prompt_version`."""
-    return effective_prompt_version(game)

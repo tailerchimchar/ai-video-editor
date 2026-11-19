@@ -12,7 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from ai_video_editor.main import app
-from ai_video_editor.vlm import corrections, prompts
+from ai_video_editor.vlm import corrections, hint_files, prompts
 
 
 @pytest.fixture
@@ -22,8 +22,7 @@ def hints_dir(tmp_path, monkeypatch) -> Path:
     (scratch / "valorant.md").write_text("<!-- PROMPT_VERSION: 7 -->\n# hints\n", encoding="utf-8")
     (scratch / "league.md").write_text("<!-- PROMPT_VERSION: 1 -->\n# lol\n", encoding="utf-8")
     (scratch / "_default.md").write_text("default hints", encoding="utf-8")
-    monkeypatch.setattr(corrections, "_HINTS_DIR", scratch)
-    monkeypatch.setattr(prompts, "_HINTS_DIR", scratch)
+    monkeypatch.setattr(hint_files, "HINTS_DIR", scratch)
     return scratch
 
 

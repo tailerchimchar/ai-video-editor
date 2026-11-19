@@ -41,9 +41,7 @@ def test_analyzer_returns_none_when_disabled(tmp_path, monkeypatch) -> None:
 
     clip = _make_clip(tmp_path)
     monkeypatch.setattr(settings, "vlm_enabled", False)
-    result = ca.analyze_source_clip(
-        clip, game="Valorant", clip_duration_seconds=30.0
-    )
+    result = ca.analyze_source_clip(clip, game="Valorant", clip_duration_seconds=30.0)
     assert result is None
 
 
@@ -149,9 +147,7 @@ def test_analyzer_hits_cache_on_second_call(tmp_path, monkeypatch) -> None:
     assert calls["n"] == 0  # backend never called
 
 
-def test_cache_invalidated_when_prompt_version_bumped(
-    tmp_path, monkeypatch
-) -> None:
+def test_cache_invalidated_when_prompt_version_bumped(tmp_path, monkeypatch) -> None:
     """A sidecar with a stale `prompt_version` is treated as a miss."""
     from ai_video_editor.config import settings
 
@@ -216,9 +212,7 @@ def test_analyzer_clamps_out_of_range_values(tmp_path, monkeypatch) -> None:
 
     monkeypatch.setattr(settings, "vlm_enabled", True)
     monkeypatch.setattr(settings, "vlm_clip_analyzer_enabled", True)
-    monkeypatch.setattr(
-        settings, "vlm_clip_analyzer_cache_enabled", False
-    )
+    monkeypatch.setattr(settings, "vlm_clip_analyzer_cache_enabled", False)
     clip = _make_clip(tmp_path)
     monkeypatch.setattr(
         "ai_video_editor.vlm.clip_analyzer.extract_frames",
@@ -229,9 +223,9 @@ def test_analyzer_clamps_out_of_range_values(tmp_path, monkeypatch) -> None:
     def _wild(**_kw):
         return json.dumps(
             {
-                "payoff_anchor_seconds": 45.0,   # beyond duration=30
+                "payoff_anchor_seconds": 45.0,  # beyond duration=30
                 "buildup_start_seconds": 25.0,
-                "resolution_end_seconds": 100.0, # way beyond
+                "resolution_end_seconds": 100.0,  # way beyond
                 "payoff_type": "kill",
                 "description": "clamped",
                 "confidence": 0.9,
@@ -259,9 +253,7 @@ def test_analyzer_returns_none_on_parse_failure(tmp_path, monkeypatch) -> None:
 
     monkeypatch.setattr(settings, "vlm_enabled", True)
     monkeypatch.setattr(settings, "vlm_clip_analyzer_enabled", True)
-    monkeypatch.setattr(
-        settings, "vlm_clip_analyzer_cache_enabled", False
-    )
+    monkeypatch.setattr(settings, "vlm_clip_analyzer_cache_enabled", False)
     clip = _make_clip(tmp_path)
     monkeypatch.setattr(
         "ai_video_editor.vlm.clip_analyzer.extract_frames",
@@ -289,8 +281,8 @@ def test_clamp_helper_handles_degenerate_window() -> None:
     centered on the anchor."""
     analysis = ClipAnalysis(
         payoff_anchor_seconds=10.0,
-        buildup_start_seconds=15.0,       # invalid: after anchor
-        resolution_end_seconds=8.0,       # invalid: before anchor
+        buildup_start_seconds=15.0,  # invalid: after anchor
+        resolution_end_seconds=8.0,  # invalid: before anchor
         payoff_type="kill",
         description="broken",
         confidence=0.5,
@@ -298,3 +290,79 @@ def test_clamp_helper_handles_degenerate_window() -> None:
     fixed = ca._clamp(analysis, clip_duration=30.0)
     assert fixed.buildup_start_seconds <= fixed.payoff_anchor_seconds
     assert fixed.payoff_anchor_seconds <= fixed.resolution_end_seconds
+
+
+_ANALYSIS = {
+    "payoff_anchor_seconds": 10.0,
+    "buildup_start_seconds": 5.0,
+    "resolution_end_seconds": 15.0,
+    "payoff_type": "kill",
+    "description": "cached",
+    "confidence": 0.9,
+}
+
+
+def _analyzer_env(tmp_path, monkeypatch):
+    """Scratch hints dir (valorant.md v7), enabled analyzer, fresh-call
+    backend that counts calls. Returns (clip, cache, backend, calls)."""
+    from ai_video_editor.config import settings
+    from ai_video_editor.vlm import hint_files
+
+    hints = tmp_path / "game_hints"
+    hints.mkdir()
+    (hints / "valorant.md").write_text("<!-- PROMPT_VERSION: 7 -->\n", encoding="utf-8")
+    monkeypatch.setattr(hint_files, "HINTS_DIR", hints)
+    monkeypatch.setattr(settings, "vlm_enabled", True)
+    monkeypatch.setattr(settings, "vlm_clip_analyzer_enabled", True)
+    clip = _make_clip(tmp_path)
+    (tmp_path / "frame_001.jpg").write_bytes(b"x")
+    monkeypatch.setattr(
+        "ai_video_editor.vlm.clip_analyzer.extract_frames",
+        lambda *a, **kw: [tmp_path / "frame_001.jpg"],
+    )
+    calls = {"n": 0}
+
+    def _fresh(**_kw):
+        calls["n"] += 1
+        return json.dumps({**_ANALYSIS, "description": "fresh"})
+
+    backend = _fake_backend()
+    monkeypatch.setattr(backend, "call", _fresh, raising=False)
+    return clip, clip.with_suffix(clip.suffix + ".analysis.json"), backend, calls
+
+
+def _run(clip, backend):
+    return ca.analyze_source_clip(
+        clip, game="valorant", clip_duration_seconds=30.0, backend=backend
+    )
+
+
+def test_legacy_int_version_sidecar_is_reused(tmp_path, monkeypatch) -> None:
+    clip, cache, backend, calls = _analyzer_env(tmp_path, monkeypatch)
+    cache.write_text(
+        json.dumps({"prompt_version": 7, "model": "claude-haiku-4-5", "analysis": _ANALYSIS}),
+        encoding="utf-8",
+    )
+    result = _run(clip, backend)
+    assert result is not None and result.description == "cached"
+    assert calls["n"] == 0
+
+
+def test_correction_entering_top_k_reanalyzes_and_restamps(tmp_path, monkeypatch) -> None:
+    from ai_video_editor.vlm import corrections
+
+    clip, cache, backend, calls = _analyzer_env(tmp_path, monkeypatch)
+    _run(clip, backend)
+    first = json.loads(cache.read_text(encoding="utf-8"))["prompt_version"]
+    assert first == corrections.effective_prompt_version("valorant")
+    assert calls["n"] == 1
+
+    _run(clip, backend)  # same version: cache hit
+    assert calls["n"] == 1
+
+    corrections.append_correction("valorant", feedback="fb", rule="a new lesson")
+    _run(clip, backend)
+    assert calls["n"] == 2
+    second = json.loads(cache.read_text(encoding="utf-8"))["prompt_version"]
+    assert second == corrections.effective_prompt_version("valorant")
+    assert second != first

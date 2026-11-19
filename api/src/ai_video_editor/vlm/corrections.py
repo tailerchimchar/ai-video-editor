@@ -33,13 +33,12 @@ from pathlib import Path
 from typing import Literal
 
 from ..config import settings
+from . import hint_files
 
 # Bump when the rubric/critic wording changes outside the hint files.
 RUBRIC_VERSION = "1"
 
 Verdict = Literal["payoff", "false_positive", "style"]
-
-_HINTS_DIR = Path(__file__).parent / "game_hints"
 
 
 @dataclass
@@ -63,7 +62,7 @@ class Correction:
 def _examples_path(game: str) -> Path:
     """`game_hints/<game_lower>_examples.jsonl`. Never raises — the file
     doesn't have to exist. Empty / missing → no examples injected."""
-    return _HINTS_DIR / f"{game.lower().strip()}_examples.jsonl"
+    return hint_files.HINTS_DIR / f"{game.lower().strip()}_examples.jsonl"
 
 
 def load_recent_corrections(game: str, limit: int = 10) -> list[Correction]:
@@ -164,9 +163,7 @@ def effective_prompt_version(game: str | None) -> str:
     game hint file bytes and the top-K rendered correction rows only.
     Rows outside the window and null typed fields render nothing, so
     neither appends beyond the window nor the typed migration move it."""
-    from .prompts import _resolve_hint_file  # prompts imports this module
-
-    path, resolved = _resolve_hint_file(game)
+    path, resolved = hint_files.resolve_hint_file(game)
     digest = hashlib.sha1(RUBRIC_VERSION.encode("utf-8"))
     digest.update(path.read_bytes() if path else b"")
     if game and resolved not in ("_missing", "_default"):

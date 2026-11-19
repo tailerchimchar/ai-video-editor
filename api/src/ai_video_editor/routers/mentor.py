@@ -2,9 +2,9 @@
 
 `POST /mentor/record_correction` — user or Claude appends a structured
 editorial correction. Persisted to `vlm/game_hints/<game>_examples.jsonl`;
-the next compile picks it up automatically via `load_game_hints` and
-its hash rolls into `game_hints_effective_version` so cached analyzer
-sidecars invalidate cleanly.
+the next compile picks it up automatically via `load_game_hints`, and a
+correction entering the rendered top-K changes `effective_prompt_version`
+so cached analyzer sidecars refresh.
 
 `GET /mentor/recent_corrections` — inspect what's been recorded, so
 the user can review + curate before it drives future compiles.

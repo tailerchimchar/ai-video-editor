@@ -9,7 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from ai_video_editor.main import app
-from ai_video_editor.vlm import corrections, prompts
+from ai_video_editor.vlm import corrections, hint_files, prompts
 
 
 @pytest.fixture
@@ -24,8 +24,7 @@ def hints_dir(tmp_path, monkeypatch) -> Path:
         encoding="utf-8",
     )
     (scratch / "_default.md").write_text("default hints", encoding="utf-8")
-    monkeypatch.setattr(corrections, "_HINTS_DIR", scratch)
-    monkeypatch.setattr(prompts, "_HINTS_DIR", scratch)
+    monkeypatch.setattr(hint_files, "HINTS_DIR", scratch)
     return scratch
 
 
@@ -117,16 +116,16 @@ def test_load_game_hints_injects_corrections(hints_dir) -> None:
 
 
 def test_effective_version_changes_after_correction(hints_dir) -> None:
-    v0 = prompts.game_hints_effective_version("valorant")
+    v0 = corrections.effective_prompt_version("valorant")
     corrections.append_correction("valorant", feedback="fb", rule="r")
-    v1 = prompts.game_hints_effective_version("valorant")
+    v1 = corrections.effective_prompt_version("valorant")
     assert v0 != v1
 
 
 def test_effective_version_default_hints_ignores_examples(hints_dir) -> None:
-    v0 = prompts.game_hints_effective_version(None)
+    v0 = corrections.effective_prompt_version(None)
     corrections.append_correction("valorant", feedback="fb", rule="r")
-    assert prompts.game_hints_effective_version(None) == v0
+    assert corrections.effective_prompt_version(None) == v0
 
 
 def test_http_record_correction(hints_dir, client) -> None:
