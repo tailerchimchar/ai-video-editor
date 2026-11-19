@@ -346,6 +346,29 @@ def test_plan_music_sets_music_path_on_the_spec(client, compilation, tmp_path):
     assert spec["music_path"] == song.as_posix()
 
 
+def test_ignored_music_trim_is_reported_as_a_problem(client, compilation, tmp_path):
+    comp_id, folder = compilation
+    song = tmp_path / "song.mp3"
+    song.write_bytes(b"")
+    url = f"/api/v1/compilations/{comp_id}/plan"
+    trimmed = _http_plan(
+        music={"song_id": str(song), "trim_to_peak": True, "trim_start_s": 4.0, "trim_end_s": 34.0}
+    )
+    r = client.post(url, json=trimmed)
+    assert r.status_code == 200, r.text
+    (warning,) = r.json()["problems"]
+    assert "trim" in warning and "4.0" in warning and "not applied" in warning
+
+
+def test_plan_without_a_music_trim_reports_no_problems(client, compilation, tmp_path):
+    comp_id, _folder = compilation
+    song = tmp_path / "song.mp3"
+    song.write_bytes(b"")
+    plan = _http_plan(music={"song_id": str(song)})
+    r = client.post(f"/api/v1/compilations/{comp_id}/plan", json=plan)
+    assert r.json()["problems"] == []
+
+
 def test_plan_music_resolves_a_library_song_id(client, compilation, tmp_path):
     import json
 

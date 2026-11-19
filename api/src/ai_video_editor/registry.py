@@ -180,7 +180,11 @@ REGISTRY: dict[EffectKind, EffectSpec] = _specs(
         params_model=MusicParams,
         scope="short",
         mcp_tool="compile_shorts",
-        description="Music bed under a short or montage (flat mix, no envelope).",
+        description=(
+            "Music bed under a short or montage (flat mix, no envelope). A plan's music "
+            "trim (`trim_to_peak`, `trim_start_s`, `trim_end_s`) is not rendered yet: the "
+            "song plays from 0 s and the plan endpoint returns a warning in `problems`."
+        ),
     ),
     EffectSpec(
         kind="card_text",

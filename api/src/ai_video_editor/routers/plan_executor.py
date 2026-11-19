@@ -7,9 +7,12 @@ Supported today: verifying `source_clips` refs, `order`, clip effects (zoom,
 focus, caption) and music (`music_path` on the spec). Cards, sfx and other
 effect kinds cannot be expressed by the existing mutators; `preflight` reports
 them so `execute_plan` refuses the whole plan before changing anything.
+
+The music trim (`trim_to_peak`, `trim_start_s`, `trim_end_s`) is not rendered
+yet: the full song plays from 0 s. `warnings` reports it so the caller sees
+it instead of a silent success.
 """
 
-import logging
 from collections.abc import Callable
 from pathlib import Path
 
@@ -20,8 +23,6 @@ from ..compile_journal import read_journal
 from ..edit_plan import EditPlan, PlanEffect, load_progress
 from ..music.library import Library
 from .edits import AddEffectBody, _do_edit, effect_payload
-
-logger = logging.getLogger(__name__)
 
 _MUTATOR_KINDS = ("zoom", "focus", "caption")
 
@@ -159,12 +160,23 @@ class EditsPlanExecutor:
     def apply_sfx(self, plan: EditPlan) -> None:
         """Nothing to do: `preflight` rejects plans that contain sfx."""
 
+    def warnings(self, plan: EditPlan) -> list[str]:
+        """Non-fatal: parts of a valid plan this executor accepts but ignores."""
+        music = plan.music
+        if music is None or not (
+            music.trim_to_peak or music.trim_start_s is not None or music.trim_end_s is not None
+        ):
+            return []
+        return [
+            f"music: trim (start={music.trim_start_s}, end={music.trim_end_s}, "
+            f"trim_to_peak={music.trim_to_peak}) not applied yet; the full song plays from 0 s"
+        ]
+
     def apply_music(self, plan: EditPlan) -> None:
+        """Sets the song only; any trim is reported by `warnings`, not rendered."""
         if not plan.music:
             return
         music = plan.music
-        if music.trim_to_peak or music.trim_start_s is not None or music.trim_end_s is not None:
-            logger.info("music trimming is not applied yet; using the full song")
         music_path = self._music_file(music.song_id).as_posix()
 
         def mutator(s: dict) -> tuple[dict, set[str]]:

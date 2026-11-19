@@ -21,6 +21,7 @@ router = APIRouter(tags=["edit"], prefix="/compilations")
 class PlanResponse(BaseModel):
     progress: PlanProgress
     problems: list[str]
+    """Non-fatal: parts of the applied plan that were accepted but not rendered."""
 
 
 @router.post("/{compilation_id}/plan", response_model=PlanResponse)
@@ -44,4 +45,4 @@ async def apply_plan(compilation_id: str, plan: EditPlan):
         raise HTTPException(409, f"plan stopped: {exc}") from None
     if executor.last_output:
         await _update_compilation_output(compilation_id, executor.last_output)
-    return PlanResponse(progress=progress, problems=[])
+    return PlanResponse(progress=progress, problems=executor.warnings(plan))
