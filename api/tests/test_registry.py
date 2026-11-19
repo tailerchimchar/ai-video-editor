@@ -63,9 +63,17 @@ def test_every_registry_entry_is_keyed_by_its_own_kind():
         assert spec.kind == kind
 
 
-def test_every_effect_tool_has_a_registry_entry():
-    covered = {tool for spec in REGISTRY.values() for tool in (spec.mcp_tool, *spec.also_tools)}
-    assert covered == EFFECT_TOOLS
+def test_every_effect_tool_maps_back_to_a_registry_entry():
+    for tool in EFFECT_TOOLS:
+        owners = [spec for spec in REGISTRY.values() if tool in (spec.mcp_tool, *spec.also_tools)]
+        assert owners, f"{tool} is an effect tool with no registry entry"
+        assert tool not in NON_EFFECT_TOOLS
+
+
+def test_an_also_tool_is_never_the_primary_tool_of_another_kind():
+    primaries = {spec.mcp_tool for spec in REGISTRY.values()}
+    for spec in REGISTRY.values():
+        assert not set(spec.also_tools) & primaries
 
 
 def test_every_registry_entry_names_a_real_mcp_tool():

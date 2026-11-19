@@ -32,7 +32,7 @@ Scope = Literal["clip", "compilation", "short"]
 
 # Effects that exist in code or in the panel's vocabulary but cannot be
 # rendered today. The editor must reject or substitute them.
-NOT_RENDERABLE = ("slow_mo", "speed_ramp", "transition", "pulse_zoom", "beat_snap")
+NOT_RENDERABLE = ("slow_mo", "speed_ramp", "transition", "pulse_zoom", "beat_snap", "time_scoped")
 
 # TODO(taxonomy): replace with taxonomy.Format once Task 1 lands.
 FORMATS = ("hype_montage", "story_short", "vo_short", "funny_short", "arc_montage")
@@ -56,7 +56,8 @@ class FocusParams(BaseModel):
 
 
 class CaptionParams(BaseModel):
-    text: str
+    text: str | None = None  # None: caption from the transcript
+    aspect: str = "16:9"
 
 
 class CaptionVideoParams(BaseModel):
@@ -130,7 +131,10 @@ REGISTRY: dict[EffectKind, EffectSpec] = _specs(
         params_model=CaptionParams,
         scope="clip",
         mcp_tool="caption_clip",
-        description="Caption text on a whole clip; classic or tiktok styles.",
+        description=(
+            "Caption a whole clip; omit text to use the transcript. Classic style via "
+            "`caption_clip`, tiktok style via `tiktok_caption_clip`."
+        ),
         also_tools=(
             "caption_compilation_clip",
             "tiktok_caption_clip",
