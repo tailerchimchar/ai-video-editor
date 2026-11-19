@@ -175,3 +175,4 @@ their typed JSON, then loads THIS file and applies it as policy.
 - Every rule in this file is Valorant-learned until a dated LoL entry
   says otherwise. When a LoL lesson lands, add it under "How to update
   this file" with the game named.
+- 2026-11-19 (League, first panel round): the chair held one LoL tie for Noodlz (9m41s "Diana" gripe: gaming-expert 1/5 vs viewer-expert pass). The VLM critic hears nothing, so for voice-comms shorts its dead_air flags on talk-only tails are advisory, not blocking. Panel agents need the Write tool to file their JSON; fixed in .claude/agents.
