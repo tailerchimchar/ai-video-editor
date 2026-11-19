@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 
 from ..bucketing import prefilter_candidates
 from ..config import settings
+from ..decisions import select_backend
 from ..league import is_league
 from ..league.orchestrator import gather_lol_candidates
 from ..taxonomy import kills_for_event
@@ -182,7 +183,11 @@ def compute_candidates(
             "prefilter_probability": row.pop("prefilter_probability"),
         }
 
-    return kept + dropped, {"riot": riot_status, "prefilter_dropped": len(dropped)}
+    return kept + dropped, {
+        "riot": riot_status,
+        "prefilter_dropped": len(dropped),
+        "prefilter_backend": select_backend(),
+    }
 
 
 _AUDIO_SOURCES = frozenset({"audio_peak", "transcript_keyword"})

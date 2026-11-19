@@ -219,6 +219,15 @@ def prefilter_candidates(
     return kept, dropped
 
 
+def prefilter_summary(n_dropped: int, backend: str) -> str:
+    """How a job summary or index.md reports the pre-filter, so zero drops
+    under the rules backend (which keeps everything) is not read as a
+    filter that found nothing to drop."""
+    if backend == "rules":
+        return "pre-filter inactive (rules backend keeps everything)"
+    return f"{n_dropped} pre-filtered out"
+
+
 _FORMAT_QUESTION = ChoiceQuestion(
     prompt="Which editorial format fits this clip: hype, story, voice_over, funny or arc_montage?",
     options=Format,

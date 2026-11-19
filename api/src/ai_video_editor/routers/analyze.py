@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
 
+from ..bucketing import prefilter_summary
 from ..candidates.probe import get_duration_seconds
 from ..candidates.service import compute_candidates
 from ..candidates.transcribe import transcribe
@@ -108,8 +109,7 @@ async def _run_candidates_job(job_id: str, asset: dict) -> None:
         await db.commit()
         n_dropped = diag.get("prefilter_dropped", 0)
         summary = f"{len(rows) - n_dropped} candidates"
-        if n_dropped:
-            summary += f" ({n_dropped} pre-filtered out)"
+        summary += f" ({prefilter_summary(n_dropped, diag.get('prefilter_backend', 'rules'))})"
         riot = diag.get("riot")
         # Surface a degraded Riot result so it's not mistaken for "no
         # data" — rate_limited/api_error are transient & retryable.
