@@ -41,6 +41,10 @@ def _choose(question: ChoiceQuestion, state: dict) -> Answer:
     return _NO_OPINION
 
 
+def available() -> bool:
+    return True
+
+
 def answer(question: TypedQuestion, state: dict) -> Answer:
     if isinstance(question, ChoiceQuestion):
         return _choose(question, state)

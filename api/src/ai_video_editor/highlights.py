@@ -62,13 +62,21 @@ def _riot_correlation(candidates: list[dict]) -> dict | None:
     return None
 
 
-def _prefilter_fields(cand: dict) -> dict:
-    """Pre-filter audit fields for index.json; empty unless the candidate
-    was flagged by the pre-filter."""
-    meta = cand.get("metadata") or {}
-    if not meta.get("prefilter_dropped"):
-        return {}
-    return {"prefilter_dropped": True, "prefilter_probability": meta.get("prefilter_probability")}
+def _dropped_entries(candidates: list[dict]) -> list[dict]:
+    """Candidates the pre-filter dropped, for the audit trail in index.json.
+    They are never cut as clips."""
+    return [
+        {
+            "candidate_id": c["id"],
+            "source": c.get("source"),
+            "start_seconds": c.get("start_seconds"),
+            "end_seconds": c.get("end_seconds"),
+            "event_type": c.get("event_type"),
+            "prefilter_probability": c["metadata"].get("prefilter_probability"),
+        }
+        for c in candidates
+        if (c.get("metadata") or {}).get("prefilter_dropped")
+    ]
 
 
 def _mmss(seconds: float) -> str:
@@ -282,7 +290,6 @@ def build_highlights(asset: dict, rankings: list[dict], candidates: list[dict]) 
                 "vlm_verdict": loop_result.final_verdict.verdict,
                 "vlm_why": loop_result.final_verdict.why,
                 "vlm_iterations": loop_result.iterations,
-                **_prefilter_fields(cand),
             }
             clips.append(clip_entry)
         else:
@@ -299,8 +306,7 @@ def build_highlights(asset: dict, rankings: list[dict], candidates: list[dict]) 
                     "reason": r.get("reason"),
                     "ok": ok,
                     "error": err,
-                    **_prefilter_fields(cand),
-                }
+                    }
             )
 
     written = sum(1 for c in clips if c["ok"])
@@ -314,6 +320,7 @@ def build_highlights(asset: dict, rankings: list[dict], candidates: list[dict]) 
         "clips_written": written,
         "clips_total": len(clips),
         "clips": clips,
+        "dropped": _dropped_entries(candidates),
     }
 
     (dest / "index.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
@@ -423,4 +430,12 @@ def _render_md(s: dict) -> str:
             f"{_mmss(c['start_seconds'])} | {c['hype_score']} | "
             f"{c['funny_score']} | {c['story_score']} | {c['reason']} |"
         )
+    dropped = s.get("dropped") or []
+    if dropped:
+        lines += ["", f"## Dropped by pre-filter ({len(dropped)})", ""]
+        for d in dropped:
+            lines.append(
+                f"- {d['event_type']} ({d['source']}) at {_mmss(d['start_seconds'])}: "
+                f"include-probability {d['prefilter_probability']}"
+            )
     return "\n".join(lines) + "\n"

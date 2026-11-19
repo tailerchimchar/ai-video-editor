@@ -9,6 +9,7 @@ the key and the SDK are available.
 
 from typing import Protocol
 
+from ...config import settings
 from ..models import (
     Answer,
     BoolQuestion,
@@ -35,10 +36,11 @@ def default_transport() -> JevTransport | None:
     return None
 
 
-def answer(question: TypedQuestion, state: dict, transport: JevTransport | None = None) -> Answer:
-    transport = transport or default_transport()
-    if transport is None:
-        raise DecisionError("Jev transport is not wired yet: no typesafe-sdk client configured")
+def available() -> bool:
+    return bool(settings.typesafe_api_key) and default_transport() is not None
+
+
+def _ask_transport(question: TypedQuestion, state: dict, transport: JevTransport) -> Answer:
     if isinstance(question, ChoiceQuestion):
         options = [member.value for member in question.options]
         raw, probability = transport.choice(question.prompt, options, state)
@@ -50,3 +52,15 @@ def answer(question: TypedQuestion, state: dict, transport: JevTransport | None 
     else:
         raise DecisionError(f"unsupported question: {type(question).__name__}")
     return Answer(value=value, probability=probability, backend="jev")
+
+
+def answer(question: TypedQuestion, state: dict, transport: JevTransport | None = None) -> Answer:
+    transport = transport or default_transport()
+    if transport is None:
+        raise DecisionError("Jev transport is not wired yet: no typesafe-sdk client configured")
+    try:
+        return _ask_transport(question, state, transport)
+    except DecisionError:
+        raise
+    except Exception as exc:  # a transport must never crash the pipeline
+        raise DecisionError(f"jev call failed: {exc}") from exc

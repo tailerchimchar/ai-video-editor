@@ -161,5 +161,9 @@ def answer_many(items: list[tuple[TypedQuestion, dict]]) -> list[Answer]:
     return answers
 
 
+def available() -> bool:
+    return bool(settings.anthropic_api_key)
+
+
 def answer(question: TypedQuestion, state: dict) -> Answer:
     return answer_many([(question, state)])[0]

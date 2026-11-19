@@ -304,7 +304,7 @@ def test_ask_uses_the_selected_backend(monkeypatch):
     monkeypatch.setitem(
         BACKENDS,
         "rules",
-        Backend(lambda q, s: Answer(value=1, probability=1.0, backend="rules")),
+        Backend(lambda q, s: Answer(value=1, probability=1.0, backend="rules"), lambda: True),
     )
     assert ask(ScoreQuestion(prompt="s", lo=0, hi=1), {}).value == 1
 
@@ -377,7 +377,7 @@ def test_compute_candidates_keeps_dropped_rows_flagged_in_metadata(monkeypatch):
     assert "prefilter_probability" not in rows[0]
 
 
-def test_highlights_index_carries_prefilter_fields(monkeypatch, tmp_path):
+def test_build_highlights_lists_dropped_candidates_in_index_json_and_md(monkeypatch, tmp_path):
     from ai_video_editor import highlights
 
     monkeypatch.setattr(settings, "workspace_dir", tmp_path)
@@ -385,27 +385,76 @@ def test_highlights_index_carries_prefilter_fields(monkeypatch, tmp_path):
     monkeypatch.setattr(highlights, "trim_clip", lambda *a, **k: (True, None))
     monkeypatch.setattr(highlights, "_vlm_enabled", lambda: False)
     asset = {"id": "v1", "path": "x.mp4", "filename": "Valorant_05-15-2026_21-19-8-0.mp4"}
-    flagged = {
-        "id": "c1",
-        "event_type": "kill",
-        "start_seconds": 1.0,
-        "end_seconds": 9.0,
+    base = {"source": "audio_peak", "event_type": "audio_peak", "start_seconds": 1.0}
+    kept = {**base, "id": "c1", "end_seconds": 9.0, "metadata": {}}
+    dropped = {
+        **base,
+        "id": "c2",
+        "start_seconds": 30.0,
+        "end_seconds": 35.0,
         "metadata": {"prefilter_dropped": True, "prefilter_probability": 0.2},
     }
-    plain = {**flagged, "id": "c2", "metadata": {}}
     rankings = [
         {
-            "candidate_id": cid,
+            "candidate_id": "c1",
             "keep": True,
             "suggested_start_seconds": 1.0,
             "suggested_end_seconds": 9.0,
         }
-        for cid in ("c1", "c2")
     ]
-    summary = highlights.build_highlights(asset, rankings, [flagged, plain])
-    assert summary["clips"][0]["prefilter_dropped"] is True
-    assert summary["clips"][0]["prefilter_probability"] == 0.2
-    assert "prefilter_dropped" not in summary["clips"][1]
-    index = (settings.workspace_dir / summary["folder"]).joinpath("index.json")
-    written = json.loads(index.read_text("utf-8"))
-    assert written["clips"][0]["prefilter_probability"] == 0.2
+    summary = highlights.build_highlights(asset, rankings, [kept, dropped])
+    folder = settings.workspace_dir / summary["folder"]
+    written = json.loads((folder / "index.json").read_text("utf-8"))
+    assert len(written["clips"]) == 1
+    assert written["dropped"] == [
+        {
+            "candidate_id": "c2",
+            "source": "audio_peak",
+            "start_seconds": 30.0,
+            "end_seconds": 35.0,
+            "event_type": "audio_peak",
+            "prefilter_probability": 0.2,
+        }
+    ]
+    assert "Dropped by pre-filter (1)" in (folder / "index.md").read_text("utf-8")
+
+
+# --- jev failures + ranker spend cap ---
+
+
+class RaisingTransport:
+    def choice(self, *a):
+        raise ConnectionError("down")
+
+    score = bool = choice
+
+
+def test_jev_transport_error_is_wrapped_and_ask_falls_back_to_rules(monkeypatch):
+    monkeypatch.setattr(settings, "typesafe_api_key", "ts")
+    monkeypatch.setattr(jev, "default_transport", lambda: RaisingTransport())
+    assert select_backend() == "jev"
+    with pytest.raises(decisions.DecisionError):
+        jev.answer(FORMAT_Q, {}, transport=RaisingTransport())
+    answer = ask(FORMAT_Q, {"clip": {"event": "ace"}})
+    assert answer.backend == "rules"
+    assert answer.value == Format.hype
+
+
+def test_jev_unknown_enum_value_is_wrapped():
+    class BadValue(FakeTransport):
+        def choice(self, prompt, options, state):
+            return "not_a_format", 0.9
+
+    with pytest.raises(decisions.DecisionError):
+        jev.answer(FORMAT_Q, {}, transport=BadValue())
+
+
+def test_ranker_spend_cap_raises_before_any_api_call(monkeypatch):
+    from ai_video_editor import ranker
+
+    monkeypatch.setattr(settings, "anthropic_max_rank_calls", 0)
+    monkeypatch.setattr(
+        ranker, "make_client", lambda: pytest.fail("Anthropic client must not be created")
+    )
+    with pytest.raises(anthropic_surface.SpendCapError, match="rank-call cap reached"):
+        ranker.rank_candidates("valorant", [{"id": "c1"}])

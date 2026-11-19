@@ -1,6 +1,7 @@
 """Backend registry. A new backend is one new file here plus one entry.
 
-A backend is `answer(question, state) -> Answer` and may also supply
+A backend is `answer(question, state) -> Answer` plus `available() -> bool`
+(credentials present) and may also supply
 `answer_many(items) -> list[Answer]` to answer a batch in one call (the
 default loops `answer`). Both raise `DecisionError` when they cannot
 answer.
@@ -18,6 +19,7 @@ Items = list[tuple[TypedQuestion, dict]]
 @dataclass(frozen=True)
 class Backend:
     answer: Callable[[TypedQuestion, dict], Answer]
+    available: Callable[[], bool]
     answer_many: Callable[[Items], list[Answer]] | None = None
 
     def many(self, items: Items) -> list[Answer]:
@@ -27,7 +29,7 @@ class Backend:
 
 
 BACKENDS: dict[str, Backend] = {
-    "jev": Backend(jev.answer),
-    "haiku": Backend(haiku.answer, haiku.answer_many),
-    "rules": Backend(rules.answer),
+    "jev": Backend(jev.answer, jev.available),
+    "haiku": Backend(haiku.answer, haiku.available, haiku.answer_many),
+    "rules": Backend(rules.answer, rules.available),
 }

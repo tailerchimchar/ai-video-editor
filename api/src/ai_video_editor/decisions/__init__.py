@@ -10,10 +10,9 @@ pipeline.
 """
 
 import logging
-from collections.abc import Callable
 
 from ..config import settings
-from .backends import BACKENDS, jev
+from .backends import BACKENDS
 from .models import (
     Answer,
     BoolQuestion,
@@ -37,11 +36,6 @@ __all__ = [
 
 _log = logging.getLogger(__name__)
 
-_AVAILABLE: dict[str, Callable[[], bool]] = {
-    "jev": lambda: bool(settings.typesafe_api_key) and jev.default_transport() is not None,
-    "haiku": lambda: bool(settings.anthropic_api_key),
-    "rules": lambda: True,
-}
 _AUTO_ORDER = ("jev", "rules")
 
 
@@ -51,7 +45,7 @@ def select_backend() -> str:
     rules, and never Haiku."""
     requested = settings.decisions_backend
     order = _AUTO_ORDER if requested == "auto" else (requested, "rules")
-    return next(name for name in order if _AVAILABLE[name]())
+    return next(name for name in order if BACKENDS[name].available())
 
 
 def ask_many(items: list[tuple[TypedQuestion, dict]]) -> list[Answer]:
