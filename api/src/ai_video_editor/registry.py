@@ -15,7 +15,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Literal, NamedTuple
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 EffectKind = Literal[
     "zoom",
@@ -43,47 +43,54 @@ ARSENAL_PATH = (
 )
 
 
-class ZoomParams(BaseModel):
+class _Params(BaseModel):
+    """Effect params: unknown keys are a plan error, never silently dropped."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class ZoomParams(_Params):
     factor: float = 2.0
     roi: str = "center"
 
 
-class FocusParams(BaseModel):
+class FocusParams(_Params):
     x: float
     y: float
     radius: float
     dim: float
 
 
-class CaptionParams(BaseModel):
-    text: str | None = None  # None: caption from the transcript
-    aspect: str = "16:9"
+class CaptionParams(_Params):
+    # Required: the compilation mutator has no transcript path. The aspect
+    # is the compilation's, so a plan cannot set it per caption.
+    text: str = Field(min_length=1)
 
 
-class CaptionVideoParams(BaseModel):
+class CaptionVideoParams(_Params):
     segments: list[dict]
     aspect: str = "9:16"
 
 
-class BeatFlashParams(BaseModel):
+class BeatFlashParams(_Params):
     beat_flash: bool = True
     beat_flash_source: str = "kills"
 
 
-class SfxParams(BaseModel):
+class SfxParams(_Params):
     sfx: list[dict]
 
 
-class MusicParams(BaseModel):
+class MusicParams(_Params):
     music_path: str
 
 
-class CardTextParams(BaseModel):
+class CardTextParams(_Params):
     text: str
     duration: float = 2.5
 
 
-class CardLogoParams(BaseModel):
+class CardLogoParams(_Params):
     name: str
     preset: str | None = None
     duration: float = 2.5
@@ -132,7 +139,9 @@ REGISTRY: dict[EffectKind, EffectSpec] = _specs(
         scope="clip",
         mcp_tool="caption_clip",
         description=(
-            "Caption a whole clip; omit text to use the transcript. Classic style via "
+            "Caption a whole clip with `text` (required in a plan; only the standalone "
+            "`caption_clip` tool can caption from the transcript). The plan's `at` is "
+            "not applied: whole-clip effects ignore it today. Classic style via "
             "`caption_clip`, tiktok style via `tiktok_caption_clip`."
         ),
         also_tools=(

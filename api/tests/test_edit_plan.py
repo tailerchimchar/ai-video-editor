@@ -88,6 +88,21 @@ def test_bad_params_are_rejected():
     assert "bad params for 'focus'" in msg
 
 
+@pytest.mark.parametrize(
+    ("kind", "params"),
+    [
+        ("caption", {}),  # a plan caption needs its text
+        ("caption", {"text": "gg", "aspect": "9:16"}),  # aspect is the compilation's
+        ("zoom", {"factor": 1.5, "clip_ref": "2"}),  # extra keys never pass through
+        ("zoom", {"kind": "focus"}),
+    ],
+)
+def test_params_the_mutators_cannot_take_are_rejected(kind, params):
+    plan = _plan(effects=[{"clip_ref": "c1", "kind": kind, "at": 1.0, "params": params}])
+    (msg,) = validate_plan(plan, known_sounds=SOUNDS)
+    assert f"bad params for '{kind}'" in msg
+
+
 def test_order_must_reference_source_clips():
     (msg,) = validate_plan(_plan(order=["c1", "ghost"]), known_sounds=SOUNDS)
     assert "'ghost' is not in source_clips" in msg
@@ -350,6 +365,27 @@ def test_plan_music_resolves_a_library_song_id(client, compilation, tmp_path):
     assert executor.preflight(_plan(cards=[], sfx=[], music={"song_id": "missing"})) == [
         "music: song 'missing' not found"
     ]
+
+
+@pytest.mark.parametrize(
+    ("params", "expected"),
+    [
+        ({}, "requires `text`"),
+        ({"text": "gg", "clip_ref": "1"}, "caption"),
+        ({"text": "gg", "kind": "zoom"}, "caption"),
+    ],
+)
+def test_preflight_dry_runs_every_effect(compilation, params, expected):
+    """A plan that skipped validate_plan still fails before anything renders."""
+    from ai_video_editor.routers.plan_executor import EditsPlanExecutor
+
+    comp_id, folder = compilation
+    plan = EditPlan.model_validate(
+        _http_plan(effects=[{"clip_ref": "1", "kind": "caption", "at": 1.0, "params": params}])
+    )
+    (problem,) = EditsPlanExecutor(folder, comp_id).preflight(plan)
+    assert problem.startswith("effects[1@1.0]")
+    assert expected in problem
 
 
 def test_plan_on_a_compilation_without_journal_is_refused(client, compilation):

@@ -17,9 +17,9 @@ from ..compile import add_effect as spec_add_effect
 from ..compile import load_spec, resolve_clip_ref
 from ..compile import reorder_clips_explicit as spec_reorder_clips_explicit
 from ..compile_journal import read_journal
-from ..edit_plan import EditPlan, load_progress
+from ..edit_plan import EditPlan, PlanEffect, load_progress
 from ..music.library import Library
-from .edits import AddEffectBody, _do_edit, _effect_from_body
+from .edits import AddEffectBody, _do_edit, effect_payload
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +28,23 @@ _MUTATOR_KINDS = ("zoom", "focus", "caption")
 
 class UnsupportedPlanStepError(RuntimeError):
     """The plan asks for something the current mutators cannot apply."""
+
+
+def _effect_body(effect: PlanEffect) -> AddEffectBody:
+    unknown = set(effect.params) - set(AddEffectBody.model_fields)
+    if unknown:
+        raise ValueError(f"unknown params {sorted(unknown)}")
+    return AddEffectBody(clip_ref=effect.clip_ref, kind=effect.kind, **effect.params)
+
+
+def _dry_run(effect: PlanEffect) -> str | None:
+    """Build the effect exactly as `apply_effects` will, without touching the
+    spec; the reason it cannot be built, or None."""
+    try:
+        effect_payload(_effect_body(effect))
+    except (TypeError, ValueError) as exc:  # pydantic's ValidationError is a ValueError
+        return f"effects[{effect.clip_ref}@{effect.at}]: '{effect.kind}': {exc}"
+    return None
 
 
 class EditsPlanExecutor:
@@ -48,6 +65,11 @@ class EditsPlanExecutor:
         problems += [
             f"effect '{kind}' cannot be applied yet"
             for kind in sorted({e.kind for e in plan.effects} - set(_MUTATOR_KINDS))
+        ]
+        problems += [
+            problem
+            for effect in plan.effects
+            if effect.kind in _MUTATOR_KINDS and (problem := _dry_run(effect))
         ]
         if plan.music and self._music_file(plan.music.song_id) is None:
             problems.append(f"music: song '{plan.music.song_id}' not found")
@@ -108,9 +130,8 @@ class EditsPlanExecutor:
     def apply_effects(self, plan: EditPlan) -> None:
         for effect in plan.effects:
             clip_id = self._clip_id(effect.clip_ref)
-            body = AddEffectBody(clip_ref=clip_id, kind=effect.kind, **effect.params)
             idx = resolve_clip_ref(load_spec(self._folder), clip_id)
-            payload = _effect_from_body(body)
+            payload = effect_payload(_effect_body(effect))
 
             def mutator(s: dict, idx=idx, payload=payload) -> tuple[dict, set[str]]:
                 return spec_add_effect(s, idx, payload)

@@ -604,8 +604,12 @@ def _do_edit(
     return summary
 
 
-def _effect_from_body(body: AddEffectBody) -> dict:
-    """Pick only the fields relevant to the requested effect kind."""
+def effect_payload(body: AddEffectBody) -> dict:
+    """Pick only the fields relevant to the requested effect kind.
+
+    Pure; raises ValueError when the body cannot make that effect, so the
+    plan executor can dry-run it and the endpoint can turn it into a 400.
+    """
     if body.kind == "zoom":
         e: dict = {"kind": "zoom"}
         if body.factor is not None:
@@ -622,8 +626,15 @@ def _effect_from_body(body: AddEffectBody) -> dict:
         return e
     # caption
     if not body.text:
-        raise HTTPException(400, "caption effect requires `text`")
+        raise ValueError("caption effect requires `text`")
     return {"kind": "caption", "text": body.text}
+
+
+def _effect_from_body(body: AddEffectBody) -> dict:
+    try:
+        return effect_payload(body)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
 
 
 @router.post("/compile/{compilation_id}/effect")
@@ -1217,9 +1228,7 @@ class ReorderExplicitBody(BaseModel):
 
 
 @router.post("/compile/{compilation_id}/reorder_explicit")
-async def reorder_compilation_clips_explicit(
-    compilation_id: str, body: ReorderExplicitBody
-):
+async def reorder_compilation_clips_explicit(compilation_id: str, body: ReorderExplicitBody):
     """Reorder clips by an EXPLICIT user-provided order (drag-and-drop).
 
     Unlike `/reorder` (which sorts by a scoring mode and preserves intro
