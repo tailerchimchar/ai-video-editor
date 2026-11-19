@@ -137,3 +137,6 @@ _thumbnails/
 *.tmp
 *.temp
 .env.test
+
+# Claude Code agent worktrees
+.claude/worktrees/
