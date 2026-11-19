@@ -114,6 +114,15 @@ def _save_cached(cache: Path, track: BeatTrack) -> None:
 # ---------------------------------------------------------------------
 
 
+def read_legacy_beats(mp3_path: Path, detector: str = "librosa") -> BeatTrack | None:
+    """Read the old path-keyed `<mp3>.<detector>.beats.json`, if any.
+
+    Only for migrating into the content-hash analysis sidecar; new code
+    never writes this file.
+    """
+    return _load_cached(_cache_path(mp3_path, detector))
+
+
 def detect_beats(
     mp3_path: Path | str,
     *,

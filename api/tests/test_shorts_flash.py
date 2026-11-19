@@ -95,7 +95,23 @@ def test_flash_times_unknown_source_raises(tmp_path) -> None:
         _flash_times(plan, music_path="/tmp/x.mp3", source="drops", max_t=60.0)
 
 
-def test_flash_times_downbeats_takes_every_fourth(monkeypatch, tmp_path) -> None:
+def _stub_structure(monkeypatch) -> None:
+    """Beat flash reads beats via load_or_analyze; skip the real audio decode."""
+    from ai_video_editor.music import analysis as analysis_mod
+    from ai_video_editor.music.structure import SongStructure
+
+    monkeypatch.setattr(
+        analysis_mod,
+        "detect_structure",
+        lambda path: SongStructure(
+            (0.0, 1.0), (1.0, 2.0), (2.0, 3.0), 1.0, "auto", "test"
+        ),
+    )
+
+
+def test_flash_times_downbeats_takes_every_fourth(
+    monkeypatch, tmp_path, sandbox
+) -> None:
     """downbeats source thins the beat list to every 4th onset."""
     from ai_video_editor.music import beats as beats_mod
 
@@ -106,6 +122,7 @@ def test_flash_times_downbeats_takes_every_fourth(monkeypatch, tmp_path) -> None
         return (120.0, [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5])
 
     monkeypatch.setitem(beats_mod._BEAT_DETECTORS, "librosa", _fake_detector)
+    _stub_structure(monkeypatch)
     plan = _plan([_clip("a.mp4", 0.0, 10.0)])
     times = _flash_times(
         plan, music_path=str(mp3), source="downbeats", max_t=60.0
@@ -113,7 +130,7 @@ def test_flash_times_downbeats_takes_every_fourth(monkeypatch, tmp_path) -> None
     assert times == (0.0, 2.0)  # every 4th of 8 quarter-notes
 
 
-def test_flash_times_beats_takes_all(monkeypatch, tmp_path) -> None:
+def test_flash_times_beats_takes_all(monkeypatch, tmp_path, sandbox) -> None:
     """beats source uses every detected beat."""
     from ai_video_editor.music import beats as beats_mod
 
@@ -124,6 +141,7 @@ def test_flash_times_beats_takes_all(monkeypatch, tmp_path) -> None:
         return (120.0, [0.5, 1.0, 1.5])
 
     monkeypatch.setitem(beats_mod._BEAT_DETECTORS, "librosa", _fake_detector)
+    _stub_structure(monkeypatch)
     plan = _plan([_clip("a.mp4", 0.0, 10.0)])
     times = _flash_times(plan, music_path=str(mp3), source="beats", max_t=60.0)
     assert times == (0.5, 1.0, 1.5)

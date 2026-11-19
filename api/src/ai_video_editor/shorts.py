@@ -770,9 +770,9 @@ def _flash_times(
     if source == "kills":
         return tuple(t for t in _kill_times_in_montage(plan) if t <= max_t)
     # Beat-based sources need actual beat detection
-    from .music import detect_beats
+    from .music.analysis import load_or_analyze
 
-    track = detect_beats(music_path)
+    track = load_or_analyze(Path(music_path)).beats
     if not track.beats:
         return ()
     beats = tuple(b for b in track.beats if b <= max_t)
