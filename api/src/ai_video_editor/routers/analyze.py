@@ -106,7 +106,10 @@ async def _run_candidates_job(job_id: str, asset: dict) -> None:
                 ),
             )
         await db.commit()
-        summary = f"{len(rows)} candidates"
+        n_dropped = diag.get("prefilter_dropped", 0)
+        summary = f"{len(rows) - n_dropped} candidates"
+        if n_dropped:
+            summary += f" ({n_dropped} pre-filtered out)"
         riot = diag.get("riot")
         # Surface a degraded Riot result so it's not mistaken for "no
         # data" — rate_limited/api_error are transient & retryable.
@@ -182,6 +185,8 @@ async def _run_rank_job(job_id: str, asset: dict) -> None:
         for row in rows:
             d = dict(row)
             d["metadata"] = json.loads(d["metadata"]) if d.get("metadata") else None
+            if (d["metadata"] or {}).get("prefilter_dropped"):
+                continue
             candidates.append(d)
 
         ranked = await asyncio.to_thread(rank_candidates, asset.get("game"), candidates)

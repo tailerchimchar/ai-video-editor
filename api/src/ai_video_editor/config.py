@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings
@@ -38,6 +39,19 @@ class Settings(BaseSettings):
     # Hard ceiling on rank() API calls per server process — refuses the
     # call past this cap so nothing can drain the Anthropic balance.
     anthropic_max_rank_calls: int = 25
+
+    # Typed decisions (decisions/): which backend answers Format/Topic
+    # and include/exclude questions. `auto` = Jev if TYPESAFE_API_KEY is
+    # set and wired, else free local rules. Haiku only when explicit.
+    typesafe_api_key: str | None = None
+    decisions_backend: Literal["auto", "jev", "haiku", "rules"] = "auto"
+    # Own call budget (counts batch calls) so decisions can't starve the ranker.
+    decisions_max_calls: int = 200
+    # Items answered per Haiku call.
+    decisions_batch_size: int = 40
+    # A candidate is dropped before any agent/VLM call when its
+    # include-probability is below this.
+    prefilter_min_probability: float = 0.35
 
     # Riot API candidate source (League). Free dev key from
     # developer.riotgames.com. Source stays inert until all three are set.
