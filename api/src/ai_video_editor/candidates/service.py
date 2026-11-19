@@ -10,6 +10,7 @@ Source files are never modified — we only read/probe them.
 import uuid
 from datetime import datetime, timezone
 
+from ..bucketing import prefilter_candidates
 from ..config import settings
 from ..league import is_league
 from ..league.orchestrator import gather_lol_candidates
@@ -170,7 +171,11 @@ def compute_candidates(
     # label should match the visible truth.
     rows = promote_audio_event_types(rows)
 
-    return rows, {"riot": riot_status}
+    # Cheap decision first: drop noise before any ranker/VLM spend. Free
+    # (keeps everything) unless an LLM decision backend is configured.
+    rows, dropped = prefilter_candidates(rows)
+
+    return rows, {"riot": riot_status, "prefilter_dropped": dropped}
 
 
 _AUDIO_SOURCES = frozenset({"audio_peak", "transcript_keyword"})
