@@ -32,8 +32,9 @@ import logging
 import os
 import re
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 _log = logging.getLogger(__name__)
 
@@ -298,9 +299,7 @@ class DispatchedVideo:
     """Each dict: {type, time_ms_in_video, data}"""
 
 
-_DISPATCH_RE = re.compile(
-    r"Dispatch new video created (\{.+\})\s*$"
-)
+_DISPATCH_RE = re.compile(r"Dispatch new video created (\{.+\})\s*$")
 
 
 def _load_dispatched(log_dir: Path) -> dict[str, DispatchedVideo]:
@@ -326,9 +325,7 @@ def _load_dispatched(log_dir: Path) -> dict[str, DispatchedVideo]:
                     for e in d.get("events", []) or []:
                         etype = e.get("type")
                         etime = e.get("time")
-                        if not isinstance(etype, str) or not isinstance(
-                            etime, (int, float)
-                        ):
+                        if not isinstance(etype, str) or not isinstance(etime, (int, float)):
                             continue
                         events.append(
                             {
@@ -424,41 +421,92 @@ def events_for_video(
     return tuple(e for e in dv.events if e["type"] in keep)
 
 
+def game_for_video(clip_path: Path | str, *, log_dir: Path | None = None) -> str | None:
+    """Game name Outplayed filed `clip_path` under, e.g. "League of
+    Legends" (the folder after `Outplayed` in the dispatched path), or
+    None when the video isn't dispatched or the layout is unfamiliar."""
+    dv = dispatched_video_for(clip_path, log_dir=log_dir)
+    if dv is None:
+        return None
+    parts = PureWindowsPath(str(dv.path)).parts
+    lowered = [p.lower() for p in parts]
+    if "outplayed" not in lowered:
+        return None
+    idx = lowered.index("outplayed") + 1
+    return parts[idx] if idx < len(parts) - 1 else None
+
+
 def clear_dispatch_cache() -> None:
     """Testing / debug hook — force re-parse on next lookup."""
     with _DISPATCH_CACHE_LOCK:
         _DISPATCH_CACHE.clear()
 
 
-def player_identity(log_dir: Path | None = None) -> dict | None:
-    """Extract the most recent 'Session start info' line — returns the
-    `me` object (player_name, player_id, region, server) or None.
+_VALORANT_SESSION_RE = re.compile(r"\[GameService:Valorant\] Session start info (\{.+\})\s*$")
+# League's game-info lines embed identity as a flat JSON object that
+# starts with the summoner `name`. A sibling `summoner_info` carrying a
+# nested `player_info` string has no top-level `name` and is skipped.
+_LEAGUE_SUMMONER_RE = re.compile(r'"summoner_info":(\{"name":"[^"]*"[^{}]*\})')
 
-    Cached by log-dir signature same as event scan."""
+
+def _valorant_identity(line: str) -> dict | None:
+    m = _VALORANT_SESSION_RE.search(line)
+    if not m:
+        return None
+    try:
+        me = json.loads(m.group(1)).get("me")
+    except json.JSONDecodeError:
+        return None
+    if isinstance(me, dict) and me.get("player_name"):
+        return me
+    return None
+
+
+def _league_identity(line: str) -> dict | None:
+    m = _LEAGUE_SUMMONER_RE.search(line)
+    if not m:
+        return None
+    try:
+        info = json.loads(m.group(1))
+    except json.JSONDecodeError:
+        return None
+    return {
+        "player_name": info["name"],
+        "champion": info.get("champion") or None,
+        "game": "league",
+    }
+
+
+# Canonical game key (profile `meta.game`) -> parser for one log line.
+# Add a game by adding an entry; unknown games fall back to Valorant.
+_IDENTITY_PARSERS: dict[str, Callable[[str], dict | None]] = {
+    "valorant": _valorant_identity,
+    "league": _league_identity,
+}
+
+
+def player_identity(log_dir: Path | None = None, game: str | None = None) -> dict | None:
+    """Newest player identity the Outplayed logs record for `game`
+    (Valorant when unset or unrecognised), or None.
+
+    Valorant: the `me` object (player_name, player_id, region, server).
+    League: `{player_name, champion, game}`. The League killfeed shows
+    the champion, so kill verification needs it, not the summoner name.
+    """
+    from .profiles import load_profile  # local import: avoids a cycle
+
     log_dir = log_dir or _default_log_dir()
     if not log_dir.is_dir():
         return None
-    session_re = re.compile(
-        r"\[GameService:Valorant\] Session start info (\{.+\})\s*$"
-    )
-    latest_me: dict | None = None
-    latest_mtime = 0.0
+    parse = _IDENTITY_PARSERS.get(load_profile(game).meta.game, _valorant_identity)
+    latest: dict | None = None
     for f in sorted(log_dir.glob("background.html*.log")):
         try:
             with open(f, encoding="utf-8", errors="ignore") as fp:
                 for line in fp:
-                    m = session_re.search(line)
-                    if not m:
-                        continue
-                    try:
-                        d = json.loads(m.group(1))
-                    except json.JSONDecodeError:
-                        continue
-                    me = d.get("me")
-                    if isinstance(me, dict) and me.get("player_name"):
-                        latest_me = me
-                        latest_mtime = f.stat().st_mtime
+                    identity = parse(line)
+                    if identity is not None:
+                        latest = identity
         except OSError:
             continue
-    _ = latest_mtime  # kept for potential recency-sort in the future
-    return latest_me
+    return latest
