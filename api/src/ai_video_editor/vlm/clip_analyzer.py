@@ -23,6 +23,7 @@ from typing import cast
 from ..config import settings
 from .backends.base import VLMBackend, VLMUnavailableError, run_with_retry
 from .client import select_backend
+from .corrections import effective_prompt_version
 from .frames import extract_frames
 from .prompts import (
     ClipAnalysis,
@@ -64,17 +65,21 @@ def _resolved_model(backend: VLMBackend) -> str:
 
 
 def _load_cached(
-    cache: Path, *, expected_version: int, expected_model: str
+    cache: Path, *, accepted_versions: tuple[str | int, ...], expected_model: str
 ) -> ClipAnalysis | None:
     """Return cached analysis if the sidecar exists AND its
-    (prompt_version, model) match. Otherwise None (caller re-runs)."""
+    (prompt_version, model) match. Otherwise None (caller re-runs).
+
+    `accepted_versions` holds the current effective version plus the legacy
+    integer marker, so sidecars written before the effective-version key
+    are reused instead of re-billing the library."""
     if not cache.is_file():
         return None
     try:
         data = json.loads(cache.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
-    if data.get("prompt_version") != expected_version:
+    if data.get("prompt_version") not in accepted_versions:
         return None
     if data.get("model") != expected_model:
         return None
@@ -91,7 +96,7 @@ def _save_cached(
     cache: Path,
     analysis: ClipAnalysis,
     *,
-    prompt_version: int,
+    prompt_version: str,
     model: str,
 ) -> None:
     payload = {
@@ -137,15 +142,16 @@ def analyze_source_clip(
     n = n_frames if n_frames is not None else settings.vlm_clip_analyzer_frames
     backend = backend or select_backend()
     model = _resolved_model(backend)
-    version = game_hints_prompt_version(game)
+    version = effective_prompt_version(game)
+    legacy_version = game_hints_prompt_version(game)
 
-    cache_on = (
-        settings.vlm_clip_analyzer_cache_enabled if use_cache is None else use_cache
-    )
+    cache_on = settings.vlm_clip_analyzer_cache_enabled if use_cache is None else use_cache
     cache = _cache_path(path)
     if cache_on:
         cached = _load_cached(
-            cache, expected_version=version, expected_model=model
+            cache,
+            accepted_versions=(version, legacy_version),
+            expected_model=model,
         )
         if cached is not None:
             _annotate_trace(cached, backend, game, n_frames=0, cached=True)
@@ -185,9 +191,7 @@ def analyze_source_clip(
     clamped = _clamp(analysis, clip_duration_seconds)
     if cache_on:
         _save_cached(cache, clamped, prompt_version=version, model=model)
-    _annotate_trace(
-        clamped, backend, game, n_frames=len(frames), cached=False
-    )
+    _annotate_trace(clamped, backend, game, n_frames=len(frames), cached=False)
     _ = resolved_hints  # tracked in _annotate_trace via game name
     return clamped
 
@@ -240,14 +244,12 @@ def _clamp(analysis: ClipAnalysis, clip_duration: float) -> ClipAnalysis:
                 confidence=m.confidence,
             )
         )
+
     # Drop any additional moments whose window overlaps the primary
     # (VLMs occasionally emit duplicate anchors). Rule: drop if a
     # moment's window intersects the primary's window.
     def _overlaps(m: PayoffMoment) -> bool:
-        return not (
-            m.resolution_end_seconds <= p_start
-            or m.buildup_start_seconds >= p_end
-        )
+        return not (m.resolution_end_seconds <= p_start or m.buildup_start_seconds >= p_end)
 
     extras = [m for m in extras if not _overlaps(m)]
     return ClipAnalysis(

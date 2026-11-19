@@ -2,9 +2,9 @@
 
 `POST /mentor/record_correction` — user or Claude appends a structured
 editorial correction. Persisted to `vlm/game_hints/<game>_examples.jsonl`;
-the next compile picks it up automatically via `load_game_hints` and
-its hash rolls into `game_hints_effective_version` so cached analyzer
-sidecars invalidate cleanly.
+the next compile picks it up automatically via `load_game_hints`, and a
+correction entering the rendered top-K changes `effective_prompt_version`
+so cached analyzer sidecars refresh.
 
 `GET /mentor/recent_corrections` — inspect what's been recorded, so
 the user can review + curate before it drives future compiles.
@@ -16,6 +16,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from ..vlm.corrections import (
+    Verdict,
     append_correction,
     load_recent_corrections,
 )
@@ -55,6 +56,11 @@ class RecordCorrectionBody(BaseModel):
     )
     source_context: str | None = Field(default=None)
     tags: list[str] | None = Field(default=None)
+    concept: str | None = Field(
+        default=None, description="A gaming-expert dictionary term, e.g. 'wave management'."
+    )
+    verdict: Verdict | None = Field(default=None)
+    example: str | None = Field(default=None)
 
 
 @router.post("/record_correction")
@@ -70,6 +76,9 @@ async def record_correction(body: RecordCorrectionBody) -> dict:
         clip_ref=body.clip_ref,
         source_context=body.source_context,
         tags=body.tags,
+        concept=body.concept,
+        verdict=body.verdict,
+        example=body.example,
     )
     return {
         "ok": True,
@@ -80,6 +89,9 @@ async def record_correction(body: RecordCorrectionBody) -> dict:
             "rule": correction.rule,
             "clip_ref": correction.clip_ref,
             "tags": correction.tags,
+            "concept": correction.concept,
+            "verdict": correction.verdict,
+            "example": correction.example,
         },
     }
 
@@ -103,6 +115,9 @@ async def recent_corrections(game: str, limit: int = 10) -> dict:
                 "clip_ref": c.clip_ref,
                 "source_context": c.source_context,
                 "tags": c.tags,
+                "concept": c.concept,
+                "verdict": c.verdict,
+                "example": c.example,
             }
             for c in corrections
         ],

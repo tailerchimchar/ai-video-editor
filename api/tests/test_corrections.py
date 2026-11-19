@@ -9,7 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from ai_video_editor.main import app
-from ai_video_editor.vlm import corrections, prompts
+from ai_video_editor.vlm import corrections, hint_files, prompts
 
 
 @pytest.fixture
@@ -24,8 +24,7 @@ def hints_dir(tmp_path, monkeypatch) -> Path:
         encoding="utf-8",
     )
     (scratch / "_default.md").write_text("default hints", encoding="utf-8")
-    monkeypatch.setattr(corrections, "_HINTS_DIR", scratch)
-    monkeypatch.setattr(prompts, "_HINTS_DIR", scratch)
+    monkeypatch.setattr(hint_files, "HINTS_DIR", scratch)
     return scratch
 
 
@@ -85,14 +84,6 @@ def test_load_skips_malformed_lines(hints_dir) -> None:
     assert {c.rule for c in got} == {"r1", "r2"}
 
 
-def test_examples_hash_changes_on_append(hints_dir) -> None:
-    corrections.append_correction("valorant", feedback="a", rule="r1")
-    h1 = corrections.examples_hash("valorant")
-    corrections.append_correction("valorant", feedback="b", rule="r2")
-    h2 = corrections.examples_hash("valorant")
-    assert h1 != h2 and h1 and h2
-
-
 def test_render_corrections_section_empty_string_when_none() -> None:
     assert corrections.render_corrections_section([]) == ""
 
@@ -125,17 +116,16 @@ def test_load_game_hints_injects_corrections(hints_dir) -> None:
 
 
 def test_effective_version_changes_after_correction(hints_dir) -> None:
-    v0 = prompts.game_hints_effective_version("valorant")
+    v0 = corrections.effective_prompt_version("valorant")
     corrections.append_correction("valorant", feedback="fb", rule="r")
-    v1 = prompts.game_hints_effective_version("valorant")
+    v1 = corrections.effective_prompt_version("valorant")
     assert v0 != v1
-    assert v0.startswith("v7") and v1.startswith("v7-")
 
 
-def test_effective_version_default_hints_has_no_examples_hash(hints_dir) -> None:
-    # game=None -> _default.md -> no examples file
-    v = prompts.game_hints_effective_version(None)
-    assert v == "v0"
+def test_effective_version_default_hints_ignores_examples(hints_dir) -> None:
+    v0 = corrections.effective_prompt_version(None)
+    corrections.append_correction("valorant", feedback="fb", rule="r")
+    assert corrections.effective_prompt_version(None) == v0
 
 
 def test_http_record_correction(hints_dir, client) -> None:
