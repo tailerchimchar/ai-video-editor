@@ -158,22 +158,22 @@ def test_league_identity_missing_from_valorant_only_log(tmp_path) -> None:
     assert player_identity(tmp_path, game="league") is None
 
 
-def test_champion_name_verifies_all_nine_kills(log_dir, monkeypatch) -> None:
-    """The verifier matches the champion, not the summoner name."""
-    seen_names: list[str] = []
+def test_league_kills_survive_uncalibrated_killfeed_ocr(log_dir, monkeypatch) -> None:
+    """League's killfeed crop is uncalibrated; log kills are kept unverified."""
+    calls: list[tuple] = []
 
-    def champion_only(path, player_name, game, anchors):
-        seen_names.append(player_name)
-        return [player_name == "Zeri"] * len(anchors)
+    def always_false(*args):
+        calls.append(args)
+        return [False] * len(args[-1])
 
-    monkeypatch.setattr(overwolf_events, "verify_windows_have_kill", champion_only)
+    monkeypatch.setattr(overwolf_events, "verify_windows_have_kill", always_false)
 
     rows = detect_overwolf_events(VIDEO, DURATION, "League of Legends")
     kills = [r for r in rows if r["event_type"] == "kill"]
 
-    assert seen_names == ["Zeri"]
+    assert calls == []
     assert len(kills) == 9
-    assert all(k["metadata"]["killfeed_verified"] for k in kills)
+    assert all(k["metadata"]["killfeed_verified"] is False for k in kills)
 
 
 def test_kills_kept_unverified_without_champion(tmp_path, monkeypatch) -> None:

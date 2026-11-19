@@ -33,10 +33,14 @@ from ..profiles import load_profile
 _log = logging.getLogger(__name__)
 
 # Canonical game key -> the name that appears as the killer in that
-# game's killfeed. Valorant shows the Riot ID; League shows the champion.
+# game's killfeed. Valorant shows the Riot ID. An entry returning None
+# skips OCR verification and keeps log kills unverified.
 # Add a game by adding an entry; unlisted games use the player name.
 _KILLFEED_NAME_BY_GAME: dict[str, Callable[[dict], str | None]] = {
-    "league": lambda identity: identity.get("champion"),
+    # League's killfeed crop is uncalibrated, so OCR rejects every real kill.
+    # Log kills are first-person ground truth, so keep them unverified.
+    # TODO(league-killfeed-crop): once calibrated, return identity.get("champion").
+    "league": lambda identity: None,
 }
 
 
