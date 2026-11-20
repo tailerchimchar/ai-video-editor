@@ -11,7 +11,6 @@ app — poll `/jobs/{id}`.
 """
 
 import asyncio
-import contextlib
 import re
 import uuid
 from datetime import datetime, timezone
@@ -23,6 +22,7 @@ from pydantic import BaseModel, Field
 from ..config import settings
 from ..database import get_db
 from ..edits import apply_sfx
+from ..jobs import finish_job
 from ..models import RankResponse
 from ..profiles import load_profile
 from ..sfx import extract_sfx
@@ -36,16 +36,6 @@ def _track(coro) -> None:
     task = asyncio.create_task(coro)
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
-
-
-async def _finish(db, job_id: str, *, output_path: str | None, error: str | None) -> None:
-    with contextlib.suppress(Exception):
-        status = "failed" if error else "completed"
-        await db.execute(
-            "UPDATE jobs SET status = ?, output_path = ?, error = ?, completed_at = ? WHERE id = ?",
-            (status, output_path, error, datetime.now(timezone.utc).isoformat(), job_id),
-        )
-        await db.commit()
 
 
 class ExtractSfxRequest(BaseModel):
@@ -97,15 +87,15 @@ async def _run_extract_job(
             extract_sfx, asset["path"], output_path, req.start_seconds, req.end_seconds
         )
         if not ok:
-            await _finish(db, job_id, output_path=None, error=err)
+            await finish_job(db, job_id, output_path=None, error=err)
             return
         # Surface the "sound not declared" warning in the output_path
         # field so callers polling /jobs/{id} see it without a separate
         # field — same channel as the success path message.
         msg = f"{output_path}" + (f"  [warning: {warning}]" if warning else "")
-        await _finish(db, job_id, output_path=msg, error=None)
+        await finish_job(db, job_id, output_path=msg, error=None)
     except Exception as e:
-        await _finish(db, job_id, output_path=None, error=str(e)[:2000])
+        await finish_job(db, job_id, output_path=None, error=str(e)[:2000])
     finally:
         await db.close()
 

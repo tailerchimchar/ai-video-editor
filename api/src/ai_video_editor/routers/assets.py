@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from ..candidates.probe import get_duration_seconds
 from ..config import settings
 from ..database import get_db
+from ..jobs import finish_job
 from ..models import AssetOut, RankResponse, ScanResponse
 from ..splitter import (
     child_filename,
@@ -342,7 +343,7 @@ async def _run_ingest_url_job(job_id: str, url: str, game: str) -> None:
 
         argv = _resolve_yt_dlp_invocation()
         if argv is None:
-            await _finish_job(
+            await finish_job(
                 db,
                 job_id,
                 error=(
@@ -381,18 +382,18 @@ async def _run_ingest_url_job(job_id: str, url: str, game: str) -> None:
 
         if result.returncode != 0:
             err = (result.stderr or result.stdout or "yt-dlp failed").strip()[:1500]
-            await _finish_job(db, job_id, error=err)
+            await finish_job(db, job_id, error=err)
             return
 
         # Parse the printed filepath. yt-dlp emits one path per video; for
         # playlists we'd get multiple. We only handle the first/only path.
         filepath = (result.stdout or "").strip().splitlines()
         if not filepath:
-            await _finish_job(db, job_id, error="yt-dlp returned no output path")
+            await finish_job(db, job_id, error="yt-dlp returned no output path")
             return
         path = filepath[0].strip()
         if not os.path.exists(path):
-            await _finish_job(db, job_id, error=f"yt-dlp claimed it wrote {path} but no such file")
+            await finish_job(db, job_id, error=f"yt-dlp claimed it wrote {path} but no such file")
             return
 
         # Register the asset with source_origin='downloaded' so the
@@ -428,24 +429,12 @@ async def _run_ingest_url_job(job_id: str, url: str, game: str) -> None:
                 (asset_id, filename, path, game, now, now, dur),
             )
         await db.commit()
-        await _finish_job(db, job_id, output_path=asset_id)
+        await finish_job(db, job_id, output_path=asset_id)
     except Exception as exc:  # never let the worker crash silently
         with contextlib.suppress(Exception):
-            await _finish_job(db, job_id, error=str(exc)[:1500])
+            await finish_job(db, job_id, error=str(exc)[:1500])
     finally:
         await db.close()
-
-
-async def _finish_job(db, job_id: str, *, output_path: str | None = None,
-                      error: str | None = None) -> None:
-    status = "failed" if error else "completed"
-    with contextlib.suppress(Exception):
-        await db.execute(
-            "UPDATE jobs SET status = ?, output_path = ?, error = ?, completed_at = ? "
-            "WHERE id = ?",
-            (status, output_path, error, datetime.now(timezone.utc).isoformat(), job_id),
-        )
-        await db.commit()
 
 
 # ---------------------------------------------------------------------
@@ -466,14 +455,14 @@ async def _run_split_job(job_id: str, asset: dict) -> None:
 
         video_path = asset["path"]
         if not os.path.exists(video_path):
-            await _finish_job(db, job_id, error=f"source file missing: {video_path}")
+            await finish_job(db, job_id, error=f"source file missing: {video_path}")
             return
 
         # Probe duration first — needed to bound the last segment.
         # ~50ms via ffprobe, much cheaper than the blackdetect scan.
         duration = await asyncio.to_thread(get_duration_seconds, video_path)
         if duration <= 0:
-            await _finish_job(db, job_id, error="couldn't probe duration")
+            await finish_job(db, job_id, error="couldn't probe duration")
             return
 
         # Detect black intervals via ffmpeg blackdetect filter.
@@ -486,7 +475,7 @@ async def _run_split_job(job_id: str, asset: dict) -> None:
             # Either no black periods or only one valid segment after
             # filtering — nothing to split. Report as completed (not
             # an error) with a clear note so the user knows.
-            await _finish_job(
+            await finish_job(
                 db,
                 job_id,
                 output_path=(
@@ -540,14 +529,14 @@ async def _run_split_job(job_id: str, asset: dict) -> None:
             safe_extract_asset_thumbnail(asset_id, str(child_path))
 
         await db.commit()
-        await _finish_job(
+        await finish_job(
             db,
             job_id,
             output_path=f"split into {len(new_ids)} games: {','.join(new_ids)}",
         )
     except Exception as exc:
         with contextlib.suppress(Exception):
-            await _finish_job(db, job_id, error=str(exc)[:1500])
+            await finish_job(db, job_id, error=str(exc)[:1500])
     finally:
         await db.close()
 

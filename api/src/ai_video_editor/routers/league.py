@@ -9,7 +9,6 @@ Today: `POST /league/detect_champion`. Future LoL endpoints land here
 """
 
 import asyncio
-import contextlib
 import json
 import uuid
 from datetime import datetime, timezone
@@ -19,6 +18,7 @@ from pydantic import BaseModel, Field
 
 from ..config import settings
 from ..database import get_db
+from ..jobs import finish_job
 from ..league.candidates.champion import (
     DEFAULT_MIN_CONFIDENCE,
     detect_champion,
@@ -34,16 +34,6 @@ def _track(coro) -> None:
     task = asyncio.create_task(coro)
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
-
-
-async def _finish(db, job_id: str, *, output_path: str | None, error: str | None) -> None:
-    with contextlib.suppress(Exception):
-        status = "failed" if error else "completed"
-        await db.execute(
-            "UPDATE jobs SET status = ?, output_path = ?, error = ?, completed_at = ? WHERE id = ?",
-            (status, output_path, error, datetime.now(timezone.utc).isoformat(), job_id),
-        )
-        await db.commit()
 
 
 async def _load_asset(db, asset_id: str) -> dict:
@@ -80,7 +70,7 @@ async def _run_detect_job(job_id: str, asset: dict, req: DetectChampionRequest) 
         await db.commit()
         duration = await asyncio.to_thread(_probe_duration, asset["path"])
         if duration <= 0:
-            await _finish(db, job_id, output_path=None, error="could not probe duration")
+            await finish_job(db, job_id, output_path=None, error="could not probe duration")
             return
 
         result = await asyncio.to_thread(
@@ -101,9 +91,9 @@ async def _run_detect_job(job_id: str, asset: dict, req: DetectChampionRequest) 
         out_path = _result_path(asset["id"])
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump(result, f, indent=2)
-        await _finish(db, job_id, output_path=out_path, error=None)
+        await finish_job(db, job_id, output_path=out_path, error=None)
     except Exception as e:
-        await _finish(db, job_id, output_path=None, error=str(e)[:2000])
+        await finish_job(db, job_id, output_path=None, error=str(e)[:2000])
     finally:
         await db.close()
 

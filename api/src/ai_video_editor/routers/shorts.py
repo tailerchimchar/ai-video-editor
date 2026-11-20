@@ -25,6 +25,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from ..database import get_db
+from ..jobs import finish_job
 from ..models import RankResponse
 from ..shorts import (
     _shorts_folder,
@@ -52,19 +53,6 @@ def _track(coro) -> None:
     task = asyncio.create_task(coro)
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
-
-
-async def _finish_job(
-    db, job_id: str, *, output_path: str | None = None, error: str | None = None
-) -> None:
-    status = "failed" if error else "completed"
-    with contextlib.suppress(Exception):
-        await db.execute(
-            "UPDATE jobs SET status = ?, output_path = ?, error = ?, completed_at = ? "
-            "WHERE id = ?",
-            (status, output_path, error, datetime.now(timezone.utc).isoformat(), job_id),
-        )
-        await db.commit()
 
 
 class CompileShortsBody(BaseModel):
@@ -148,21 +136,23 @@ async def _run_shorts_job(
             beat_flash_source=body.beat_flash_source,
         )
         if not result.get("ok"):
-            await _finish_job(
+            await finish_job(
                 db, job_id, error=str(result.get("error") or "shorts render failed")
             )
             return
-        await _finish_job(
+        await finish_job(
             db,
             job_id,
             output_path=(
                 f"{result.get('shorts_written', 0)}/"
                 f"{result.get('shorts_total', 0)} -> {result.get('folder', '?')}"
             ),
+            job_type="shorts",
+            result=result,
         )
     except Exception as exc:
         with contextlib.suppress(Exception):
-            await _finish_job(db, job_id, error=str(exc)[:1500])
+            await finish_job(db, job_id, error=str(exc)[:1500])
     finally:
         await db.close()
 
@@ -287,23 +277,25 @@ async def _run_cross_asset_job(
             beat_flash_source=body.beat_flash_source,
         )
         if not result.get("ok"):
-            await _finish_job(
+            await finish_job(
                 db,
                 job_id,
                 error=str(result.get("error") or "cross-asset render failed"),
             )
             return
-        await _finish_job(
+        await finish_job(
             db,
             job_id,
             output_path=(
                 f"{result.get('shorts_written', 0)}/"
                 f"{result.get('shorts_total', 0)} -> {result.get('folder', '?')}"
             ),
+            job_type="cross_asset_shorts",
+            result=result,
         )
     except Exception as exc:
         with contextlib.suppress(Exception):
-            await _finish_job(db, job_id, error=str(exc)[:1500])
+            await finish_job(db, job_id, error=str(exc)[:1500])
     finally:
         await db.close()
 
@@ -457,21 +449,23 @@ async def _run_outplayed_job(job_id: str, body: OutplayedMontageBody) -> None:
             analyze_pool_size=body.analyze_pool_size,
         )
         if not result.get("ok"):
-            await _finish_job(
+            await finish_job(
                 db, job_id, error=str(result.get("error") or "outplayed render failed")
             )
             return
-        await _finish_job(
+        await finish_job(
             db,
             job_id,
             output_path=(
                 f"{result.get('shorts_written', 0)}/"
                 f"{result.get('shorts_total', 0)} -> {result.get('folder', '?')}"
             ),
+            job_type="outplayed_shorts",
+            result=result,
         )
     except Exception as exc:
         with contextlib.suppress(Exception):
-            await _finish_job(db, job_id, error=str(exc)[:1500])
+            await finish_job(db, job_id, error=str(exc)[:1500])
     finally:
         await db.close()
 
@@ -612,23 +606,25 @@ async def _run_custom_job(job_id: str, body: CustomMontageBody) -> None:
             max_seconds=body.max_seconds,
         )
         if not result.get("ok"):
-            await _finish_job(
+            await finish_job(
                 db,
                 job_id,
                 error=str(result.get("error") or "custom render failed"),
             )
             return
-        await _finish_job(
+        await finish_job(
             db,
             job_id,
             output_path=(
                 f"{result.get('shorts_written', 0)}/"
                 f"{result.get('shorts_total', 0)} -> {result.get('folder', '?')}"
             ),
+            job_type="custom_shorts",
+            result=result,
         )
     except Exception as exc:
         with contextlib.suppress(Exception):
-            await _finish_job(db, job_id, error=str(exc)[:1500])
+            await finish_job(db, job_id, error=str(exc)[:1500])
     finally:
         await db.close()
 

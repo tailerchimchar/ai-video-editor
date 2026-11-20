@@ -91,6 +91,7 @@ from ..intros import (
     intro_output_path,
     load_intro,
 )
+from ..jobs import finish_job
 from ..models import RankResponse
 
 router = APIRouter(tags=["edit"], prefix="/edit")
@@ -102,16 +103,6 @@ def _track(coro) -> None:
     task = asyncio.create_task(coro)
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
-
-
-async def _finish(db, job_id: str, *, output_path: str | None, error: str | None) -> None:
-    with contextlib.suppress(Exception):
-        status = "failed" if error else "completed"
-        await db.execute(
-            "UPDATE jobs SET status = ?, output_path = ?, error = ?, completed_at = ? WHERE id = ?",
-            (status, output_path, error, datetime.now(timezone.utc).isoformat(), job_id),
-        )
-        await db.commit()
 
 
 async def _load_asset(db, asset_id: str) -> dict:
@@ -163,7 +154,7 @@ async def _run_edit_job(
         await db.commit()
         ok, err = await asyncio.to_thread(work)
         if not ok:
-            await _finish(db, job_id, output_path=None, error=err)
+            await finish_job(db, job_id, output_path=None, error=err)
             return
         # Persist the edit row on success.
         await db.execute(
@@ -179,9 +170,9 @@ async def _run_edit_job(
             ),
         )
         await db.commit()
-        await _finish(db, job_id, output_path=output_path, error=None)
+        await finish_job(db, job_id, output_path=output_path, error=None)
     except Exception as e:
-        await _finish(db, job_id, output_path=None, error=str(e)[:2000])
+        await finish_job(db, job_id, output_path=None, error=str(e)[:2000])
     finally:
         await db.close()
 
@@ -325,7 +316,7 @@ async def _run_compile_job(job_id: str, comp_id: str, asset: dict, req: CompileR
 
         rankings_path = settings.workspace_dir / "rankings" / f"{asset['id']}.json"
         if not rankings_path.exists():
-            await _finish(
+            await finish_job(
                 db,
                 job_id,
                 output_path=None,
@@ -402,12 +393,12 @@ async def _run_compile_job(job_id: str, comp_id: str, asset: dict, req: CompileR
 
         if not summary.get("compiled"):
             err = summary.get("error") or "compile failed"
-            await _finish(db, job_id, output_path=None, error=err)
+            await finish_job(db, job_id, output_path=None, error=err)
             return
         msg = f"{summary['parts_rendered']}/{summary['kept_total']} -> {out_path}"
-        await _finish(db, job_id, output_path=msg, error=None)
+        await finish_job(db, job_id, output_path=msg, error=None)
     except Exception as e:
-        await _finish(db, job_id, output_path=None, error=str(e)[:2000])
+        await finish_job(db, job_id, output_path=None, error=str(e)[:2000])
     finally:
         await db.close()
 

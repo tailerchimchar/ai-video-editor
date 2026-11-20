@@ -10,7 +10,6 @@ Jobs reuse the existing jobs table + GET /jobs/{id} polling UX.
 """
 
 import asyncio
-import contextlib
 import json
 import uuid
 from datetime import datetime, timezone
@@ -24,6 +23,7 @@ from ..candidates.transcribe import transcribe
 from ..config import settings
 from ..database import get_db
 from ..highlights import build_clip_batch, build_highlights, relative_folder
+from ..jobs import finish_job
 from ..models import HighlightCandidate, RankResponse
 from ..rag import index_asset_transcript
 from ..rag import search as rag_search
@@ -45,18 +45,6 @@ async def _load_asset(db, asset_id: str) -> dict:
     if not rows:
         raise HTTPException(status_code=404, detail="Asset not found")
     return dict(rows[0])
-
-
-async def _finish(db, job_id: str, *, output_path: str | None, error: str | None) -> None:
-    # Best-effort: if the DB write itself fails (e.g. disk full), don't
-    # turn the error path into an unhandled task crash.
-    with contextlib.suppress(Exception):
-        status = "failed" if error else "completed"
-        await db.execute(
-            "UPDATE jobs SET status = ?, output_path = ?, error = ?, completed_at = ? WHERE id = ?",
-            (status, output_path, error, datetime.now(timezone.utc).isoformat(), job_id),
-        )
-        await db.commit()
 
 
 # --- Candidate generation ---
@@ -117,9 +105,9 @@ async def _run_candidates_job(job_id: str, asset: dict) -> None:
             summary += f" (⚠️ riot {riot} — retry for kill data)"
         elif riot == "no_match":
             summary += " (riot: no confident match)"
-        await _finish(db, job_id, output_path=summary, error=None)
+        await finish_job(db, job_id, output_path=summary, error=None)
     except Exception as e:
-        await _finish(db, job_id, output_path=None, error=str(e)[:2000])
+        await finish_job(db, job_id, output_path=None, error=str(e)[:2000])
     finally:
         await db.close()
 
@@ -173,7 +161,7 @@ async def _run_rank_job(job_id: str, asset: dict) -> None:
             (asset["id"],),
         )
         if not rows:
-            await _finish(
+            await finish_job(
                 db,
                 job_id,
                 output_path=None,
@@ -197,9 +185,9 @@ async def _run_rank_job(job_id: str, asset: dict) -> None:
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump([r.model_dump() for r in ranked], f, indent=2)
 
-        await _finish(db, job_id, output_path=out_path, error=None)
+        await finish_job(db, job_id, output_path=out_path, error=None)
     except Exception as e:
-        await _finish(db, job_id, output_path=None, error=str(e)[:2000])
+        await finish_job(db, job_id, output_path=None, error=str(e)[:2000])
     finally:
         await db.close()
 
@@ -257,7 +245,7 @@ async def _run_highlights_job(job_id: str, asset: dict) -> None:
 
         rankings_path = settings.workspace_dir / "rankings" / f"{asset['id']}.json"
         if not rankings_path.exists():
-            await _finish(
+            await finish_job(
                 db,
                 job_id,
                 output_path=None,
@@ -269,9 +257,11 @@ async def _run_highlights_job(job_id: str, asset: dict) -> None:
 
         summary = await asyncio.to_thread(build_highlights, asset, rankings, candidates)
         msg = f"{summary['clips_written']}/{summary['clips_total']} -> {summary['folder']}"
-        await _finish(db, job_id, output_path=msg, error=None)
+        await finish_job(
+            db, job_id, output_path=msg, error=None, job_type="highlights", result=summary
+        )
     except Exception as e:
-        await _finish(db, job_id, output_path=None, error=str(e)[:2000])
+        await finish_job(db, job_id, output_path=None, error=str(e)[:2000])
     finally:
         await db.close()
 
@@ -336,7 +326,7 @@ async def _run_clip_batch_job(job_id: str, game: str, limit: int) -> None:
         clips.sort(key=lambda a: a["created_at"], reverse=True)
         clips = clips[:limit]
         if not clips:
-            await _finish(
+            await finish_job(
                 db, job_id, output_path=None, error=f"No short Outplayed clips for {game!r}"
             )
             return
@@ -344,9 +334,11 @@ async def _run_clip_batch_job(job_id: str, game: str, limit: int) -> None:
         # Organize-only: Outplayed already curated these; no LLM ($0).
         summary = await asyncio.to_thread(build_clip_batch, game, clips)
         msg = f"{summary['clips_written']}/{summary['clips_total']} -> {summary['folder']}"
-        await _finish(db, job_id, output_path=msg, error=None)
+        await finish_job(
+            db, job_id, output_path=msg, error=None, job_type="batch_highlights", result=summary
+        )
     except Exception as e:
-        await _finish(db, job_id, output_path=None, error=str(e)[:2000])
+        await finish_job(db, job_id, output_path=None, error=str(e)[:2000])
     finally:
         await db.close()
 
@@ -404,9 +396,9 @@ async def _run_transcribe_job(job_id: str, asset: dict) -> None:
         msg = f"{len(segments)} transcript segments"
         if not segments:
             msg += " (empty — long/over-cap, no speech, or whisper unavailable)"
-        await _finish(db, job_id, output_path=msg, error=None)
+        await finish_job(db, job_id, output_path=msg, error=None)
     except Exception as e:
-        await _finish(db, job_id, output_path=None, error=str(e)[:2000])
+        await finish_job(db, job_id, output_path=None, error=str(e)[:2000])
     finally:
         await db.close()
 
@@ -463,9 +455,9 @@ async def _run_index_job(job_id: str, asset_id: str) -> None:
             f"{summary['indexed']}/{summary['chunks']} chunks indexed "
             f"({summary['segments']} transcript segments)"
         )
-        await _finish(db, job_id, output_path=msg, error=None)
+        await finish_job(db, job_id, output_path=msg, error=None)
     except Exception as e:
-        await _finish(db, job_id, output_path=None, error=str(e)[:2000])
+        await finish_job(db, job_id, output_path=None, error=str(e)[:2000])
     finally:
         await db.close()
 
