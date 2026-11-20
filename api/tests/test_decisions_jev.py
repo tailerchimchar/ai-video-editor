@@ -42,10 +42,10 @@ class RecordingTransport:
 
     def __init__(self, reply):
         self.reply = reply
-        self.calls: list[tuple[dict, dict]] = []
+        self.calls: list[tuple[dict, dict, dict | None]] = []
 
-    def ask(self, state, questions):
-        self.calls.append((state, questions))
+    def ask(self, state, questions, *, assets=None):
+        self.calls.append((state, questions, assets))
         return {key: self.reply(key, question) for key, question in questions.items()}
 
 
@@ -138,13 +138,14 @@ def test_answer_many_sends_one_request_per_state_and_keeps_item_order():
 
     assert [call[0] for call in transport.calls] == [s1, s2]
     assert [q["type"] for q in transport.calls[0][1].values()] == ["choice", "noul"]
+    assert [call[2] for call in transport.calls] == [None, None]
     assert [a.value for a in answers] == [Format.funny, True, 2]  # score level 1 -> lo + 1
     assert [a.backend for a in answers] == ["jev"] * 3
 
 
 def test_transport_failure_is_wrapped_so_ask_many_can_fall_back():
     class Down:
-        def ask(self, state, questions):
+        def ask(self, state, questions, *, assets=None):
             raise ConnectionError("down")
 
     with pytest.raises(DecisionError, match="jev call failed"):
@@ -181,6 +182,8 @@ def test_http_transport_posts_a_system_one_request_with_bearer_auth():
         seen["url"] = str(request.url)
         seen["auth"] = request.headers["authorization"]
         seen["body"] = json.loads(request.content)
+        seen["raw"] = request.content
+        seen["headers"] = dict(request.headers)
         return httpx.Response(
             200,
             json={
@@ -203,6 +206,81 @@ def test_http_transport_posts_a_system_one_request_with_bearer_auth():
         "state": {"clip": {"id": 1}},
         "questions": {"keep": {"type": "noul", "instructions": "Keep it?"}},
     }
+    assert transport.last_usage == {"input_tokens": 12, "output_tokens": 0}
+
+
+def test_text_only_request_is_byte_identical_without_assets_header_or_map():
+    """Text-only asks must stay byte-for-byte unchanged (no assets, no image header)."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            200,
+            json={"model": "jev-latest", "answers": {"keep": {"type": "noul", "noul": 0.5}}},
+        )
+
+    transport = jev.HttpTransport(
+        "ts-key", client=httpx.Client(transport=httpx.MockTransport(handler))
+    )
+    state = {"clip": {"id": 1, "label": "PlayerOne_placeholder"}}
+    questions = {"keep": jev.to_jev_question(KEEP_Q)}
+    transport.ask(state, questions)
+    transport.ask(state, questions, assets=None)
+
+    assert len(seen) == 2
+    assert seen[0].content == seen[1].content
+    expected = json.dumps(
+        {"model": "jev-latest", "state": state, "questions": questions},
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    assert seen[0].content == expected
+    assert b"assets" not in seen[0].content
+    assert "typesafe-danger-zone-images" not in {k.lower() for k in seen[0].headers}
+
+
+def test_http_transport_adds_assets_and_danger_zone_header_only_when_images_passed():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.content)
+        seen["danger"] = request.headers.get("typesafe-danger-zone-images")
+        return httpx.Response(
+            200,
+            json={
+                "model": "jev-latest",
+                "answers": {"keep": {"type": "noul", "noul": 0.8}},
+                "usage": {"input_tokens": 420},
+            },
+        )
+
+    # 1x1 PNG
+    tiny_png_b64 = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8"
+        "z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+    )
+    assets = {
+        "a3f1c2e8-frame0": {
+            "type": "image",
+            "format": "png",
+            "data_base64": tiny_png_b64,
+        }
+    }
+    transport = jev.HttpTransport(
+        "ts-key", client=httpx.Client(transport=httpx.MockTransport(handler))
+    )
+    answers = transport.ask(
+        {"frames": [{"index": 0, "frame": "a3f1c2e8-frame0"}], "clip": {"id": 1}},
+        {"keep": jev.to_jev_question(KEEP_Q)},
+        assets=assets,
+    )
+
+    assert answers == {"keep": {"type": "noul", "noul": 0.8}}
+    assert seen["danger"] == "true"
+    assert seen["body"]["assets"] == assets
+    assert "a3f1c2e8-frame0" in seen["body"]["assets"]
+    assert transport.last_usage.get("input_tokens") == 420
 
 
 def test_http_transport_surfaces_api_errors_with_their_detail():

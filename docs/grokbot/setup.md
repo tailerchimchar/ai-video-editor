@@ -116,3 +116,25 @@ uv run grokbot-publish-round <round folder> --game league [--compilation-id <id>
 ```
 
 It builds the name-free digest, refuses it if any transcript text slipped in, uploads the clips to Drive `clips/` and the digest to `digests/`, saves `digest.json` in the round folder, and sends the Lead a `round.published` event with the ids the Editor needs.
+
+## 11. Quality gate: frames-to-Jev experiment (optional)
+
+Off by default. Tests whether Jev can score quality-gate criteria from sampled frames directly, replacing the Haiku vision description. Image support needs `TypeSafe-Danger-Zone-Images: true` and a top-level `assets` map (PNG/JPEG, 280–1568 px per side).
+
+| Variable | Default | What it does |
+|---|---|---|
+| `GROKBOT_QUALITY_GATE_ENABLED` | `false` | master switch for the gate |
+| `GROKBOT_QUALITY_GATE_JEV_FRAMES_ENABLED` | `false` | send frames to Jev; skip Haiku description |
+| `GROKBOT_QUALITY_GATE_JEV_FRAMES_SHADOW` | `false` | run both paths; keep Haiku as the real verdict |
+
+### 20-render comparison
+
+1. Keep `GROKBOT_QUALITY_GATE_ENABLED=true` and set `GROKBOT_QUALITY_GATE_JEV_FRAMES_SHADOW=true` (leave `…_JEV_FRAMES_ENABLED=false`).
+2. Render ~20 box outputs that hit the gate (same criteria as production).
+3. Grep logs for `quality_gate_jev_frames_shadow`. Each line has:
+   - `agreement` — per-criterion id → whether frames matched Haiku
+   - `haiku_latency_ms` / `frames_latency_ms`
+   - `frames_input_tokens` — Jev `usage.input_tokens` when the API reports it
+   - `frames_error` — set if the frames path failed (Haiku still wins)
+4. If `cost_log` is present on the branch, the same payload is written there under event `quality_gate_jev_frames_shadow`.
+5. Decide from agreement rate + token cost whether to turn on `GROKBOT_QUALITY_GATE_JEV_FRAMES_ENABLED` (Haiku description off). Image errors always fall back to Haiku or count as unsure — never a pass. Audio-led criteria are never failed on frames alone.
