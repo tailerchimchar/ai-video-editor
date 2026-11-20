@@ -84,6 +84,10 @@ rank → cut → compile. The webapp lets you review + edit the output.
   with the affected clip's event_type. Future jobs aggregate per-event
   medians to auto-tune the default windows from your actual usage.
 
+## Grok Bot team
+
+An optional team of four cloud bots (Lead, Editor, DevOps, Viewer) can drive the pipeline from a phone: they read events from a PC-side runner, write validated queue items to a private git repo, and text the owner for the few decisions that need him. Their instructions, the queue item format and the step-by-step setup live in [`docs/grokbot/`](./docs/grokbot/setup.md).
+
 ## License
 
 [MIT](./LICENSE) — do whatever, just keep the notice.
