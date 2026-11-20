@@ -15,6 +15,7 @@ through the shared `editing.trim_clip` helper.
 """
 
 import json
+import logging
 import re
 from datetime import date
 from pathlib import Path
@@ -22,8 +23,11 @@ from pathlib import Path
 from .bucketing import prefilter_summary
 from .candidates.probe import get_duration_seconds
 from .config import settings
+from .cut_picker import CutRunStats, resolve_clip_cut, shadow_log_line
 from .decisions import select_backend
 from .editing import trim_clip
+
+_log = logging.getLogger(__name__)
 
 _FN_RE = re.compile(
     r"^(?P<game>.+?)_(?P<mo>\d{1,2})-(?P<d>\d{1,2})-(?P<y>\d{4})_"
@@ -226,6 +230,74 @@ def cut_window(cand: dict, ranking: dict, duration: float) -> tuple[float, float
     return strategy(cand, ranking, duration)
 
 
+def _event_time_for_cut(cand: dict, start: float, end: float) -> float:
+    """Anchor used by the Jev cut path; midpoint when no explicit anchor."""
+    meta = cand.get("metadata") or {}
+    anchor = meta.get("anchor_seconds")
+    if anchor is not None:
+        return float(anchor)
+    return (float(start) + float(end)) / 2.0
+
+
+def _apply_jev_clip_cut(
+    *,
+    path: str,
+    cand: dict,
+    legacy_start: float,
+    legacy_end: float,
+    duration: float,
+    stats: CutRunStats,
+) -> tuple[float, float]:
+    """Optional ffmpeg+Jev cut. Fail-safe: any error keeps `legacy_*`.
+
+    Enabled → use the Jev pick (or its padding fallback).
+    Shadow → keep legacy, log one comparison line per clip.
+    """
+    enabled = bool(settings.grokbot_jev_clip_cut_enabled)
+    shadow = bool(settings.grokbot_jev_clip_cut_shadow)
+    if not enabled and not shadow:
+        return legacy_start, legacy_end
+
+    event = cand.get("event_type") or "clip"
+    event_time = _event_time_for_cut(cand, legacy_start, legacy_end)
+    try:
+        pick, ffmpeg_ms, _signals = resolve_clip_cut(
+            path,
+            event_time,
+            event,
+            duration,
+        )
+    except Exception as exc:
+        _log.warning("jev_clip_cut failed (%s); keeping legacy window", exc)
+        stats.clips += 1
+        stats.fallback += 1
+        stats.flagged += 1
+        return legacy_start, legacy_end
+
+    stats.clips += 1
+    stats.ffmpeg_ms += ffmpeg_ms
+    stats.jev_ms += pick.jev_ms
+    stats.input_tokens += pick.input_tokens
+    stats.jev_requests += 1
+    if pick.flagged:
+        stats.flagged += 1
+        stats.fallback += 1
+
+    if shadow:
+        line = shadow_log_line(
+            event_type=event,
+            legacy_start=legacy_start,
+            legacy_end=legacy_end,
+            pick=pick,
+        )
+        stats.shadow_lines.append(line)
+        _log.info("%s", line)
+
+    if enabled:
+        return pick.start, pick.end
+    return legacy_start, legacy_end
+
+
 def build_highlights(asset: dict, rankings: list[dict], candidates: list[dict]) -> dict:
     """Cut every kept suggestion into the organized folder + write indexes.
 
@@ -253,6 +325,7 @@ def build_highlights(asset: dict, rankings: list[dict], candidates: list[dict]) 
     champ = _champion(candidates)
     game_slug, _, _ = _parse_name(asset)
     clips: list[dict] = []
+    cut_stats = CutRunStats()
     # VLM per-clip validation loop is opt-in via VLM_ENABLED. When it's
     # off (or the backend is unreachable), we fall back to the direct
     # trim_clip path — same behavior as before this loop existed.
@@ -261,6 +334,14 @@ def build_highlights(asset: dict, rankings: list[dict], candidates: list[dict]) 
         cand = cand_by_id.get(r.get("candidate_id"), {})
         event = cand.get("event_type") or "clip"
         start, end = cut_window(cand, r, duration)
+        start, end = _apply_jev_clip_cut(
+            path=asset["path"],
+            cand=cand,
+            legacy_start=start,
+            legacy_end=end,
+            duration=duration,
+            stats=cut_stats,
+        )
         fname = f"{i:02d}_{_safe(event)}_{_mmss(start)}.mp4"
         out_path = dest / fname
 
@@ -312,6 +393,8 @@ def build_highlights(asset: dict, rankings: list[dict], candidates: list[dict]) 
             )
 
     written = sum(1 for c in clips if c["ok"])
+    if cut_stats.clips:
+        cut_stats.log_summary()
     game, _, _ = _parse_name(asset)
     dropped = _dropped_entries(candidates)
     summary = {
