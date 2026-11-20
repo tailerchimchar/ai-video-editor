@@ -1,0 +1,53 @@
+[
+ {
+  "index": 1,
+  "file": "01_kill_14m32s.mp4",
+  "event": "double kill",
+  "event_type": "kill",
+  "start_seconds": 870.0,
+  "end_seconds": 892.5,
+  "anchor_seconds": 880.0,
+  "hype_score": 0.7,
+  "funny_score": 0.2,
+  "story_score": 0.4,
+  "reason": "invented fixture reason",
+  "ok": true,
+  "skip_reason": null,
+  "vlm_verdict": "ship_it",
+  "vlm_reason": "invented critic note"
+ },
+ {
+  "index": 2,
+  "file": "02_kill_21m05s.mp4",
+  "event": "triple kill",
+  "event_type": "kill",
+  "start_seconds": 1255.0,
+  "end_seconds": 1280.0,
+  "anchor_seconds": 1265.0,
+  "hype_score": 0.7,
+  "funny_score": 0.2,
+  "story_score": 0.4,
+  "reason": "invented fixture reason",
+  "ok": true,
+  "skip_reason": null,
+  "vlm_verdict": "revise",
+  "vlm_reason": "invented critic note"
+ },
+ {
+  "index": 3,
+  "file": "03_kill_30m10s.mp4",
+  "event": "single kill",
+  "event_type": "kill",
+  "start_seconds": 1800.0,
+  "end_seconds": 1815.0,
+  "anchor_seconds": 1808.0,
+  "hype_score": 0.7,
+  "funny_score": 0.2,
+  "story_score": 0.4,
+  "reason": "invented fixture reason",
+  "ok": true,
+  "skip_reason": null,
+  "vlm_verdict": "revise",
+  "vlm_reason": "invented critic note"
+ }
+]

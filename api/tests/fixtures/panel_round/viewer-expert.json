@@ -1,0 +1,32 @@
+{
+ "clips": [
+  {
+   "clip_ref": "14m32s",
+   "hook_verdict": "pass",
+   "hook_reason": "strong opener",
+   "copy": {
+    "title": "Wobble Wizard Strikes",
+    "caption": "invented caption",
+    "hashtags": [
+     "#fixture"
+    ]
+   },
+   "thumbnail_t": 3.0,
+   "would_keep_watching": true
+  },
+  {
+   "clip_ref": "21m05s",
+   "hook_verdict": "weak",
+   "hook_reason": "strong opener",
+   "copy": {
+    "title": "Wobble Wizard Strikes",
+    "caption": "invented caption",
+    "hashtags": [
+     "#fixture"
+    ]
+   },
+   "thumbnail_t": 3.0,
+   "would_keep_watching": true
+  }
+ ]
+}
