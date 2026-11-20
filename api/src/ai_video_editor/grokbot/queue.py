@@ -6,6 +6,7 @@ import json
 import re
 import sqlite3
 import uuid
+import warnings
 from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,6 +31,7 @@ from ..edit_plan import (
     Rejected,
     SourceClip,
 )
+from ..taxonomy import Game
 
 # Strict on purpose: false positives are acceptable. Any backslash is
 # rejected; a "/" is only allowed directly after an alphanumeric, "-" or "_"
@@ -73,6 +75,9 @@ class _StrictSourceClip(SourceClip):
 class _StrictPlanMusic(PlanMusic):
     model_config = ConfigDict(extra="forbid")
 
+    # A library id only: never a path, so it can never become an ffmpeg input.
+    song_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
+
 
 class _StrictPlanEffect(PlanEffect):
     model_config = ConfigDict(extra="forbid")
@@ -101,12 +106,17 @@ class StrictEditPlan(EditPlan):
     rejected: list[_StrictRejected] = Field(default_factory=list)
 
 
-class EditPlanItem(Envelope):
-    kind: Literal["edit_plan"]
-    compilation_id: str
-    base_version: str
-    plan: StrictEditPlan
-    copy: CopyBlock | None = None
+# `copy` shadows BaseModel.copy on purpose (the bots' JSON contract); keep
+# pydantic's shadow warning out of the runner and API logs.
+with warnings.catch_warnings():
+    warnings.filterwarnings("ignore", message=r'Field name "copy"', category=UserWarning)
+
+    class EditPlanItem(Envelope):
+        kind: Literal["edit_plan"]
+        compilation_id: str
+        base_version: str
+        plan: StrictEditPlan
+        copy: CopyBlock | None = None
 
 
 class PreviewRequestItem(Envelope):
@@ -128,14 +138,25 @@ class PreviewRequestItem(Envelope):
         return self
 
 
+_KNOWN_GAMES = frozenset(g.value for g in Game)
+
+
 class VerdictItem(Envelope):
     kind: Literal["verdict"]
-    game: str
+    # Becomes a file name under the mentor hints dir: known games only.
+    game: str = Field(pattern=r"^[a-z][a-z0-9_]{1,31}$")
     clip_ref: str
     verdict: Literal["payoff", "false_positive", "style"]
     rule: str
     quote: str = ""
     quote_ts: str | None = None
+
+    @field_validator("game")
+    @classmethod
+    def _known_game(cls, v: str) -> str:
+        if v not in _KNOWN_GAMES:
+            raise ValueError(f"unknown game; expected one of {sorted(_KNOWN_GAMES)}")
+        return v
 
     @property
     def has_quote(self) -> bool:
@@ -185,6 +206,15 @@ def _walk_strings(root: Any) -> Iterator[str]:
             stack.extend(value)
 
 
+def _reasons(e: ValidationError, limit: int = 5) -> str:
+    """Field locations and messages only: the input is never echoed back."""
+    parts = [
+        f"{'.'.join(str(x) for x in err['loc'])}: {err['msg']} [{err['type']}]"
+        for err in e.errors(include_input=False, include_url=False)[:limit]
+    ]
+    return "; ".join(parts)
+
+
 def parse_item(text: str) -> QueueItem:
     if len(text.encode("utf-8", errors="replace")) > MAX_ITEM_BYTES:
         raise QueueRejected("item too large")
@@ -203,7 +233,7 @@ def parse_item(text: str) -> QueueItem:
     except RecursionError as e:
         raise QueueRejected("validation failed: nested too deeply") from e
     except ValidationError as e:
-        raise QueueRejected(f"validation failed: {e}") from e
+        raise QueueRejected(f"validation failed: {_reasons(e)}") from e
     if isinstance(item, EditPlanItem):
         if any(e.at != 0.0 for e in item.plan.effects):
             raise QueueRejected("timed effects are not applied yet")

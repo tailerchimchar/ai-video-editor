@@ -155,7 +155,7 @@ def test_buffered_emits_reach_wake_summary(h):
 def test_deferred_kinds_are_ledgered_not_executed(h):
     items = [
         env("edit_plan", compilation_id="c", base_version="v", plan={"format": "short"}),
-        env("verdict", game="lol", clip_ref="c", verdict="payoff", rule="r"),
+        env("verdict", game="league", clip_ref="c", verdict="payoff", rule="r"),
         env("deploy", tag="v1.2.3"),
     ]
     for i in items:
