@@ -4,61 +4,12 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from conftest import FakeRepo, FakeUploader, env
 
 from ai_video_editor.config import Settings, settings
 from ai_video_editor.grokbot.git_queue import GitQueueRepo
 from ai_video_editor.grokbot.queue import AppliedLedger, QueueRejected, parse_item
 from ai_video_editor.grokbot.runner import Runner, check_repo_dir, run_once
-
-
-def env(kind, **kw):
-    d = {
-        "id": str(uuid.uuid4()),
-        "kind": kind,
-        "author_bot": "lead",
-        "created": "2026-11-20T00:00:00Z",
-        "schema_version": 1,
-    }
-    d.update(kw)
-    return d
-
-
-class FakeRepo:
-    def __init__(self, root: Path):
-        self.root = root
-        self.files: dict[str, str] = {}
-        self.pushed: list[str] = []
-        self.pulls = 0
-
-    def pull(self):
-        self.pulls += 1
-
-    def list_items(self):
-        return sorted((p, t) for p, t in self.files.items() if p.startswith("queue/"))
-
-    def write(self, relative_path, text):
-        self.files[relative_path] = text
-        target = self.root / relative_path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(text)
-
-    def remove(self, relative_path):
-        self.files.pop(relative_path, None)
-        (self.root / relative_path).unlink(missing_ok=True)
-
-    push_ok = True
-    retries = 0
-
-    def commit_push(self, message):
-        self.pushed.append(message)
-        return self.push_ok
-
-    def retry_push(self):
-        self.retries += 1
-        return self.push_ok
-
-    def add(self, item_dict):
-        self.files[f"queue/{item_dict['id']}.json"] = json.dumps(item_dict)
 
 
 class FakeApi:
@@ -74,15 +25,6 @@ class FakeApi:
     def compilation_output(self, cid):
         self.calls.append(cid)
         return None
-
-
-class FakeUploader:
-    def __init__(self):
-        self.uploads = []
-
-    def upload(self, path, *, name, subfolder):
-        self.uploads.append((name, subfolder))
-        return "fid1"
 
 
 @pytest.fixture

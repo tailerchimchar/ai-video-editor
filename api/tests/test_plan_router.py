@@ -1,16 +1,16 @@
-from test_edit_plan import _http_plan, compilation  # noqa: F401  (fixture)
+from test_edit_plan import _http_plan
 
 from ai_video_editor.edit_plan import EditPlan, plan_hash
 
 
-def test_plan_version_endpoint(client, compilation):  # noqa: F811
+def test_plan_version_endpoint(client, compilation):
     comp_id, _folder = compilation
     r = client.get(f"/api/v1/compilations/{comp_id}/plan/version")
     assert r.status_code == 200
     assert r.json() == {"version": "1", "plan_hash": None, "plan_complete": False}
 
 
-def test_plan_version_returns_hash_after_plan_runs(client, compilation):  # noqa: F811
+def test_plan_version_returns_hash_after_plan_runs(client, compilation):
     comp_id, _folder = compilation
     plan = _http_plan()
     assert client.post(f"/api/v1/compilations/{comp_id}/plan", json=plan).status_code == 200
@@ -20,7 +20,7 @@ def test_plan_version_returns_hash_after_plan_runs(client, compilation):  # noqa
     assert body["plan_complete"] is True
 
 
-def test_plan_complete_false_mid_run(client, compilation):  # noqa: F811
+def test_plan_complete_false_mid_run(client, compilation):
     from ai_video_editor.edit_plan import STEPS, PlanProgress, _save_progress
 
     comp_id, folder = compilation

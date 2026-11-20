@@ -2,7 +2,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
-from test_grokbot_runner import FakeRepo, FakeUploader, env
+from conftest import FakeRepo, FakeUploader, env
 
 from ai_video_editor.config import settings
 from ai_video_editor.grokbot.queue import AppliedLedger

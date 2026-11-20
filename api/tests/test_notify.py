@@ -186,3 +186,40 @@ def test_send_returns_before_the_post_completes():
     release.set()
     sink.flush()
     assert len(calls) == 1
+
+
+def test_default_test_settings_build_no_webhook_sink():
+    assert settings.grokbot_webhook_url == ""
+    assert sinks.SINKS["webhook"]() is None
+
+
+def test_live_env_webhook_is_blanked_by_test_isolation(tmp_path, monkeypatch):
+    from conftest import isolate_grokbot
+
+    from ai_video_editor.config import Settings
+
+    fake_env = tmp_path / ".env"
+    fake_env.write_text(
+        "GROKBOT_WEBHOOK_URL=https://lead.example/hook\nGROKBOT_WEBHOOK_KEY=live\n",
+        encoding="utf-8",
+    )
+    loaded = Settings(_env_file=fake_env)  # type: ignore[call-arg]
+    assert loaded.grokbot_webhook_url == "https://lead.example/hook"
+    # Simulate a session whose api/.env held the live webhook.
+    monkeypatch.setattr(settings, "grokbot_webhook_url", loaded.grokbot_webhook_url)
+    monkeypatch.setattr(settings, "grokbot_webhook_key", loaded.grokbot_webhook_key)
+    built = []
+    monkeypatch.setattr(sinks, "WebhookSink", lambda *a, **k: built.append(a) or object())
+    isolate_grokbot(monkeypatch)
+    assert sinks.SINKS["webhook"]() is None
+    notify.emit(Event(event="job.done"))
+    assert built == []
+
+
+def test_reset_sinks_drops_cached_webhook(monkeypatch):
+    monkeypatch.setattr(settings, "grokbot_webhook_url", "https://x")
+    monkeypatch.setattr(settings, "grokbot_webhook_key", "k")
+    first = sinks.SINKS["webhook"]()
+    sinks.reset_sinks()
+    assert sinks._webhook is None
+    assert sinks.SINKS["webhook"]() is not first

@@ -24,6 +24,13 @@ _webhook: WebhookSink | None = None
 _webhook_lock = threading.Lock()
 
 
+def reset_sinks() -> None:
+    """Drop the cached webhook sink (tests; a settings change rebuilds it anyway)."""
+    global _webhook
+    with _webhook_lock:
+        _webhook = None
+
+
 def _log() -> Sink | None:
     return LogSink()
 
