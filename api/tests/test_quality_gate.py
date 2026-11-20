@@ -615,10 +615,14 @@ class TestBatchedJevScoring:
         assert len(ask_many_calls[0]) == 3
         assert len(results) == 3
 
-    def test_retry_only_failed_criteria(self, monkeypatch):
-        """On retry, only failed criteria are re-asked."""
-        from ai_video_editor.grokbot.quality_gate import BatchedJevScorer
+    def test_retry_only_failed_criteria(self, test_video, scratch_dir, monkeypatch):
+        """On retry, only failed/unsure criteria are re-asked; passed stay ticked."""
+        from ai_video_editor import config
 
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_enabled", True)
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_daily_cap", 100)
+
+        fake_vision = FakeVisionClient(description="A multikill at 5s")
         ask_many_calls = []
 
         def mock_ask_many(items):
@@ -629,22 +633,48 @@ class TestBatchedJevScoring:
 
         monkeypatch.setattr("ai_video_editor.decisions.ask_many", mock_ask_many)
 
-        scorer = BatchedJevScorer()
         criteria = [
             QualityCriterion(id="c1", text="Shows a kill"),
             QualityCriterion(id="c2", text="Good pacing"),
+            QualityCriterion(id="c3", text="Clear audio"),
         ]
-        already_passed = {"c1"}
-        scorer.score_all(
-            criteria,
-            vision_description="A multikill at 5s",
-            metadata=RenderMetadata(duration_seconds=30.0),
-            already_passed=already_passed,
-        )
 
+        with patch(
+            "ai_video_editor.grokbot.quality_gate._sample_frames",
+            return_value=[scratch_dir / "frame_001.jpg"],
+        ):
+            (scratch_dir / "frame_001.jpg").write_bytes(b"\x00")
+
+            # Simulate retry: c1 already passed, c2 and c3 need re-evaluation
+            result, _revisions = run_quality_gate(
+                test_video,
+                criteria,
+                RenderMetadata(duration_seconds=30.0),
+                scratch_dir,
+                already_passed={"c1"},
+                retry_counts={"c1": 1, "c2": 1, "c3": 1},
+                vision_client=fake_vision,
+            )
+
+        # Only c2 and c3 should be asked (c1 already passed)
         assert len(ask_many_calls) == 1
-        assert len(ask_many_calls[0]) == 1
-        assert ask_many_calls[0][0][0].prompt  # Only c2 was asked
+        assert len(ask_many_calls[0]) == 2
+
+        # Result should have all 3 criteria
+        assert len(result.criteria_results) == 3
+
+        # c1 should be PASS with "previously passed" reason
+        c1_result = next(cr for cr in result.criteria_results if cr.criterion_id == "c1")
+        assert c1_result.verdict == Verdict.PASS
+        assert "previously passed" in c1_result.reason
+
+        # c2 and c3 should be from Jev
+        c2_result = next(cr for cr in result.criteria_results if cr.criterion_id == "c2")
+        c3_result = next(cr for cr in result.criteria_results if cr.criterion_id == "c3")
+        assert c2_result.verdict == Verdict.PASS
+        assert c3_result.verdict == Verdict.PASS
+        assert "Jev" in c2_result.reason
+        assert "Jev" in c3_result.reason
 
 
 class TestDefaultVisionClient:
@@ -716,6 +746,64 @@ class TestTimingChecks:
         meta = RenderMetadata(duration_seconds=30.0)
         result = check_timing_criteria("shows_a_kill", meta)
         assert result is None
+
+
+class TestCaptionSafeAreaCheck:
+    def test_caption_in_safe_area_passes(self):
+        """Caption box within safe area passes."""
+        from ai_video_editor.grokbot.quality_gate import check_timing_criteria
+
+        # 9:16 portrait: safe area is roughly bottom 15% (y >= 0.85)
+        meta = RenderMetadata(
+            duration_seconds=30.0,
+            aspect_ratio="9:16",
+            caption_boxes=[{"x": 0.5, "y": 0.90, "w": 0.8, "h": 0.08}],
+        )
+        result = check_timing_criteria("caption_safe_area", meta)
+        assert result is not None
+        assert result.verdict == Verdict.PASS
+
+    def test_caption_outside_safe_area_fails(self):
+        """Caption box outside safe area fails."""
+        from ai_video_editor.grokbot.quality_gate import check_timing_criteria
+
+        # Caption in upper half of screen - outside safe area
+        meta = RenderMetadata(
+            duration_seconds=30.0,
+            aspect_ratio="9:16",
+            caption_boxes=[{"x": 0.5, "y": 0.3, "w": 0.8, "h": 0.08}],
+        )
+        result = check_timing_criteria("caption_safe_area", meta)
+        assert result is not None
+        assert result.verdict == Verdict.FAIL
+
+    def test_no_caption_geometry_skips_check(self):
+        """Missing caption geometry skips check with UNSURE."""
+        from ai_video_editor.grokbot.quality_gate import check_timing_criteria
+
+        meta = RenderMetadata(
+            duration_seconds=30.0,
+            aspect_ratio="9:16",
+            caption_boxes=[],  # No caption geometry
+        )
+        result = check_timing_criteria("caption_safe_area", meta)
+        assert result is not None
+        assert result.verdict == Verdict.UNSURE
+        assert "no caption geometry" in result.reason
+
+    def test_landscape_safe_area(self):
+        """Landscape (16:9) has different safe area."""
+        from ai_video_editor.grokbot.quality_gate import check_timing_criteria
+
+        # 16:9 landscape: safe area is typically bottom 20%
+        meta = RenderMetadata(
+            duration_seconds=30.0,
+            aspect_ratio="16:9",
+            caption_boxes=[{"x": 0.5, "y": 0.85, "w": 0.6, "h": 0.1}],
+        )
+        result = check_timing_criteria("caption_safe_area", meta)
+        assert result is not None
+        assert result.verdict == Verdict.PASS
 
 
 # --- QualityCriterion model tests ---

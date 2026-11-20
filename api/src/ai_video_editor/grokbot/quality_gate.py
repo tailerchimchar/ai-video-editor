@@ -77,6 +77,7 @@ class RenderMetadata:
     captions: list[str] = field(default_factory=list)
     digest_moment_labels: list[str] = field(default_factory=list)
     game: str | None = None
+    caption_boxes: list[dict] = field(default_factory=list)
 
 
 class VisionClient(Protocol):
@@ -401,6 +402,13 @@ _TIMING_PATTERNS = {
     "duration_over": re.compile(r"duration_over_(\d+)s"),
 }
 
+# Safe area bounds by aspect ratio (y >= threshold means in safe area at bottom)
+_CAPTION_SAFE_AREAS: dict[str, float] = {
+    "9:16": 0.80,  # Portrait: safe area is bottom 20%
+    "16:9": 0.75,  # Landscape: safe area is bottom 25%
+    "1:1": 0.78,  # Square: safe area is bottom 22%
+}
+
 
 def check_timing_criteria(criterion_id: str, metadata: RenderMetadata) -> CriterionResult | None:
     """Check timing-based criteria using pure computation (no Jev).
@@ -460,6 +468,36 @@ def check_timing_criteria(criterion_id: str, metadata: RenderMetadata) -> Criter
             reason=f"timing check: duration {metadata.duration_seconds:.1f}s, minimum {threshold}s",
         )
 
+    # Caption safe area check
+    if criterion_id == "caption_safe_area":
+        if not metadata.caption_boxes:
+            _log.info("caption_safe_area: no caption geometry available, skipping")
+            return CriterionResult(
+                criterion_id=criterion_id,
+                verdict=Verdict.UNSURE,
+                confidence=0.0,
+                reason="no caption geometry available",
+            )
+
+        # Get safe area threshold for aspect ratio (default to portrait if unknown)
+        safe_y = _CAPTION_SAFE_AREAS.get(metadata.aspect_ratio, 0.80)
+
+        # Check all caption boxes are in safe area
+        all_safe = True
+        for box in metadata.caption_boxes:
+            box_y = box.get("y", 0.0)
+            if box_y < safe_y:
+                all_safe = False
+                break
+
+        return CriterionResult(
+            criterion_id=criterion_id,
+            verdict=Verdict.PASS if all_safe else Verdict.FAIL,
+            confidence=1.0,
+            reason=f"caption safe area: {'all in safe zone' if all_safe else 'outside safe zone'} "
+            f"(aspect={metadata.aspect_ratio}, threshold y>={safe_y})",
+        )
+
     return None
 
 
@@ -491,6 +529,7 @@ def run_quality_gate(
     scratch_dir: Path,
     *,
     retry_counts: dict[str, int] | None = None,
+    already_passed: set[str] | None = None,
     vision_client: VisionClient | None = None,
     jev_scorer: JevScorer | None = None,
     batched_scorer: BatchedJevScorer | None = None,
@@ -502,6 +541,10 @@ def run_quality_gate(
     emitted for confident fails that haven't exhausted retries.
 
     Fail-safe: any error or timeout skips the gate with skipped=True.
+
+    Args:
+        already_passed: Set of criterion IDs that passed on a previous attempt.
+            These criteria are not re-evaluated; they appear in the result as PASS.
 
     Gate is disabled when:
     - GROKBOT_QUALITY_GATE_ENABLED=false
@@ -522,6 +565,7 @@ def run_quality_gate(
     timeout = timeout_seconds or settings.grokbot_quality_gate_timeout_seconds
     start_time = time.monotonic()
     retry_counts = retry_counts or {}
+    already_passed = already_passed or set()
     vision_client = vision_client or DefaultVisionClient()
     batched_scorer = batched_scorer or BatchedJevScorer()
 
@@ -530,10 +574,24 @@ def run_quality_gate(
 
     try:
         # 1. Check timing criteria first (pure computation, no model calls)
+        # Also handle already-passed criteria from previous attempts
         timing_results: list[CriterionResult] = []
         jev_criteria: list[QualityCriterion] = []
 
         for criterion in criteria:
+            # Already-passed criteria are not re-evaluated
+            if criterion.id in already_passed:
+                result.criteria_results.append(
+                    CriterionResult(
+                        criterion_id=criterion.id,
+                        verdict=Verdict.PASS,
+                        confidence=1.0,
+                        reason="previously passed",
+                        retry_count=retry_counts.get(criterion.id, 0),
+                    )
+                )
+                continue
+
             timing_result = check_timing_criteria(criterion.id, metadata)
             if timing_result is not None:
                 timing_result.retry_count = retry_counts.get(criterion.id, 0)
