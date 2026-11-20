@@ -70,6 +70,7 @@ def test_bot_file_has_required_strings(name: str) -> None:
 
 
 def test_queue_format_examples_parse() -> None:
+    import json
     import re
 
     from ai_video_editor.grokbot.queue import parse_item
@@ -77,7 +78,16 @@ def test_queue_format_examples_parse() -> None:
     path = GROKBOT_DIR / "queue-format.md"
     assert path.exists(), f"{path} missing"
     blocks = re.findall(r"```json\n(.*?)```", path.read_text(encoding="utf-8"), re.DOTALL)
-    kinds = {parse_item(block).kind for block in blocks}
+    # Only parse blocks that look like queue items (have a "kind" field), not event examples
+    queue_blocks = []
+    for block in blocks:
+        try:
+            data = json.loads(block)
+            if isinstance(data, dict) and "kind" in data:
+                queue_blocks.append(block)
+        except (json.JSONDecodeError, ValueError):
+            continue
+    kinds = {parse_item(block).kind for block in queue_blocks}
     assert kinds == {"edit_plan", "preview_request", "verdict", "deploy", "sleep", "wake"}
 
 

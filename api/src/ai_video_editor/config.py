@@ -79,6 +79,9 @@ class Settings(BaseSettings):
     grokbot_queue_depth_cap: int = 10
     grokbot_execute_plans: bool = False
     grokbot_record_verdicts: bool = False
+    # Path to a local file with player names (one per line) to block from digests.
+    # Gitignored and kept only on the PC. Fail-safe: missing file = warning only.
+    grokbot_player_names_path: str = ""
 
     # Riot API candidate source (League). Free dev key from
     # developer.riotgames.com. Source stays inert until all three are set.

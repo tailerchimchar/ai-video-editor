@@ -1,0 +1,21 @@
+{
+  "event": "round.published",
+  "payload": {
+    "round": "2026-11-20_dryrun",
+    "game": "league",
+    "asset_id": "asset-dryrun-0001",
+    "compilation_id": "comp-dryrun-0001",
+    "compilation_version": "1",
+    "drive": {
+      "digest": "FAKE-drive-digest-0001",
+      "clips": {
+        "14m32s": "FAKE-drive-clip-0001",
+        "21m05s": "FAKE-drive-clip-0002",
+        "30m10s": "FAKE-drive-clip-0003"
+      }
+    },
+    "clips": 3,
+    "skipped_outside_roots": 0
+  },
+  "ts": "2026-11-21T01:00:00+00:00"
+}

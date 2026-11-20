@@ -30,6 +30,13 @@ class DigestClip(BaseModel):
     event: str
     start_s: float
     end_s: float
+    # The padded window (what was actually exported, clamped to source bounds).
+    # Downstream renderers can re-trim using moment_start_s/moment_end_s.
+    padded_start_s: float | None = None
+    padded_end_s: float | None = None
+    # The original moment window before padding (the event detection's window).
+    moment_start_s: float | None = None
+    moment_end_s: float | None = None
     panel: dict[str, Any] = Field(default_factory=dict)
     critic: str | None = None
     voice: str = ""
@@ -78,7 +85,26 @@ def _ref_from_file(file: str) -> str:
     return Path(file).stem
 
 
-def build_digest(round_dir: Path, *, game: str) -> Digest:
+CLIP_PADDING_SECONDS = 10.0
+
+
+def build_digest(
+    round_dir: Path,
+    *,
+    game: str,
+    padding_seconds: float = CLIP_PADDING_SECONDS,
+    source_duration: float | None = None,
+) -> Digest:
+    """Build a digest from a panel round folder.
+
+    Args:
+        round_dir: Path to the round folder containing clips.json and expert JSONs.
+        game: Game identifier (league, valorant).
+        padding_seconds: Seconds to pad on each side of each clip (default 10).
+        source_duration: Total duration of the source recording in seconds.
+            If provided, padded windows are clamped to [0, source_duration].
+            If None, padded windows are clamped to [0, inf].
+    """
     clips = _load(round_dir / "clips.json")
     clips = clips if isinstance(clips, list) else []
     gaming = _by_ref(_load(round_dir / "gaming-expert.json"))
@@ -100,12 +126,26 @@ def build_digest(round_dir: Path, *, game: str) -> Digest:
         g = gaming.get(ref) or {}
         v = viewer.get(ref) or {}
         beats = g.get("story_beats") or []
+
+        moment_start = float(clip["start_seconds"])
+        moment_end = float(clip["end_seconds"])
+
+        # Calculate padded window, clamped to source bounds
+        padded_start = max(0.0, moment_start - padding_seconds)
+        padded_end = moment_end + padding_seconds
+        if source_duration is not None:
+            padded_end = min(padded_end, source_duration)
+
         out.append(
             DigestClip(
                 ref=ref,
                 event=clip.get("event", ""),
-                start_s=clip["start_seconds"],
-                end_s=clip["end_seconds"],
+                start_s=moment_start,
+                end_s=moment_end,
+                padded_start_s=padded_start,
+                padded_end_s=padded_end,
+                moment_start_s=moment_start,
+                moment_end_s=moment_end,
                 panel={
                     "gaming_quality": g.get("quality"),
                     "hook_verdict": v.get("hook_verdict"),

@@ -1,0 +1,11 @@
+# Player names to block from digests (one per line, case-insensitive).
+# Copy this to player-names.txt and add your real names. That file is gitignored.
+#
+# These names are checked against all digest text fields (voice, copy, panel).
+# A match blocks publishing before any upload, like the transcript leak check.
+#
+# Invented placeholder examples (replace with real names):
+Quillfeather
+Mumblewick
+Zorblax
+Wobble
