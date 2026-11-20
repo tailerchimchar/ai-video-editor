@@ -165,11 +165,27 @@ def digest_leaks(digest: Digest, transcript_path: Path, *, min_len: int = 12) ->
 
 
 def annotate_with_jev(digest: Digest, ask_many: Callable[..., list[Answer]] = ask_many) -> Digest:
-    """Add `format` and `include_p` to each clip's panel via Jev."""
-    states = [{"clip": c.model_dump()} for c in digest.clips]
-    formats = ask_many([(_FORMAT_QUESTION, s) for s in states])
-    includes = ask_many([(_INCLUDE_QUESTION, s) for s in states])
-    for clip, fmt, inc in zip(digest.clips, formats, includes, strict=True):
-        clip.panel["format"] = str(fmt.value) if fmt.value is not None else None
-        clip.panel["include_p"] = inc.probability
+    """Add `format` and `include_p` to each clip's panel via Jev.
+
+    Uses one batched request for all clips (format + include questions together).
+    """
+    if not digest.clips:
+        return digest
+
+    # Build all questions in one batch: [format_q0, include_q0, format_q1, include_q1, ...]
+    items = []
+    for clip in digest.clips:
+        state = {"clip": clip.model_dump()}
+        items.append((_FORMAT_QUESTION, state))
+        items.append((_INCLUDE_QUESTION, state))
+
+    answers = ask_many(items)
+
+    # Parse answers: pairs of (format, include) per clip
+    for i, clip in enumerate(digest.clips):
+        fmt_answer = answers[i * 2]
+        inc_answer = answers[i * 2 + 1]
+        clip.panel["format"] = str(fmt_answer.value) if fmt_answer.value is not None else None
+        clip.panel["include_p"] = inc_answer.probability
+
     return digest

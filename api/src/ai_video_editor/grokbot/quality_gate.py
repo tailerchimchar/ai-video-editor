@@ -1,15 +1,17 @@
 """Quality gate: optional post-render check using VLM vision + Jev scoring.
 
 The gate is OFF by default (`GROKBOT_QUALITY_GATE_ENABLED=false`) so the existing
-render flow is unchanged. When enabled:
+render flow is unchanged. Additionally, `GROKBOT_QUALITY_GATE_DAILY_CAP=0` or
+negative also disables the gate. When enabled:
 
 1. Sample at most 6 frames from the render at max 512px
 2. One VLM call produces a text description of the video
-3. Jev scores the description + render metadata against each criterion
-4. Visual-led criteria: scored from frames + metadata
+3. Timing criteria (dead air, hook timing, duration) are checked in pure code
+4. One batched Jev request scores all judgment criteria
 5. Audio-led criteria: scored from metadata ONLY (never fail on frames)
-6. Only confident fails trigger a revision request (max 2 retries/criterion)
-7. Errors/timeouts skip the gate and proceed to owner approval
+6. Rules-backend fallback or errors count as unsure, never pass
+7. Only confident fails trigger a revision request (max 2 retries/criterion)
+8. Errors/timeouts skip the gate and proceed to owner approval
 
 Design: pure core (scoring logic) separated from I/O (VLM client, Jev).
 Dependency injection for testability: tests use fakes, no real model calls.
@@ -18,6 +20,7 @@ Dependency injection for testability: tests use fakes, no real model calls.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -168,7 +171,11 @@ class DefaultVisionClient:
 
 
 class DefaultJevScorer:
-    """Jev-based scorer using the existing decisions backend."""
+    """Jev-based scorer using the existing decisions backend.
+
+    IMPORTANT: Rules-backend fallback is treated as UNSURE, never PASS.
+    A broken gate must not silently approve content.
+    """
 
     def score_criterion(
         self,
@@ -203,6 +210,20 @@ class DefaultJevScorer:
         try:
             answer = ask(question, state)
             latency_ms = int((time.perf_counter() - start) * 1000)
+
+            # Rules fallback must NOT be treated as confident pass
+            if answer.backend == "rules":
+                _log.warning(
+                    "quality_gate: rules fallback for %s, treating as unsure",
+                    criterion.id,
+                )
+                return CriterionResult(
+                    criterion_id=criterion.id,
+                    verdict=Verdict.UNSURE,
+                    confidence=0.0,
+                    reason="rules fallback: Jev unavailable, routed to owner",
+                )
+
             if answer.value is True:
                 verdict = Verdict.PASS
             elif answer.value is False:
@@ -235,6 +256,132 @@ class DefaultJevScorer:
             )
 
 
+class BatchedJevScorer:
+    """Score all criteria in one batched Jev request per render.
+
+    Uses ask_many to batch all questions into a single request.
+    Rules-backend fallback is treated as UNSURE for all criteria.
+    """
+
+    def score_all(
+        self,
+        criteria: list[QualityCriterion],
+        vision_description: str,
+        metadata: RenderMetadata,
+        *,
+        already_passed: set[str] | None = None,
+    ) -> list[CriterionResult]:
+        """Score all criteria in one batched request.
+
+        Args:
+            criteria: List of criteria to score
+            vision_description: VLM description of the video
+            metadata: Render metadata
+            already_passed: Set of criterion IDs that already passed (skip on retry)
+
+        Returns:
+            List of CriterionResult, one per criterion
+        """
+        from ..decisions import ask_many
+        from ..decisions.models import BoolQuestion
+
+        already_passed = already_passed or set()
+        results: list[CriterionResult] = []
+        to_ask: list[tuple[int, QualityCriterion]] = []
+
+        for i, criterion in enumerate(criteria):
+            if criterion.id in already_passed:
+                results.append(
+                    CriterionResult(
+                        criterion_id=criterion.id,
+                        verdict=Verdict.PASS,
+                        confidence=1.0,
+                        reason="previously passed",
+                    )
+                )
+            else:
+                to_ask.append((i, criterion))
+                results.append(None)  # Placeholder
+
+        if not to_ask:
+            return results
+
+        items = []
+        for _, criterion in to_ask:
+            if criterion.audio_led:
+                state = {
+                    "criterion": criterion.text,
+                    "vision_description": "",
+                    "digest_moment_labels": metadata.digest_moment_labels,
+                    "captions": metadata.captions,
+                    "duration_seconds": metadata.duration_seconds,
+                }
+            else:
+                state = {
+                    "criterion": criterion.text,
+                    "vision_description": vision_description,
+                    "digest_moment_labels": metadata.digest_moment_labels,
+                    "captions": metadata.captions,
+                    "duration_seconds": metadata.duration_seconds,
+                    "aspect_ratio": metadata.aspect_ratio,
+                }
+            prompt = f"Does this video meet the criterion: '{criterion.text}'?"
+            items.append((BoolQuestion(prompt=prompt), state))
+
+        start = time.perf_counter()
+        try:
+            answers = ask_many(items)
+            latency_ms = int((time.perf_counter() - start) * 1000)
+
+            for (idx, criterion), answer in zip(to_ask, answers, strict=True):
+                if answer.backend == "rules":
+                    _log.warning(
+                        "quality_gate batch: rules fallback for %s",
+                        criterion.id,
+                    )
+                    results[idx] = CriterionResult(
+                        criterion_id=criterion.id,
+                        verdict=Verdict.UNSURE,
+                        confidence=0.0,
+                        reason="rules fallback: Jev unavailable",
+                    )
+                else:
+                    if answer.value is True:
+                        verdict = Verdict.PASS
+                    elif answer.value is False:
+                        threshold = settings.grokbot_quality_gate_confidence_threshold
+                        verdict = (
+                            Verdict.FAIL if answer.probability >= threshold else Verdict.UNSURE
+                        )
+                    else:
+                        verdict = Verdict.UNSURE
+
+                    results[idx] = CriterionResult(
+                        criterion_id=criterion.id,
+                        verdict=verdict,
+                        confidence=answer.probability,
+                        reason=f"Jev ({answer.backend}): p={answer.probability:.2f}",
+                    )
+
+            _log.info(
+                "quality_gate batch: scored %d criteria in %dms",
+                len(to_ask),
+                latency_ms,
+            )
+
+        except Exception as exc:
+            _log.warning("quality_gate batch scoring failed: %s", exc)
+            for idx, criterion in to_ask:
+                results[idx] = CriterionResult(
+                    criterion_id=criterion.id,
+                    verdict=Verdict.UNSURE,
+                    confidence=0.0,
+                    reason=f"batch error: {exc}",
+                )
+
+        return results
+
+
 @dataclass
 class RevisionRequest:
     """Request to the Editor to revise a specific part."""
@@ -243,6 +390,77 @@ class RevisionRequest:
     criterion_text: str
     reason: str
     retry_number: int
+
+
+# --- Timing checks: pure functions, no Jev ---
+
+_TIMING_PATTERNS = {
+    "hook_within": re.compile(r"hook_within_(\d+)s"),
+    "no_dead_air_over": re.compile(r"no_dead_air_over_(\d+)s"),
+    "duration_under": re.compile(r"duration_under_(\d+)s"),
+    "duration_over": re.compile(r"duration_over_(\d+)s"),
+}
+
+
+def check_timing_criteria(criterion_id: str, metadata: RenderMetadata) -> CriterionResult | None:
+    """Check timing-based criteria using pure computation (no Jev).
+
+    Returns CriterionResult if the criterion_id matches a timing pattern,
+    otherwise None (indicating the criterion should go to Jev).
+    """
+    # Hook within first N seconds
+    if match := _TIMING_PATTERNS["hook_within"].match(criterion_id):
+        threshold = int(match.group(1))
+        has_hook = any(
+            w.get("has_hook") and w.get("start_s", 0) <= threshold for w in metadata.clip_windows
+        )
+        found_msg = "found" if has_hook else "not found"
+        return CriterionResult(
+            criterion_id=criterion_id,
+            verdict=Verdict.PASS if has_hook else Verdict.FAIL,
+            confidence=1.0,
+            reason=f"timing check: hook {found_msg} in first {threshold}s",
+        )
+
+    # No dead air over N seconds
+    if match := _TIMING_PATTERNS["no_dead_air_over"].match(criterion_id):
+        threshold = int(match.group(1))
+        windows = sorted(metadata.clip_windows, key=lambda w: w.get("start_s", 0))
+        max_gap = 0.0
+        for i in range(1, len(windows)):
+            gap = windows[i].get("start_s", 0) - windows[i - 1].get("end_s", 0)
+            max_gap = max(max_gap, gap)
+        has_dead_air = max_gap > threshold
+        return CriterionResult(
+            criterion_id=criterion_id,
+            verdict=Verdict.FAIL if has_dead_air else Verdict.PASS,
+            confidence=1.0,
+            reason=f"timing check: max gap {max_gap:.1f}s, threshold {threshold}s",
+        )
+
+    # Duration under N seconds
+    if match := _TIMING_PATTERNS["duration_under"].match(criterion_id):
+        threshold = int(match.group(1))
+        ok = metadata.duration_seconds < threshold
+        return CriterionResult(
+            criterion_id=criterion_id,
+            verdict=Verdict.PASS if ok else Verdict.FAIL,
+            confidence=1.0,
+            reason=f"timing check: duration {metadata.duration_seconds:.1f}s, limit {threshold}s",
+        )
+
+    # Duration over N seconds
+    if match := _TIMING_PATTERNS["duration_over"].match(criterion_id):
+        threshold = int(match.group(1))
+        ok = metadata.duration_seconds > threshold
+        return CriterionResult(
+            criterion_id=criterion_id,
+            verdict=Verdict.PASS if ok else Verdict.FAIL,
+            confidence=1.0,
+            reason=f"timing check: duration {metadata.duration_seconds:.1f}s, minimum {threshold}s",
+        )
+
+    return None
 
 
 def _sample_frames(
@@ -275,6 +493,7 @@ def run_quality_gate(
     retry_counts: dict[str, int] | None = None,
     vision_client: VisionClient | None = None,
     jev_scorer: JevScorer | None = None,
+    batched_scorer: BatchedJevScorer | None = None,
     timeout_seconds: float | None = None,
 ) -> tuple[GateResult, list[RevisionRequest]]:
     """Run the quality gate on a rendered video.
@@ -283,6 +502,10 @@ def run_quality_gate(
     emitted for confident fails that haven't exhausted retries.
 
     Fail-safe: any error or timeout skips the gate with skipped=True.
+
+    Gate is disabled when:
+    - GROKBOT_QUALITY_GATE_ENABLED=false
+    - GROKBOT_QUALITY_GATE_DAILY_CAP <= 0
     """
     if not criteria:
         return GateResult(passed=True, skipped=True, skip_reason="no criteria"), []
@@ -290,84 +513,119 @@ def run_quality_gate(
     if not settings.grokbot_quality_gate_enabled:
         return GateResult(passed=True, skipped=True, skip_reason="gate disabled"), []
 
+    # Daily cap of 0 or negative means gate disabled
+    if settings.grokbot_quality_gate_daily_cap <= 0:
+        return GateResult(
+            passed=True, skipped=True, skip_reason="daily cap disabled (set to 0 or negative)"
+        ), []
+
     timeout = timeout_seconds or settings.grokbot_quality_gate_timeout_seconds
     start_time = time.monotonic()
     retry_counts = retry_counts or {}
     vision_client = vision_client or DefaultVisionClient()
-    jev_scorer = jev_scorer or DefaultJevScorer()
+    batched_scorer = batched_scorer or BatchedJevScorer()
 
     result = GateResult(passed=True)
     revision_requests: list[RevisionRequest] = []
 
     try:
-        # 1. Sample frames
-        frame_start = time.monotonic()
-        frames = _sample_frames(
-            video_path,
-            scratch_dir,
-            metadata.duration_seconds,
-            max_frames=settings.grokbot_quality_gate_max_frames,
-            max_width=settings.grokbot_quality_gate_frame_max_width,
-        )
-        result.timings["frame_sampling_ms"] = int((time.monotonic() - frame_start) * 1000)
+        # 1. Check timing criteria first (pure computation, no model calls)
+        timing_results: list[CriterionResult] = []
+        jev_criteria: list[QualityCriterion] = []
 
-        if not frames:
-            _log.warning("quality_gate: no frames extracted, skipping")
-            return GateResult(passed=True, skipped=True, skip_reason="no frames extracted"), []
-
-        # 2. Vision pass
-        if time.monotonic() - start_time > timeout:
-            return GateResult(passed=True, skipped=True, skip_reason="timeout before vision"), []
-
-        vision_start = time.monotonic()
-        user_prompt = _VISION_USER_PROMPT.format(
-            duration=metadata.duration_seconds,
-            aspect=metadata.aspect_ratio,
-            n_frames=len(frames),
-            game=metadata.game or "unknown",
-        )
-        description, usage_info = vision_client.describe_video(
-            frames,
-            system_prompt=_VISION_SYSTEM_PROMPT,
-            user_prompt=user_prompt,
-        )
-        result.vision_description = description
-        result.cost_estimate = usage_info
-        result.timings["vision_ms"] = int((time.monotonic() - vision_start) * 1000)
-
-        # 3. Score each criterion
-        scoring_start = time.monotonic()
         for criterion in criteria:
-            if time.monotonic() - start_time > timeout:
-                result.skipped = True
-                result.skip_reason = "timeout during scoring"
-                break
+            timing_result = check_timing_criteria(criterion.id, metadata)
+            if timing_result is not None:
+                timing_result.retry_count = retry_counts.get(criterion.id, 0)
+                timing_results.append(timing_result)
+                result.criteria_results.append(timing_result)
+            else:
+                jev_criteria.append(criterion)
 
-            current_retries = retry_counts.get(criterion.id, 0)
-            criterion_result = jev_scorer.score_criterion(criterion, description, metadata)
-            criterion_result.retry_count = current_retries
-            result.criteria_results.append(criterion_result)
-
-            threshold = settings.grokbot_quality_gate_confidence_threshold
-            is_confident_fail = (
-                criterion_result.verdict == Verdict.FAIL
-                and criterion_result.confidence >= threshold
+        # 2. Sample frames (only if we have Jev criteria)
+        if jev_criteria:
+            frame_start = time.monotonic()
+            frames = _sample_frames(
+                video_path,
+                scratch_dir,
+                metadata.duration_seconds,
+                max_frames=settings.grokbot_quality_gate_max_frames,
+                max_width=settings.grokbot_quality_gate_frame_max_width,
             )
+            result.timings["frame_sampling_ms"] = int((time.monotonic() - frame_start) * 1000)
+
+            if not frames:
+                _log.warning("quality_gate: no frames extracted, skipping Jev criteria")
+                for criterion in jev_criteria:
+                    result.criteria_results.append(
+                        CriterionResult(
+                            criterion_id=criterion.id,
+                            verdict=Verdict.UNSURE,
+                            confidence=0.0,
+                            reason="no frames extracted",
+                            retry_count=retry_counts.get(criterion.id, 0),
+                        )
+                    )
+            else:
+                # 3. Vision pass
+                if time.monotonic() - start_time > timeout:
+                    return GateResult(
+                        passed=True, skipped=True, skip_reason="timeout before vision"
+                    ), []
+
+                vision_start = time.monotonic()
+                user_prompt = _VISION_USER_PROMPT.format(
+                    duration=metadata.duration_seconds,
+                    aspect=metadata.aspect_ratio,
+                    n_frames=len(frames),
+                    game=metadata.game or "unknown",
+                )
+                description, usage_info = vision_client.describe_video(
+                    frames,
+                    system_prompt=_VISION_SYSTEM_PROMPT,
+                    user_prompt=user_prompt,
+                )
+                result.vision_description = description
+                result.cost_estimate = usage_info
+                result.timings["vision_ms"] = int((time.monotonic() - vision_start) * 1000)
+
+                # 4. Score all Jev criteria in one batched request
+                if time.monotonic() - start_time > timeout:
+                    result.skipped = True
+                    result.skip_reason = "timeout before Jev scoring"
+                else:
+                    scoring_start = time.monotonic()
+                    # Note: already_passed should be set by caller if criteria passed previously.
+                    # We don't track pass/fail history here, so pass empty set.
+                    jev_results = batched_scorer.score_all(
+                        jev_criteria,
+                        description,
+                        metadata,
+                    )
+                    for criterion, cr in zip(jev_criteria, jev_results, strict=True):
+                        cr.retry_count = retry_counts.get(criterion.id, 0)
+                        result.criteria_results.append(cr)
+                    result.timings["scoring_ms"] = int((time.monotonic() - scoring_start) * 1000)
+
+        # 5. Process results and generate revision requests
+        for cr in result.criteria_results:
+            threshold = settings.grokbot_quality_gate_confidence_threshold
+            is_confident_fail = cr.verdict == Verdict.FAIL and cr.confidence >= threshold
             if is_confident_fail:
-                if current_retries < settings.grokbot_quality_gate_max_retries:
+                criterion = next((c for c in criteria if c.id == cr.criterion_id), None)
+                if criterion and cr.retry_count < settings.grokbot_quality_gate_max_retries:
                     revision_requests.append(
                         RevisionRequest(
-                            criterion_id=criterion.id,
+                            criterion_id=cr.criterion_id,
                             criterion_text=criterion.text,
-                            reason=criterion_result.reason,
-                            retry_number=current_retries + 1,
+                            reason=cr.reason,
+                            retry_number=cr.retry_count + 1,
                         )
                     )
                     result.passed = False
-                else:
-                    result.retries_exhausted.append(criterion.id)
+                elif criterion:
+                    result.retries_exhausted.append(cr.criterion_id)
 
-        result.timings["scoring_ms"] = int((time.monotonic() - scoring_start) * 1000)
         result.timings["total_ms"] = int((time.monotonic() - start_time) * 1000)
 
     except Exception as exc:
