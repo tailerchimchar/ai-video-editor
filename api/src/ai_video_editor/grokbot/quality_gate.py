@@ -1,6 +1,6 @@
 """Quality gate: optional post-render check using VLM vision + Jev scoring.
 
-The gate is OFF by default (`QUALITY_GATE_ENABLED=false`) so the existing
+The gate is OFF by default (`GROKBOT_QUALITY_GATE_ENABLED=false`) so the existing
 render flow is unchanged. When enabled:
 
 1. Sample at most 6 frames from the render at max 512px
@@ -149,11 +149,19 @@ class DefaultVisionClient:
                 user_prompt=user_prompt,
             )
             latency_ms = int((time.perf_counter() - start) * 1000)
-            return raw, {
-                "model": getattr(backend, "model", backend.name),
+            model_name = getattr(backend, "model", backend.name)
+            usage_info = {
+                "model": model_name,
                 "frames_sent": len(frames),
                 "latency_ms": latency_ms,
             }
+            _log.info(
+                "quality_gate vision: model=%s frames=%d latency=%dms",
+                model_name,
+                len(frames),
+                latency_ms,
+            )
+            return raw, usage_info
         except Exception as exc:
             _log.warning("quality_gate vision call failed: %s", exc)
             raise
@@ -191,16 +199,26 @@ class DefaultJevScorer:
         prompt = f"Does this video meet the criterion: '{criterion.text}'?"
         question = BoolQuestion(prompt=prompt)
 
+        start = time.perf_counter()
         try:
             answer = ask(question, state)
+            latency_ms = int((time.perf_counter() - start) * 1000)
             if answer.value is True:
                 verdict = Verdict.PASS
             elif answer.value is False:
-                threshold = settings.quality_gate_confidence_threshold
+                threshold = settings.grokbot_quality_gate_confidence_threshold
                 verdict = Verdict.FAIL if answer.probability >= threshold else Verdict.UNSURE
             else:
                 verdict = Verdict.UNSURE
 
+            _log.info(
+                "quality_gate jev: criterion=%s backend=%s verdict=%s p=%.2f latency=%dms",
+                criterion.id,
+                answer.backend,
+                verdict.value,
+                answer.probability,
+                latency_ms,
+            )
             return CriterionResult(
                 criterion_id=criterion.id,
                 verdict=verdict,
@@ -238,7 +256,7 @@ def _sample_frames(
     """Sample frames from the video for vision analysis."""
     from ..vlm.frames import extract_frames
 
-    n_frames = min(max_frames, settings.quality_gate_max_frames)
+    n_frames = min(max_frames, settings.grokbot_quality_gate_max_frames)
     return extract_frames(
         str(video_path),
         scratch_dir,
@@ -269,10 +287,10 @@ def run_quality_gate(
     if not criteria:
         return GateResult(passed=True, skipped=True, skip_reason="no criteria"), []
 
-    if not settings.quality_gate_enabled:
+    if not settings.grokbot_quality_gate_enabled:
         return GateResult(passed=True, skipped=True, skip_reason="gate disabled"), []
 
-    timeout = timeout_seconds or settings.quality_gate_timeout_seconds
+    timeout = timeout_seconds or settings.grokbot_quality_gate_timeout_seconds
     start_time = time.monotonic()
     retry_counts = retry_counts or {}
     vision_client = vision_client or DefaultVisionClient()
@@ -288,8 +306,8 @@ def run_quality_gate(
             video_path,
             scratch_dir,
             metadata.duration_seconds,
-            max_frames=settings.quality_gate_max_frames,
-            max_width=settings.quality_gate_frame_max_width,
+            max_frames=settings.grokbot_quality_gate_max_frames,
+            max_width=settings.grokbot_quality_gate_frame_max_width,
         )
         result.timings["frame_sampling_ms"] = int((time.monotonic() - frame_start) * 1000)
 
@@ -330,12 +348,13 @@ def run_quality_gate(
             criterion_result.retry_count = current_retries
             result.criteria_results.append(criterion_result)
 
+            threshold = settings.grokbot_quality_gate_confidence_threshold
             is_confident_fail = (
                 criterion_result.verdict == Verdict.FAIL
-                and criterion_result.confidence >= settings.quality_gate_confidence_threshold
+                and criterion_result.confidence >= threshold
             )
             if is_confident_fail:
-                if current_retries < settings.quality_gate_max_retries:
+                if current_retries < settings.grokbot_quality_gate_max_retries:
                     revision_requests.append(
                         RevisionRequest(
                             criterion_id=criterion.id,
