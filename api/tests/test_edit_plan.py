@@ -288,7 +288,7 @@ def test_plan_music_sets_music_path_on_the_spec(client, compilation, tmp_path):
 
 
 def test_ignored_music_trim_is_reported_as_a_problem(client, compilation, tmp_path):
-    comp_id, folder = compilation
+    comp_id, _folder = compilation
     song = tmp_path / "song.mp3"
     song.write_bytes(b"")
     url = f"/api/v1/compilations/{comp_id}/plan"
