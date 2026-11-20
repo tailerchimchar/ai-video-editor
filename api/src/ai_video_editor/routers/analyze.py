@@ -22,8 +22,8 @@ from ..candidates.service import compute_candidates
 from ..candidates.transcribe import transcribe
 from ..config import settings
 from ..database import get_db
-from ..jobs import finish_job
 from ..highlights import build_clip_batch, build_highlights, relative_folder
+from ..jobs import finish_job
 from ..models import HighlightCandidate, RankResponse
 from ..rag import index_asset_transcript
 from ..rag import search as rag_search

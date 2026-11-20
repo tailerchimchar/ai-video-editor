@@ -73,6 +73,13 @@ def test_summarize_strips_free_text():
     assert jobs.summarize(None) == {}
 
 
+def test_summarize_reduces_dropped_to_a_count():
+    out = jobs.summarize({"dropped": [{"id": 1, "reason": "meh"}, {"id": 2, "reason": "x"}]})
+    assert out["dropped"] == 2
+    assert "reason" not in str(out)
+    assert jobs.summarize({"dropped": 3})["dropped"] == 3
+
+
 async def test_finish_job_survives_db_failure(monkeypatch):
     events = _capture(monkeypatch)
 

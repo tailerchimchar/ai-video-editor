@@ -21,8 +21,8 @@ from pydantic import BaseModel, Field
 
 from ..config import settings
 from ..database import get_db
-from ..jobs import finish_job
 from ..edits import apply_sfx
+from ..jobs import finish_job
 from ..models import RankResponse
 from ..profiles import load_profile
 from ..sfx import extract_sfx

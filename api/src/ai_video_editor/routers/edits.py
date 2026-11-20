@@ -83,7 +83,6 @@ from ..compile_journal import (
 )
 from ..config import settings
 from ..database import get_db
-from ..jobs import finish_job
 from ..edits import apply_caption, apply_focus, apply_zoom
 from ..feedback import log_event as _log_feedback
 from ..intros import (
@@ -92,6 +91,7 @@ from ..intros import (
     intro_output_path,
     load_intro,
 )
+from ..jobs import finish_job
 from ..models import RankResponse
 
 router = APIRouter(tags=["edit"], prefix="/edit")

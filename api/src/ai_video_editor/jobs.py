@@ -23,6 +23,9 @@ def summarize(result: dict | None) -> dict:
     if not result:
         return {}
     out = {k: result[k] for k in _SCALAR_KEYS if k in result}
+    if isinstance(result.get("dropped"), list):
+        # Dropped candidates carry free-text ranker reasons; keep only the count.
+        out["dropped"] = len(result["dropped"])
     for name, keys in _ITEM_KEYS.items():
         items = result.get(name)
         if isinstance(items, list):
