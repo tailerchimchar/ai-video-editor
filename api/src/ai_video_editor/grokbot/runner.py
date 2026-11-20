@@ -8,6 +8,7 @@ import sys
 import time
 import urllib.parse
 from collections.abc import Callable
+from datetime import datetime, timezone
 from importlib import metadata
 from pathlib import Path
 from typing import Protocol
@@ -18,6 +19,7 @@ from pydantic import BaseModel
 from .. import editing, notify
 from ..config import settings
 from ..notify import Event
+from ..vlm.watch_montage import watch_montage
 from .drive import Uploader, uploader_from_settings
 from .git_queue import GitQueueRepo, QueueRepo
 from .queue import (
@@ -43,9 +45,21 @@ def _version() -> str:
         return "dev"
 
 
+class ApiError(Exception):
+    """A 4xx answer from the API; `detail` is its parsed body."""
+
+    def __init__(self, status: int, detail):
+        super().__init__(f"{status}: {detail}")
+        self.status = status
+        self.detail = detail
+
+
 class ApiClient(Protocol):
     def asset_path(self, asset_id: str) -> tuple[str, float]: ...
     def compilation_output(self, compilation_id: str) -> str | None: ...
+    def plan_version(self, compilation_id: str) -> str: ...
+    def apply_plan(self, compilation_id: str, plan: dict) -> dict: ...
+    def record_correction(self, body: dict) -> None: ...
 
 
 class HttpApiClient:
@@ -66,11 +80,35 @@ class HttpApiClient:
 
     def compilation_output(self, compilation_id: str) -> str | None:
         r = self._client.get(
-            f"{self._base}/api/v1/compilations/{urllib.parse.quote(compilation_id, safe='')}"
+            f"{self._base}/api/v1/compile/{urllib.parse.quote(compilation_id, safe='')}"
         )
         if not r.is_success:
             return None
         return r.json().get("output_path")
+
+    def _comp_url(self, compilation_id: str) -> str:
+        return f"{self._base}/api/v1/compilations/{urllib.parse.quote(compilation_id, safe='')}"
+
+    def plan_version(self, compilation_id: str) -> str:
+        r = self._client.get(f"{self._comp_url(compilation_id)}/plan/version")
+        r.raise_for_status()
+        return str(r.json()["version"])
+
+    def apply_plan(self, compilation_id: str, plan: dict) -> dict:
+        # Rendering can take minutes; the default 30s timeout is far too short.
+        r = self._client.post(f"{self._comp_url(compilation_id)}/plan", json=plan, timeout=900.0)
+        if 400 <= r.status_code < 500:
+            try:
+                detail = r.json().get("detail", r.text)
+            except ValueError:
+                detail = r.text
+            raise ApiError(r.status_code, detail)
+        r.raise_for_status()
+        return r.json()
+
+    def record_correction(self, body: dict) -> None:
+        r = self._client.post(f"{self._base}/api/v1/mentor/record_correction", json=body)
+        r.raise_for_status()
 
 
 class RunnerState(BaseModel):
@@ -102,6 +140,7 @@ class Runner:
         ledger: AppliedLedger,
         emit: Callable[[Event], None] = notify.emit,
         trim=editing.trim_clip,
+        watch=watch_montage,
         previews_dir: Path,
         clock: Callable[[], float] = time.monotonic,
     ):
@@ -111,6 +150,7 @@ class Runner:
         self.ledger = ledger
         self._emit = emit
         self._trim = trim
+        self._watch = watch
         self.previews_dir = Path(previews_dir)
         self._clock = clock
         self.state = RunnerState()
@@ -134,10 +174,28 @@ class Runner:
         self.ledger.mark(id, kind, outcome)
         self._outcomes.append(outcome)
 
-    def _reject(self, filename: str, id: str, kind: str, reason: str) -> None:
-        self._write(f"rejected/{filename}", json.dumps({"id": id, "reason": reason}))
-        self._send("queue.rejected", {"id": id, "reason": reason})
+    def _reject(self, filename: str, id: str, kind: str, reason: str, **extra) -> None:
+        self._write(f"rejected/{filename}", json.dumps({"id": id, "reason": reason, **extra}))
+        self._send("queue.rejected", {"id": id, "reason": reason, **extra})
         self._mark(id, kind, "rejected")
+
+    def _flag_on(self, item) -> bool:
+        if isinstance(item, EditPlanItem):
+            return bool(settings.grokbot_execute_plans)
+        if isinstance(item, VerdictItem):
+            return bool(settings.grokbot_record_verdicts)
+        return False
+
+    def _done(self, id: str, outcomes: dict[str, str], item=None) -> bool:
+        """Seen and final. A "deferred" item is not final once its flag is on."""
+        outcome = outcomes.get(id)
+        if outcome is None:
+            return False
+        if outcome != "deferred":
+            return True
+        if item is None:  # kind unknown yet: let it through if any flag is on
+            return not (settings.grokbot_execute_plans or settings.grokbot_record_verdicts)
+        return not self._flag_on(item)
 
     # -- tick ----------------------------------------------------------
     def tick(self) -> list[str]:
@@ -147,16 +205,17 @@ class Runner:
         self.state.sleeping = parse_sleep_flag(self.repo.root)
 
         control, normal, pending = [], [], 0
+        outcomes = self.ledger.outcomes()
         for path, text in self.repo.list_items():
             filename = Path(path).name
-            if self.ledger.seen(Path(path).stem):
+            if self._done(Path(path).stem, outcomes):
                 continue
             try:
                 item = parse_item(text)
             except QueueRejected as e:
                 self._reject(filename, Path(path).stem, "?", e.reason)
                 continue
-            if self.ledger.seen(item.id):
+            if self._done(item.id, outcomes, item):
                 continue
             pending += 1
             is_control = isinstance(item, (SleepItem, WakeItem))
@@ -211,8 +270,97 @@ class Runner:
     def _handle(self, filename: str, item) -> None:
         if isinstance(item, PreviewRequestItem):
             self._preview(filename, item)
+        elif isinstance(item, EditPlanItem) and settings.grokbot_execute_plans:
+            self._edit_plan(filename, item)
+        elif isinstance(item, VerdictItem) and settings.grokbot_record_verdicts:
+            self._verdict(item)
         elif isinstance(item, _DEFERRED):
             self._defer(item)
+
+    def _upload(self, path: Path, name: str, subfolder: str) -> str | None:
+        if self.uploader is None:
+            return None
+        try:
+            return self.uploader.upload(path, name=name, subfolder=subfolder)
+        except Exception as e:
+            logger.warning("upload of %s failed: %s", name, e)
+            return None
+
+    def _edit_plan(self, filename: str, item: EditPlanItem) -> None:
+        current = self.api.plan_version(item.compilation_id)
+        if current != item.base_version:
+            self._reject(
+                filename,
+                item.id,
+                item.kind,
+                f"base_version {item.base_version} != current {current}",
+                current=current,
+            )
+            return
+        try:
+            self.api.apply_plan(item.compilation_id, item.plan.model_dump(mode="json"))
+        except ApiError as e:
+            self._reject(filename, item.id, item.kind, f"plan rejected ({e.status}): {e.detail}")
+            return
+        output = self.api.compilation_output(item.compilation_id)
+        if not output or not Path(output).is_file():
+            self._reject(filename, item.id, item.kind, "plan applied but no rendered output found")
+            return
+        result = self._watch(output)
+        if result.critique is None:
+            self._reject(
+                filename, item.id, item.kind, f"plan applied; critic failed: {result.error}"
+            )
+            return
+        c = result.critique
+        critique_path = Path(output).parent / "critique.json"
+        critique_path.write_text(c.model_dump_json(indent=2), encoding="utf-8")
+        mp4 = self._upload(Path(output), f"{item.id}.mp4", "renders")
+        crit = self._upload(critique_path, f"{item.id}-critique.json", "digests")
+        self._send(
+            "render.done",
+            {
+                "plan_id": item.id,
+                "drive": {"mp4": mp4, "critique": crit},
+                "critic": {
+                    "verdict": c.overall_verdict,
+                    "opener": c.opener_strength,
+                    "climax": c.climax_strength,
+                    "pacing": c.pacing,
+                },
+                "copy": item.copy.model_dump(mode="json") if item.copy else None,
+            },
+        )
+        self._mark(item.id, item.kind, "applied")
+
+    def _verdict(self, item: VerdictItem) -> None:
+        # Only a verdict that quotes Noodlz may reach the mentor corrections.
+        if not item.has_quote:
+            self.previews_dir.parent.mkdir(parents=True, exist_ok=True)
+            line = {
+                "id": item.id,
+                "game": item.game,
+                "clip_ref": item.clip_ref,
+                "verdict": item.verdict,
+                "rule": item.rule,
+                "logged_at": datetime.now(timezone.utc).isoformat(),
+            }
+            with (self.previews_dir.parent / "decisions.log").open("a", encoding="utf-8") as f:
+                f.write(json.dumps(line) + "\n")
+            self._mark(item.id, item.kind, "logged")
+            return
+        self.api.record_correction(
+            {
+                "game": item.game,
+                "feedback": item.quote,
+                "rule": item.rule,
+                "clip_ref": item.clip_ref,
+                "source_context": f"grokbot:{item.id}",
+                "tags": ["grokbot"],
+                "verdict": item.verdict,
+            }
+        )
+        self._mark(item.id, item.kind, "applied")
 
     def _defer(self, item) -> None:
         self._mark(item.id, item.kind, "deferred")

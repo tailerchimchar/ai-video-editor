@@ -243,8 +243,10 @@ class AppliedLedger:
     def mark(self, id: str, kind: str, outcome: str) -> None:
         self._run(
             lambda c: c.execute(
-                "INSERT OR IGNORE INTO queue_applied (id, kind, applied_at, outcome) "
-                "VALUES (?,?,?,?)",
+                "INSERT INTO queue_applied (id, kind, applied_at, outcome) "
+                "VALUES (?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
+                "outcome=excluded.outcome, applied_at=excluded.applied_at "
+                "WHERE queue_applied.outcome='deferred'",
                 (id, kind, datetime.now(timezone.utc).isoformat(), outcome),
             )
         )

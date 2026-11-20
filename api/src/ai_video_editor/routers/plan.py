@@ -46,3 +46,10 @@ async def apply_plan(compilation_id: str, plan: EditPlan):
     if executor.last_output:
         await _update_compilation_output(compilation_id, executor.last_output)
     return PlanResponse(progress=progress, problems=executor.warnings(plan))
+
+
+@router.get("/{compilation_id}/plan/version")
+async def plan_version(compilation_id: str) -> dict:
+    """The compilation's current journal version, for optimistic-concurrency checks."""
+    folder = await _load_compilation_folder(compilation_id)
+    return {"version": EditsPlanExecutor(folder, compilation_id).current_version(compilation_id)}
