@@ -49,8 +49,14 @@ jev_clip_cut shadow event=kill delta_start=-0.40 delta_end=1.20 criteria_passed=
 ### Per-run summary line
 
 ```
-jev_clip_cut run clips=20 jev_requests=20 flagged=3 fallback=3 ffmpeg_ms=4100 jev_ms=1800 input_tokens=24000
+jev_clip_cut run clips=20 jev_requests=1 flagged=3 fallback=3 skipped_no_anchor=2 ffmpeg_ms=4100 jev_ms=1800 input_tokens=24000
 ```
+
+- `jev_requests` — usually **1** for the whole highlight run (chunked only
+  if the soft question ceiling is hit).
+- `skipped_no_anchor` — clips with no real event time (`metadata.anchor_seconds`);
+  fuzzy sources like `audio_peak` / `transcript_keyword` / `outplayed_clip`.
+  Those keep the legacy window and never invent a midpoint.
 
 No separate cost-log helper on master — these lines are the observability
 surface. ffmpeg work is local ($0); Jev bills input tokens only.

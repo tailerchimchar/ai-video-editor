@@ -77,6 +77,7 @@ class CutRunStats:
     jev_requests: int = 0
     flagged: int = 0
     fallback: int = 0
+    skipped_no_anchor: int = 0
     ffmpeg_ms: float = 0.0
     jev_ms: float = 0.0
     input_tokens: int = 0
@@ -85,15 +86,21 @@ class CutRunStats:
     def log_summary(self) -> None:
         _log.info(
             "jev_clip_cut run clips=%d jev_requests=%d flagged=%d fallback=%d "
-            "ffmpeg_ms=%.0f jev_ms=%.0f input_tokens=%d",
+            "skipped_no_anchor=%d ffmpeg_ms=%.0f jev_ms=%.0f input_tokens=%d",
             self.clips,
             self.jev_requests,
             self.flagged,
             self.fallback,
+            self.skipped_no_anchor,
             self.ffmpeg_ms,
             self.jev_ms,
             self.input_tokens,
         )
+
+
+# Soft ceiling on questions per System One request. 5 criteria x ~5 options
+# x N clips; chunk when we would exceed this. No hard API limit is documented.
+_MAX_QUESTIONS_PER_JEV_REQUEST = 200
 
 
 def _option_state_payload(options: list[CutOption], event_type: str | None) -> dict:
@@ -277,36 +284,55 @@ def pick_cut(
     )
 
 
-def pick_cuts_batch(
+def _questions_for_jobs(clip_jobs: list[dict]) -> int:
+    return sum(len(job["options"]) * len(_CRITERIA) for job in clip_jobs)
+
+
+def _chunk_jobs(clip_jobs: list[dict]) -> list[list[dict]]:
+    """Split jobs so each chunk stays under the soft question ceiling."""
+    if not clip_jobs:
+        return []
+    if _questions_for_jobs(clip_jobs) <= _MAX_QUESTIONS_PER_JEV_REQUEST:
+        return [clip_jobs]
+    chunks: list[list[dict]] = []
+    current: list[dict] = []
+    for job in clip_jobs:
+        trial = [*current, job]
+        if current and _questions_for_jobs(trial) > _MAX_QUESTIONS_PER_JEV_REQUEST:
+            chunks.append(current)
+            current = [job]
+        else:
+            current = trial
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _pick_cuts_one_batch(
     clip_jobs: list[dict],
     *,
     ask_many: AskMany | None = None,
-) -> list[CutPick]:
-    """Pick cuts for many clips.
+) -> tuple[list[CutPick], int]:
+    """One System One request for every option of every job. Raises on error.
 
-    Each job: `{options, event_time, event_type, duration_seconds}`.
-    When feasible (injected asker or Jev), all clips share one batched
-    ask by merging options into one state with clip-scoped ids. Falls
-    back to per-clip `pick_cut` when the batch ask fails.
+    Returns `(picks, jev_request_count)` where request_count is 1 on success.
     """
     if not clip_jobs:
-        return []
+        return [], 0
     if len(clip_jobs) == 1:
         job = clip_jobs[0]
-        return [
-            pick_cut(
-                job["options"],
-                event_time=job["event_time"],
-                event_type=job.get("event_type"),
-                duration_seconds=job["duration_seconds"],
-                ask_many=ask_many,
-            )
-        ]
+        pick = pick_cut(
+            job["options"],
+            event_time=job["event_time"],
+            event_type=job.get("event_type"),
+            duration_seconds=job["duration_seconds"],
+            ask_many=ask_many,
+        )
+        return [pick], 1
 
-    # Build one mega-state: options keyed "c{clip}_o{opt}".
     mega_options: list[dict] = []
     items: list[tuple[TypedQuestion, dict]] = []
-    index: list[tuple[int, int, str]] = []  # clip_i, opt_i, criterion
+    index: list[tuple[int, int, str]] = []
     for clip_i, job in enumerate(clip_jobs):
         dmin, dmax = duration_range(job.get("event_type"))
         for opt_i, opt in enumerate(job["options"]):
@@ -333,25 +359,11 @@ def pick_cuts_batch(
     items = [(q, state) for q, _ in items]
 
     t0 = time.perf_counter()
-    tokens = 0
-    try:
-        if ask_many is None:
-            answers, tokens = _default_jev_ask_many(items)
-        else:
-            answers = ask_many(items)
-            tokens = int(getattr(ask_many, "input_tokens", 0) or 0)
-    except Exception as exc:
-        _log.warning("cut_picker batch failed (%s); per-clip fallback", exc)
-        return [
-            pick_cut(
-                job["options"],
-                event_time=job["event_time"],
-                event_type=job.get("event_type"),
-                duration_seconds=job["duration_seconds"],
-                ask_many=ask_many,
-            )
-            for job in clip_jobs
-        ]
+    if ask_many is None:
+        answers, tokens = _default_jev_ask_many(items)
+    else:
+        answers = ask_many(items)
+        tokens = int(getattr(ask_many, "input_tokens", 0) or 0)
     jev_ms = (time.perf_counter() - t0) * 1000.0
 
     if answers and all(a.backend != "jev" for a in answers):
@@ -372,7 +384,7 @@ def pick_cuts_batch(
                     label="fallback_rules",
                 )
             )
-        return out
+        return out, 1
 
     passes: list[list[int]] = [[0] * len(job["options"]) for job in clip_jobs]
     for answer, (clip_i, opt_i, _key) in zip(answers, index, strict=True):
@@ -418,7 +430,64 @@ def pick_cuts_batch(
                 label=best.label,
             )
         )
-    return picks
+    return picks, 1
+
+
+def pick_cuts_batch(
+    clip_jobs: list[dict],
+    *,
+    ask_many: AskMany | None = None,
+) -> tuple[list[CutPick], int]:
+    """Pick cuts for many clips in as few Jev requests as possible.
+
+    Each job: `{options, event_time, event_type, duration_seconds}`.
+    All clips share one batched ask (chunked only when the soft question
+    ceiling is exceeded). Raises on transport/ask failure so callers can
+    keep legacy windows — never silently falls back to per-clip Haiku/Jev.
+    Returns `(picks, jev_request_count)`.
+    """
+    if not clip_jobs:
+        return [], 0
+    all_picks: list[CutPick] = []
+    requests = 0
+    for chunk in _chunk_jobs(clip_jobs):
+        picks, n = _pick_cuts_one_batch(chunk, ask_many=ask_many)
+        all_picks.extend(picks)
+        requests += n
+    return all_picks, requests
+
+
+def prepare_clip_cut_job(
+    path: str,
+    event_time: float,
+    event_type: str | None,
+    duration_seconds: float,
+    *,
+    word_spans: list[WordSpan] | None = None,
+    runner: FfmpegRunner | None = None,
+    search_pad: float = 12.0,
+) -> tuple[dict, float, CutSignals]:
+    """ffmpeg signals + options for one clip (no Jev). Fail-safe on signals."""
+    pre_r = max(search_pad, 8.0)
+    window = (
+        max(0.0, event_time - pre_r),
+        min(duration_seconds, event_time + pre_r) if duration_seconds > 0 else event_time + pre_r,
+    )
+    signals, ffmpeg_ms = extract_cut_signals(path, window, runner=runner)
+    options = propose_cut_options(
+        event_time,
+        event_type,
+        signals,
+        duration_seconds=duration_seconds,
+        word_spans=word_spans,
+    )
+    job = {
+        "options": options,
+        "event_time": event_time,
+        "event_type": event_type,
+        "duration_seconds": duration_seconds,
+    }
+    return job, ffmpeg_ms, signals
 
 
 def resolve_clip_cut(
@@ -437,27 +506,17 @@ def resolve_clip_cut(
     Returns `(pick, ffmpeg_ms, signals)`. On signal failure still proposes
     options from empty signals and lets the picker fall back if needed.
     """
-    pre_r = max(search_pad, 8.0)
-    window = (
-        max(0.0, event_time - pre_r),
-        min(duration_seconds, event_time + pre_r) if duration_seconds > 0 else event_time + pre_r,
-    )
-    signals, ffmpeg_ms = extract_cut_signals(path, window, runner=runner)
-    options = propose_cut_options(
+    job, ffmpeg_ms, signals = prepare_clip_cut_job(
+        path,
         event_time,
         event_type,
-        signals,
-        duration_seconds=duration_seconds,
+        duration_seconds,
         word_spans=word_spans,
+        runner=runner,
+        search_pad=search_pad,
     )
-    pick = pick_cut(
-        options,
-        event_time=event_time,
-        event_type=event_type,
-        duration_seconds=duration_seconds,
-        ask_many=ask_many,
-    )
-    return pick, ffmpeg_ms, signals
+    picks, _n = pick_cuts_batch([job], ask_many=ask_many)
+    return picks[0], ffmpeg_ms, signals
 
 
 def shadow_log_line(

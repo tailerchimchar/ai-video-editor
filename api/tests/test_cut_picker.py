@@ -130,8 +130,9 @@ def test_batch_one_shared_state_ask():
             "duration_seconds": 60.0,
         },
     ]
-    picks = pick_cuts_batch(jobs, ask_many=capture)
+    picks, n_requests = pick_cuts_batch(jobs, ask_many=capture)
     assert len(picks) == 2
+    assert n_requests == 1
     assert all(not p.flagged for p in picks)
     assert len(seen_states) == 1
     assert "options" in seen_states[0]
