@@ -40,7 +40,10 @@ dev = [
 testpaths = ["tests"]
 asyncio_mode = "auto"
 # Quiet warnings from optional deps (tracing/instrumentation surfaces).
-filterwarnings = ["ignore::DeprecationWarning"]
+filterwarnings = [
+  "ignore::DeprecationWarning",
+  "ignore:Field name \"copy\" in \"DigestClip\" shadows:UserWarning",
+]
 
 [tool.ruff]
 target-version = "py310"
