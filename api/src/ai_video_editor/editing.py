@@ -14,12 +14,18 @@ from .config import settings
 
 
 def trim_clip(
-    asset_path: str, output_path: str, start_seconds: float, end_seconds: float
+    asset_path: str,
+    output_path: str,
+    start_seconds: float,
+    end_seconds: float,
+    *,
+    timeout_seconds: float | None = None,
 ) -> tuple[bool, str | None]:
     """Cut [start, end) from `asset_path` into `output_path` (stream copy).
 
     Returns (ok, error). Never raises for ffmpeg/`not found` failures —
-    callers surface the error via the job row.
+    callers surface the error via the job row. With `timeout_seconds`, a
+    hung ffmpeg raises `subprocess.TimeoutExpired` for the caller to handle.
     """
     duration = end_seconds - start_seconds
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
@@ -39,7 +45,7 @@ def trim_clip(
         output_path,
     ]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_seconds)
     except FileNotFoundError:
         return False, "ffmpeg not found — install it: winget install Gyan.FFmpeg"
     if result.returncode != 0:

@@ -2,6 +2,7 @@
 
 Never raises. A sliding one-hour window caps sends; events over the cap
 are dropped and counted in `dropped` (surfaced by the heartbeat).
+Priority events (heartbeat, wake summary) are never dropped for the cap.
 """
 
 from __future__ import annotations
@@ -53,13 +54,14 @@ class WebhookSink:
             now = self.clock()
             while self._sent and now - self._sent[0] >= _WINDOW_SECONDS:
                 self._sent.popleft()
-            if len(self._sent) >= self.max_per_hour:
+            if not event.priority and len(self._sent) >= self.max_per_hour:
                 self.dropped += 1
                 return
             if self._queue.full():
                 self.dropped += 1
                 return
-            self._sent.append(now)
+            if not event.priority:  # priority sends never use up the cap
+                self._sent.append(now)
             self._queue.put_nowait(event)
 
     def flush(self, timeout: float = 5.0) -> None:
@@ -82,7 +84,7 @@ class WebhookSink:
         try:
             response = self.client.post(
                 self.url,
-                json=event.model_dump(),
+                json=event.model_dump(exclude={"priority"}),
                 headers={"Authorization": f"Bearer {self.key}"},
             )
         except Exception as exc:

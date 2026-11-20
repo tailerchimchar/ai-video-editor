@@ -226,65 +226,6 @@ def test_progress_model_fields():
 # ----- HTTP endpoint -----
 
 
-@pytest.fixture
-def compilation(client, asset, monkeypatch):
-    """A finished two-clip compilation (DB row, folder, spec.json, journal)."""
-    import asyncio
-    import json
-    import uuid
-    from datetime import datetime, timezone
-
-    from ai_video_editor.config import settings
-    from ai_video_editor.database import get_db
-
-    folder = settings.workspace_dir / "compilations" / "plan-folder"
-    folder.mkdir(parents=True)
-    spec = {
-        "id": "spec-x",
-        "asset_id": asset["id"],
-        "clips": [
-            {
-                "id": cid,
-                "asset_id": asset["id"],
-                "asset_path": asset["path"],
-                "start_seconds": start,
-                "end_seconds": start + 10.0,
-                "effects": [],
-            }
-            for cid, start in (("c-aaa", 100.0), ("c-bbb", 200.0))
-        ],
-    }
-    (folder / "spec.json").write_text(json.dumps(spec), encoding="utf-8")
-    (folder / "compilation.mp4").write_bytes(b"")
-    append_journal(folder, spec, action="compile")
-    comp_id = str(uuid.uuid4())
-
-    async def seed():
-        db = await get_db()
-        try:
-            await db.execute(
-                "INSERT INTO compilations (id, asset_id, output_path, params, created_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (
-                    comp_id,
-                    asset["id"],
-                    (folder / "compilation.mp4").as_posix(),
-                    "{}",
-                    datetime.now(timezone.utc).isoformat(),
-                ),
-            )
-            await db.commit()
-        finally:
-            await db.close()
-
-    asyncio.run(seed())
-    monkeypatch.setattr(
-        "ai_video_editor.routers.edits.render_spec",
-        lambda spec, fld, dirty_clip_ids=None: {"output": (folder / "compilation.mp4").as_posix()},
-    )
-    return comp_id, folder
-
-
 def _http_plan(**overrides) -> dict:
     base = {
         "format": "hype_montage",
@@ -347,7 +288,7 @@ def test_plan_music_sets_music_path_on_the_spec(client, compilation, tmp_path):
 
 
 def test_ignored_music_trim_is_reported_as_a_problem(client, compilation, tmp_path):
-    comp_id, folder = compilation
+    comp_id, _folder = compilation
     song = tmp_path / "song.mp3"
     song.write_bytes(b"")
     url = f"/api/v1/compilations/{comp_id}/plan"

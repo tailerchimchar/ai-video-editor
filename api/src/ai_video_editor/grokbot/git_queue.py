@@ -12,6 +12,36 @@ logger = logging.getLogger(__name__)
 
 # Only paths the runner writes; never `add -A` on the whole tree.
 _TRACKED = ("queue", "rejected", "SLEEP")
+# Read a little past the item cap so parse_item still reports "too large".
+_READ_CAP = 64 * 1024 + 1
+
+
+class UnsafePathError(OSError):
+    """A queue-repo path is a symlink, has a symlinked parent, or escapes the repo."""
+
+
+def unsafe_reason(root: Path, relative_path: str) -> str | None:
+    """Why `root/relative_path` must not be touched, or None when it is safe.
+
+    Walks every component inside the repo: a symlink anywhere (the target
+    itself or a parent directory) could point the runner at a file outside
+    the clone, so it is refused whether or not the link resolves.
+    """
+    root = Path(root)
+    rel = Path(relative_path)
+    if rel.is_absolute() or ".." in rel.parts or rel.drive:
+        return f"{relative_path} is not a plain relative path"
+    current = root
+    for part in rel.parts:
+        current = current / part
+        if current.is_symlink():
+            return f"{current.relative_to(root).as_posix()} is a symlink"
+    try:
+        if not current.resolve().is_relative_to(root.resolve()):
+            return f"{relative_path} escapes the queue repo"
+    except (OSError, ValueError) as e:
+        return f"{relative_path} cannot be resolved: {e}"
+    return None
 
 
 class QueueRepo(Protocol):
@@ -67,21 +97,40 @@ class GitQueueRepo:
             return
         self._g("reset", "--hard", f"origin/{branch}")
 
+    def _check(self, relative_path: str) -> None:
+        reason = unsafe_reason(self.root, relative_path)
+        if reason:
+            logger.warning("refusing queue path: %s", reason)
+            raise UnsafePathError(reason)
+
     def list_items(self) -> list[tuple[str, str]]:
         out = []
+        if unsafe_reason(self.root, "queue"):
+            logger.warning("refusing queue/: it is a symlink")
+            return out
         for p in sorted((self.root / "queue").glob("*.json")):
+            rel = f"queue/{p.name}"
+            reason = unsafe_reason(self.root, rel)
+            if reason or not p.is_file():
+                logger.warning("skipping %s: %s", rel, reason or "not a regular file")
+                continue
             try:
-                out.append((f"queue/{p.name}", p.read_text(encoding="utf-8", errors="replace")))
+                with p.open("rb") as f:
+                    raw = f.read(_READ_CAP)
+                out.append((rel, raw.decode("utf-8", errors="replace")))
             except OSError as e:
                 logger.warning("cannot read %s: %s", p, e)
         return out
 
     def write(self, relative_path: str, text: str) -> None:
+        self._check(relative_path)
         target = self.root / relative_path
         target.parent.mkdir(parents=True, exist_ok=True)
+        self._check(relative_path)  # the mkdir must not have raced in a link
         target.write_text(text, encoding="utf-8")
 
     def remove(self, relative_path: str) -> None:
+        self._check(relative_path)
         (self.root / relative_path).unlink(missing_ok=True)
 
     def commit_push(self, message: str) -> bool:

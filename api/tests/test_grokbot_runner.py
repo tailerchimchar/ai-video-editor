@@ -4,61 +4,12 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from conftest import FakeRepo, FakeUploader, env
 
 from ai_video_editor.config import Settings, settings
 from ai_video_editor.grokbot.git_queue import GitQueueRepo
 from ai_video_editor.grokbot.queue import AppliedLedger, QueueRejected, parse_item
-from ai_video_editor.grokbot.runner import Runner, check_repo_dir, run_once
-
-
-def env(kind, **kw):
-    d = {
-        "id": str(uuid.uuid4()),
-        "kind": kind,
-        "author_bot": "lead",
-        "created": "2026-11-20T00:00:00Z",
-        "schema_version": 1,
-    }
-    d.update(kw)
-    return d
-
-
-class FakeRepo:
-    def __init__(self, root: Path):
-        self.root = root
-        self.files: dict[str, str] = {}
-        self.pushed: list[str] = []
-        self.pulls = 0
-
-    def pull(self):
-        self.pulls += 1
-
-    def list_items(self):
-        return sorted((p, t) for p, t in self.files.items() if p.startswith("queue/"))
-
-    def write(self, relative_path, text):
-        self.files[relative_path] = text
-        target = self.root / relative_path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(text)
-
-    def remove(self, relative_path):
-        self.files.pop(relative_path, None)
-        (self.root / relative_path).unlink(missing_ok=True)
-
-    push_ok = True
-    retries = 0
-
-    def commit_push(self, message):
-        self.pushed.append(message)
-        return self.push_ok
-
-    def retry_push(self):
-        self.retries += 1
-        return self.push_ok
-
-    def add(self, item_dict):
-        self.files[f"queue/{item_dict['id']}.json"] = json.dumps(item_dict)
+from ai_video_editor.grokbot.runner import Runner, check_repo_dir, heartbeat_once, run_once
 
 
 class FakeApi:
@@ -76,15 +27,6 @@ class FakeApi:
         return None
 
 
-class FakeUploader:
-    def __init__(self):
-        self.uploads = []
-
-    def upload(self, path, *, name, subfolder):
-        self.uploads.append((name, subfolder))
-        return "fid1"
-
-
 @pytest.fixture
 def h(tmp_path):
     repo = FakeRepo(tmp_path / "repo")
@@ -94,7 +36,7 @@ def h(tmp_path):
     events = []
     trims = []
 
-    def trim(src, out, s, e):
+    def trim(src, out, s, e, **kw):
         trims.append((src, out, s, e))
         Path(out).write_bytes(b"")
         return True, None
@@ -213,7 +155,7 @@ def test_buffered_emits_reach_wake_summary(h):
 def test_deferred_kinds_are_ledgered_not_executed(h):
     items = [
         env("edit_plan", compilation_id="c", base_version="v", plan={"format": "short"}),
-        env("verdict", game="lol", clip_ref="c", verdict="payoff", rule="r"),
+        env("verdict", game="league", clip_ref="c", verdict="payoff", rule="r"),
         env("deploy", tag="v1.2.3"),
     ]
     for i in items:
@@ -285,7 +227,7 @@ def test_poison_item_is_isolated(h):
     h.repo.add(bad)
     h.repo.add(good)
 
-    def boom(*a):
+    def boom(*a, **k):
         raise RuntimeError("x")
 
     h.runner._trim = boom  # raises past the transient asset_path guard
@@ -299,7 +241,7 @@ def test_unexpected_handler_error_is_rejected(h):
     bad = preview()
     h.repo.add(bad)
 
-    def boom(*a):
+    def boom(*a, **k):
         raise RuntimeError("x")
 
     h.runner._trim = boom
@@ -315,6 +257,7 @@ def test_heartbeat_survives_failing_tick(h):
 
     h.repo.pull = boom
     run_once(h.runner)
+    heartbeat_once(h.runner)
     assert "heartbeat" in names(h)
 
 
@@ -433,7 +376,7 @@ def test_failing_reject_write_does_not_abort_tick(h):
     h.repo.add(bad)
     h.repo.add(good)
 
-    def boom(*a):
+    def boom(*a, **k):
         raise RuntimeError("x")
 
     h.runner._trim = boom
