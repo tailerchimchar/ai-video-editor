@@ -38,7 +38,7 @@ def test_webhook_sink_posts_bearer_json():
     assert len(seen) == 1
     assert str(seen[0].url) == "https://bot.example/hook"
     assert seen[0].headers["Authorization"] == "Bearer k"
-    assert json.loads(seen[0].content) == event.model_dump()
+    assert json.loads(seen[0].content) == event.model_dump(exclude={"priority"})
 
 
 def test_webhook_sink_failure_never_raises():

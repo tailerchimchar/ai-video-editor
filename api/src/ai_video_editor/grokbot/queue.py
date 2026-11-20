@@ -290,4 +290,6 @@ class AppliedLedger:
 
 
 def parse_sleep_flag(repo_root: Path) -> bool:
-    return (Path(repo_root) / "SLEEP").is_file()
+    flag = Path(repo_root) / "SLEEP"
+    # A symlinked SLEEP is never trusted (the runner refuses to touch it).
+    return flag.is_file() and not flag.is_symlink()

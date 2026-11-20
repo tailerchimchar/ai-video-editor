@@ -9,7 +9,7 @@ from conftest import FakeRepo, FakeUploader, env
 from ai_video_editor.config import Settings, settings
 from ai_video_editor.grokbot.git_queue import GitQueueRepo
 from ai_video_editor.grokbot.queue import AppliedLedger, QueueRejected, parse_item
-from ai_video_editor.grokbot.runner import Runner, check_repo_dir, run_once
+from ai_video_editor.grokbot.runner import Runner, check_repo_dir, heartbeat_once, run_once
 
 
 class FakeApi:
@@ -36,7 +36,7 @@ def h(tmp_path):
     events = []
     trims = []
 
-    def trim(src, out, s, e):
+    def trim(src, out, s, e, **kw):
         trims.append((src, out, s, e))
         Path(out).write_bytes(b"")
         return True, None
@@ -227,7 +227,7 @@ def test_poison_item_is_isolated(h):
     h.repo.add(bad)
     h.repo.add(good)
 
-    def boom(*a):
+    def boom(*a, **k):
         raise RuntimeError("x")
 
     h.runner._trim = boom  # raises past the transient asset_path guard
@@ -241,7 +241,7 @@ def test_unexpected_handler_error_is_rejected(h):
     bad = preview()
     h.repo.add(bad)
 
-    def boom(*a):
+    def boom(*a, **k):
         raise RuntimeError("x")
 
     h.runner._trim = boom
@@ -257,6 +257,7 @@ def test_heartbeat_survives_failing_tick(h):
 
     h.repo.pull = boom
     run_once(h.runner)
+    heartbeat_once(h.runner)
     assert "heartbeat" in names(h)
 
 
@@ -375,7 +376,7 @@ def test_failing_reject_write_does_not_abort_tick(h):
     h.repo.add(bad)
     h.repo.add(good)
 
-    def boom(*a):
+    def boom(*a, **k):
         raise RuntimeError("x")
 
     h.runner._trim = boom

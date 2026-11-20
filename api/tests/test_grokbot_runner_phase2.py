@@ -104,7 +104,7 @@ def h(tmp_path, monkeypatch):
         uploader=up,
         ledger=AppliedLedger(tmp_path / "l.db"),
         emit=events.append,
-        trim=lambda *a: (True, None),
+        trim=lambda *a, **k: (True, None),
         previews_dir=tmp_path / "grok" / "previews",
         watch=fake_watch,
     )

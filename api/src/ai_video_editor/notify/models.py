@@ -15,3 +15,5 @@ class Event(BaseModel):
     event: str
     payload: dict = Field(default_factory=dict)
     ts: str = Field(default_factory=_now)
+    # Liveness events (heartbeat, wake summary) bypass the webhook rate cap.
+    priority: bool = False

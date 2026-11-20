@@ -5,17 +5,21 @@ from __future__ import annotations
 import json
 import logging
 import re
+import subprocess
 import sys
+import threading
 import time
 import urllib.parse
+import uuid
+from collections import Counter
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from importlib import metadata
 from pathlib import Path
 from typing import Protocol
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .. import editing, notify
 from ..config import settings
@@ -145,6 +149,33 @@ class RunnerState(BaseModel):
     last_heartbeat: float = 0.0
     pending_push: bool = False
     version: str = _version()
+    # Queue files whose id is not final in the ledger, as of the last tick.
+    queue_depth: int = 0
+    # Transient-failure attempts per item id (trim timeouts).
+    attempts: dict[str, int] = Field(default_factory=dict)
+    # Monotonic time of the last retention prune; None = never.
+    last_prune: float | None = None
+
+
+TRIM_TIMEOUT_SECONDS = 120.0
+MAX_TRIM_ATTEMPTS = 3
+DEFERRED_TTL = timedelta(hours=24)
+PRUNE_EVERY_SECONDS = 24 * 3600
+
+
+def _created_at(created: str) -> datetime | None:
+    try:
+        dt = datetime.fromisoformat(created.strip().replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _is_uuid_name(name: str) -> bool:
+    try:
+        return str(uuid.UUID(name)) == name
+    except ValueError:
+        return False
 
 
 def _inside(path: str, *roots: Path) -> bool:
@@ -190,6 +221,8 @@ class Runner:
         self.previews_dir = Path(previews_dir)
         self._clock = clock
         self.state = RunnerState()
+        # Guards `state`: the heartbeat thread reads it while a tick runs.
+        self.lock = threading.RLock()
         self._heartbeat_sent = False
         self._wrote = False
         self._outcomes: list[str] = []
@@ -198,10 +231,11 @@ class Runner:
     # -- emitting ------------------------------------------------------
     def _send(self, event: str, payload: dict) -> None:
         ev = Event(event=event, payload=payload)
-        if self.state.sleeping:
-            self.state.buffered.append(ev.model_dump())
-        else:
-            self._emit(ev)
+        with self.lock:
+            if self.state.sleeping:
+                self.state.buffered.append(ev.model_dump(exclude={"priority"}))
+                return
+        self._emit(ev)
 
     def _write(self, path: str, text: str) -> None:
         self.repo.write(path, text)
@@ -212,9 +246,23 @@ class Runner:
         self._outcomes.append(outcome)
 
     def _reject(self, filename: str, id: str, kind: str, reason: str, **extra) -> None:
-        self._write(f"rejected/{filename}", json.dumps({"id": id, "reason": reason, **extra}))
-        self._send("queue.rejected", {"id": id, "reason": reason, **extra})
-        self._mark(id, kind, "rejected")
+        # The ledger mark must land even when the rejected/ write cannot, or one
+        # unwritable name would be re-read and re-fail on every tick.
+        try:
+            self._write(f"rejected/{filename}", json.dumps({"id": id, "reason": reason, **extra}))
+        except Exception:
+            logger.exception("could not write rejected/%s", filename)
+        try:
+            self._send("queue.rejected", {"id": id, "reason": reason, **extra})
+        finally:
+            self._mark(id, kind, "rejected")
+
+    def _reject_internal(self, filename: str, id: str, kind: str, e: Exception) -> None:
+        logger.error("item %s failed: %s", id, e, exc_info=e)
+        try:
+            self._reject(filename, id, kind, f"internal error: {type(e).__name__}")
+        except Exception:
+            logger.exception("could not record rejection for %s", id)
 
     def _flag_on(self, item) -> bool:
         if isinstance(item, EditPlanItem):
@@ -237,53 +285,97 @@ class Runner:
         return not self._flag_on(item)
 
     # -- tick ----------------------------------------------------------
+    def _expired(self, item, outcomes: dict[str, str], now: datetime) -> bool:
+        """A deferred item older than the TTL is never replayed by a flag flip."""
+        if outcomes.get(item.id) != "deferred" or not self._flag_on(item):
+            return False
+        created = _created_at(item.created)
+        return created is None or now - created > DEFERRED_TTL
+
+    def _scan(self, outcomes: dict[str, str]):
+        """Parse every queue file once: (control, normal, entries, expired kinds)."""
+        control, normal, entries, expired = [], [], [], Counter()
+        now = datetime.now(timezone.utc)
+        for path, text in self.repo.list_items():
+            filename, stem = Path(path).name, Path(path).stem
+            if self._done(stem, outcomes):
+                entries.append((stem, None))
+                continue
+            try:
+                try:
+                    item = parse_item(text)
+                except QueueRejected as e:
+                    entries.append((stem, None))
+                    self._reject(filename, stem, "?", e.reason)
+                    continue
+                entries.append((item.id, item))
+                if self._expired(item, outcomes, now):
+                    self._mark(item.id, item.kind, "expired")
+                    expired[item.kind] += 1
+                    continue
+            except Exception as e:  # one bad file never aborts the tick
+                self._reject_internal(filename, stem, "?", e)
+                continue
+            if self._done(item.id, outcomes, item):
+                continue
+            is_control = isinstance(item, (SleepItem, WakeItem))
+            (control if is_control else normal).append((filename, item))
+        return control, normal, entries, expired
+
+    def _control(self, filename: str, item) -> bool:
+        """Apply one sleep/wake item; True when it woke the runner."""
+        woke = False
+        if isinstance(item, SleepItem):
+            self._write("SLEEP", "")
+            with self.lock:
+                self.state.sleeping = True
+        else:
+            self.repo.remove("SLEEP")
+            self._wrote = True
+            with self.lock:
+                if self.state.sleeping:
+                    woke = True
+                    self.state.sleeping = False
+                    events, self.state.buffered = self.state.buffered, []
+            if woke:
+                self._emit(
+                    Event(
+                        event="wake.summary",
+                        payload={"count": len(events), "events": events},
+                        priority=True,
+                    )
+                )
+        self._mark(item.id, item.kind, "applied")
+        return woke
+
+    def _depth(self, entries) -> int:
+        outcomes = self.ledger.outcomes()
+        return sum(1 for id, item in entries if not self._done(id, outcomes, item))
+
     def tick(self) -> list[str]:
         self._wrote = False
         self._outcomes = []
         self.repo.pull()
-        self.state.sleeping = parse_sleep_flag(self.repo.root)
+        with self.lock:
+            self.state.sleeping = parse_sleep_flag(self.repo.root)
 
-        control, normal, pending = [], [], 0
         outcomes = self.ledger.outcomes()
         self._prior = outcomes
-        for path, text in self.repo.list_items():
-            filename = Path(path).name
-            if self._done(Path(path).stem, outcomes):
-                continue
-            try:
-                item = parse_item(text)
-            except QueueRejected as e:
-                self._reject(filename, Path(path).stem, "?", e.reason)
-                continue
-            if self._done(item.id, outcomes, item):
-                continue
-            pending += 1
-            is_control = isinstance(item, (SleepItem, WakeItem))
-            (control if is_control else normal).append((filename, item))
+        control, normal, entries, expired = self._scan(outcomes)
+        if expired:
+            self._send("queue.expired", {"count": sum(expired.values()), "kinds": dict(expired)})
 
+        pending = len(control) + len(normal)
         cap = settings.grokbot_queue_depth_cap
         if pending > cap:
             self._send("queue.depth", {"depth": pending, "cap": cap})
 
         woke = False
-        for _filename, item in control:
-            if isinstance(item, SleepItem):
-                self._write("SLEEP", "")
-                self.state.sleeping = True
-            else:
-                self.repo.remove("SLEEP")
-                self._wrote = True
-                if self.state.sleeping:
-                    woke = True
-                    self.state.sleeping = False
-                    events, self.state.buffered = self.state.buffered, []
-                    self._emit(
-                        Event(
-                            event="wake.summary",
-                            payload={"count": len(events), "events": events},
-                        )
-                    )
-            self._mark(item.id, item.kind, "applied")
+        for filename, item in control:
+            try:
+                woke = self._control(filename, item) or woke
+            except Exception as e:
+                self._reject_internal(filename, item.id, item.kind, e)
 
         # Items wait for the tick after a wake, and for the whole sleep.
         if not self.state.sleeping and not woke:
@@ -291,13 +383,10 @@ class Runner:
                 try:
                     self._handle(filename, item)
                 except Exception as e:
-                    logger.exception("item %s failed", item.id)
-                    try:
-                        self._reject(
-                            filename, item.id, item.kind, f"internal error: {type(e).__name__}"
-                        )
-                    except Exception:
-                        logger.exception("could not record rejection for %s", item.id)
+                    self._reject_internal(filename, item.id, item.kind, e)
+
+        with self.lock:
+            self.state.queue_depth = self._depth(entries)
 
         if self._wrote:
             self.state.pending_push = not self.repo.commit_push(
@@ -478,9 +567,24 @@ class Runner:
         if out.resolve().parent != self.previews_dir.resolve():
             self._reject(filename, item.id, item.kind, "preview path escapes previews dir")
             return
-        ok, err = self._trim(path, str(out), item.start_s, item.end_s)
+        try:
+            ok, err = self._trim(
+                path, str(out), item.start_s, item.end_s, timeout_seconds=TRIM_TIMEOUT_SECONDS
+            )
+        except subprocess.TimeoutExpired:
+            tries = self.state.attempts.get(item.id, 0) + 1
+            self.state.attempts[item.id] = tries
+            if tries >= MAX_TRIM_ATTEMPTS:
+                self.state.attempts.pop(item.id, None)
+                self._reject(
+                    filename, item.id, item.kind, f"trim timed out {MAX_TRIM_ATTEMPTS} times"
+                )
+            else:  # transient: leave unmarked, retry next tick
+                logger.warning("trim for %s timed out (attempt %d)", item.id, tries)
+            return
+        self.state.attempts.pop(item.id, None)
         if not ok:
-            self._reject(filename, item.id, item.kind, f"trim failed: {err}")
+            self._reject(filename, item.id, item.kind, f"trim failed: {_safe_detail(err)}")
             return
         file_id = None
         if self.uploader is not None:
@@ -507,40 +611,102 @@ class Runner:
         )
 
     def heartbeat(self) -> None:
-        self.state.last_heartbeat = self._clock()
-        self._heartbeat_sent = True
-        depth = sum(1 for p, _ in self.repo.list_items() if not self.ledger.seen(Path(p).stem))
+        with self.lock:
+            self.state.last_heartbeat = self._clock()
+            self._heartbeat_sent = True
+            depth = self.state.queue_depth
+            sleeping = self.state.sleeping
+            version = self.state.version
         try:
             from ..notify import sinks
 
             dropped = getattr(getattr(sinks, "_webhook", None), "dropped", 0)
         except Exception:
             dropped = 0
-        # Liveness goes out even while sleeping (it is not buffered).
+        # Liveness goes out even while sleeping (it is not buffered), and is
+        # never dropped by the webhook rate cap.
         self._emit(
             Event(
                 event="heartbeat",
                 payload={
-                    "runner_version": self.state.version,
+                    "runner_version": version,
                     "queue_depth": depth,
-                    "sleep": self.state.sleeping,
+                    "sleep": sleeping,
                     "dropped_events": dropped,
                 },
+                priority=True,
             )
         )
 
+    # -- retention -----------------------------------------------------
+    def maybe_prune(self) -> None:
+        """At most once per 24 h: expire old Drive previews and local preview files."""
+        now = self._clock()
+        with self.lock:
+            last = self.state.last_prune
+            if last is not None and now - last < PRUNE_EVERY_SECONDS:
+                return
+            self.state.last_prune = now
+        days = settings.grokbot_drive_preview_retention_days
+        if self.uploader is not None:
+            try:
+                n = self.uploader.prune(subfolder="previews", older_than_days=days)
+                logger.info("pruned %d Drive previews older than %d days", n, days)
+            except Exception as e:
+                logger.warning("Drive preview prune failed: %s", e)
+        try:
+            self._prune_local(days)
+        except Exception as e:
+            logger.warning("local preview prune failed: %s", e)
+
+    def _prune_local(self, days: int) -> None:
+        """Delete only runner-made `<uuid>.mp4` regular files in previews_dir."""
+        if not self.previews_dir.is_dir() or self.previews_dir.is_symlink():
+            return
+        cutoff = time.time() - days * 86400
+        for p in self.previews_dir.iterdir():
+            if p.suffix != ".mp4" or not _is_uuid_name(p.stem):
+                continue
+            if p.is_symlink() or not p.is_file():
+                continue
+            if p.stat().st_mtime < cutoff:
+                p.unlink()
+
 
 def run_once(runner: Runner) -> None:
-    """One loop body. Tick and heartbeat fail independently."""
+    """One tick plus the daily prune; a failure is logged, never raised."""
     try:
         runner.tick()
     except Exception:
         logger.exception("runner tick failed")
     try:
+        runner.maybe_prune()
+    except Exception:
+        logger.exception("runner prune failed")
+
+
+def heartbeat_once(runner: Runner) -> None:
+    try:
         if runner.heartbeat_due():
             runner.heartbeat()
     except Exception:
         logger.exception("runner heartbeat failed")
+
+
+def start_heartbeat(
+    runner: Runner, stop: threading.Event, *, interval: float | None = None
+) -> threading.Thread:
+    """Heartbeat on its own daemon thread, so a long tick never silences it."""
+    period = interval if interval is not None else min(30.0, settings.grokbot_heartbeat_seconds)
+
+    def loop() -> None:
+        while not stop.is_set():
+            heartbeat_once(runner)
+            stop.wait(period)
+
+    t = threading.Thread(target=loop, daemon=True, name="grokbot-heartbeat")
+    t.start()
+    return t
 
 
 def check_repo_dir(repo_dir: Path | None) -> str | None:
@@ -571,6 +737,7 @@ def main() -> None:
         ledger=AppliedLedger(grok_dir / "runner-ledger.db"),
         previews_dir=grok_dir / "previews",
     )
+    start_heartbeat(runner, threading.Event())
     while True:
         run_once(runner)
         time.sleep(settings.grokbot_runner_poll_seconds)
