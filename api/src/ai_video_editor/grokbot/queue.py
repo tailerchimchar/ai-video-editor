@@ -19,11 +19,23 @@ from pydantic import (
     model_validator,
 )
 
-from ..edit_plan import EditPlan
-
-_HOSTILE = re.compile(
-    r"https?://|[A-Za-z]:\\|(?:^|[\s\"'(=])/[^\s/]+/|`|\$\(|;|\|",
+from ..edit_plan import (
+    EditPlan,
+    PlanCard,
+    PlanEffect,
+    PlanMusic,
+    PlanSfx,
+    Rejected,
+    SourceClip,
 )
+
+# Strict on purpose: false positives are acceptable. A "/" is only allowed
+# directly after an alphanumeric, "-", "_" or "." (so "and/or" passes, but
+# " /etc", ",/etc", "[/etc", ":/etc" and a leading "/" do not).
+_HOSTILE = re.compile(
+    r"https?://|[A-Za-z]:\\|(?<![A-Za-z0-9\-_.])/|//|\\\\|\.\.[/\\]|`|\$\(|;|\|",
+)
+MAX_ITEM_BYTES = 64 * 1024
 
 
 class _Strict(BaseModel):
@@ -45,8 +57,39 @@ class CopyBlock(_Strict):
     thumbnail_t: float | None = None
 
 
+class _StrictSourceClip(SourceClip):
+    model_config = ConfigDict(extra="forbid")
+
+
+class _StrictPlanMusic(PlanMusic):
+    model_config = ConfigDict(extra="forbid")
+
+
+class _StrictPlanEffect(PlanEffect):
+    model_config = ConfigDict(extra="forbid")
+
+
+class _StrictPlanCard(PlanCard):
+    model_config = ConfigDict(extra="forbid")
+
+
+class _StrictPlanSfx(PlanSfx):
+    model_config = ConfigDict(extra="forbid")
+
+
+class _StrictRejected(Rejected):
+    model_config = ConfigDict(extra="forbid")
+
+
 class StrictEditPlan(EditPlan):
     model_config = ConfigDict(extra="forbid")
+
+    source_clips: list[_StrictSourceClip] = Field(default_factory=list)
+    music: _StrictPlanMusic | None = None
+    effects: list[_StrictPlanEffect] = Field(default_factory=list)
+    cards: list[_StrictPlanCard] = Field(default_factory=list)
+    sfx: list[_StrictPlanSfx] = Field(default_factory=list)
+    rejected: list[_StrictRejected] = Field(default_factory=list)
 
 
 class EditPlanItem(Envelope):
@@ -85,10 +128,15 @@ class VerdictItem(Envelope):
     quote: str = ""
     quote_ts: str | None = None
 
+    @property
+    def has_quote(self) -> bool:
+        """True only for a non-blank quote. Callers must use this, not `quote`."""
+        return bool(self.quote.strip())
+
 
 class DeployItem(Envelope):
     kind: Literal["deploy"]
-    tag: str = Field(pattern=r"^v\d+\.\d+\.\d+$")
+    tag: str = Field(pattern=r"^v[0-9]+\.[0-9]+\.[0-9]+$")
 
 
 class SleepItem(Envelope):
@@ -113,30 +161,40 @@ class QueueRejected(ValueError):  # noqa: N818
         self.reason = reason
 
 
-def _walk_strings(value: Any) -> Iterator[str]:
-    if isinstance(value, str):
-        yield value
-    elif isinstance(value, dict):
-        for k, v in value.items():
-            yield from _walk_strings(k)
-            yield from _walk_strings(v)
-    elif isinstance(value, (list, tuple)):
-        for v in value:
-            yield from _walk_strings(v)
+def _walk_strings(root: Any) -> Iterator[str]:
+    """Yield every str (dict keys included) without recursion."""
+    stack = [root]
+    while stack:
+        value = stack.pop()
+        if isinstance(value, str):
+            yield value
+        elif isinstance(value, dict):
+            for k, v in value.items():
+                stack.append(k)
+                stack.append(v)
+        elif isinstance(value, (list, tuple)):
+            stack.extend(value)
 
 
 def parse_item(text: str) -> QueueItem:
+    if len(text.encode("utf-8", errors="replace")) > MAX_ITEM_BYTES:
+        raise QueueRejected("item too large")
     try:
         data = json.loads(text)
+    except RecursionError as e:
+        raise QueueRejected("invalid JSON: nested too deeply") from e
     except (ValueError, TypeError) as e:
         raise QueueRejected(f"invalid JSON: {e}") from e
-    try:
-        item = _ADAPTER.validate_python(data)
-    except ValidationError as e:
-        raise QueueRejected(f"validation failed: {e}") from e
-    for s in _walk_strings(item.model_dump()):
+    # Scan the raw decoded JSON so nothing can hide behind pydantic.
+    for s in _walk_strings(data):
         if _HOSTILE.search(s):
             raise QueueRejected(f"hostile string rejected: {s[:40]!r}")
+    try:
+        item = _ADAPTER.validate_python(data)
+    except RecursionError as e:
+        raise QueueRejected("validation failed: nested too deeply") from e
+    except ValidationError as e:
+        raise QueueRejected(f"validation failed: {e}") from e
     if isinstance(item, EditPlanItem):
         if any(e.at != 0.0 for e in item.plan.effects):
             raise QueueRejected("timed effects are not applied yet")
@@ -189,4 +247,4 @@ class AppliedLedger:
 
 
 def parse_sleep_flag(repo_root: Path) -> bool:
-    return (Path(repo_root) / "SLEEP").exists()
+    return (Path(repo_root) / "SLEEP").is_file()

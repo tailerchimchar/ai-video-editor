@@ -90,11 +90,28 @@ def test_preview_window_limits(kw):
         parse_item(preview(**kw))
 
 
-def test_edit_plan_ok_and_timed_effect_rejected():
-    ok = {"clip_ref": "c", "kind": "zoom", "at": 0.0}
-    assert parse_item(edit(plan([ok]))).kind == "edit_plan"
+OK_EFFECT = {"clip_ref": "c", "kind": "zoom", "at": 0.0}
+
+
+def test_edit_plan_ok():
+    assert parse_item(edit(plan([OK_EFFECT]))).kind == "edit_plan"
+
+
+def test_edit_plan_with_timed_effect_rejected():
     with pytest.raises(QueueRejected, match="timed effects are not applied yet"):
-        parse_item(edit(plan([{**ok, "at": 1.5}])))
+        parse_item(edit(plan([{**OK_EFFECT, "at": 1.5}])))
+
+
+def test_nested_extra_key_rejected():
+    with pytest.raises(QueueRejected, match="extra"):
+        parse_item(edit(plan([{**OK_EFFECT, "slowmo": 1}])))
+
+
+def test_hostile_in_effect_params_key_and_value():
+    with pytest.raises(QueueRejected):
+        parse_item(edit(plan([{**OK_EFFECT, "params": {"k": "see https://x"}}])))
+    with pytest.raises(QueueRejected):
+        parse_item(edit(plan([{**OK_EFFECT, "params": {"a;b": "v"}}])))
 
 
 def test_edit_plan_with_cards_or_sfx_rejected():
@@ -138,3 +155,54 @@ def test_sleep_flag(tmp_path):
     assert not parse_sleep_flag(tmp_path)
     (tmp_path / "SLEEP").write_text("")
     assert parse_sleep_flag(tmp_path)
+
+
+def test_sleep_flag_directory_is_false(tmp_path):
+    (tmp_path / "SLEEP").mkdir()
+    assert not parse_sleep_flag(tmp_path)
+
+
+def test_deeply_nested_rejected():
+    with pytest.raises(QueueRejected):
+        parse_item("[" * 10000 + "]" * 10000)
+
+
+def test_too_large_rejected():
+    with pytest.raises(QueueRejected, match="item too large"):
+        parse_item(preview(question="x" * 70000))
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "/etc",
+        "/passwd",
+        "a,/etc/x",
+        "a:/etc/x",
+        "[/etc/x",
+        "//host/share/x",
+        "\\\\host\\share",
+        "../x",
+        "a/../x",
+        "..\\x",
+        "x /etc",
+    ],
+)
+def test_path_forms_rejected(bad):
+    with pytest.raises(QueueRejected):
+        parse_item(preview(question=bad))
+
+
+@pytest.mark.parametrize("good", ["and/or", "x/etc/x", "1/2 hp"])
+def test_benign_slashes_allowed(good):
+    parse_item(preview(question=good))
+
+
+def test_has_quote_strips_whitespace():
+    def mk(q):
+        return parse_item(
+            env("verdict", game="lol", clip_ref="c", verdict="style", rule="r", quote=q)
+        )
+
+    assert not mk("   ").has_quote
+    assert mk("gg").has_quote
