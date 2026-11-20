@@ -50,6 +50,12 @@ class Settings(BaseSettings):
     # Jev requests per server process (one request per clip/state). Jev
     # bills input tokens only, so this is a runaway guard, not a budget.
     typesafe_max_calls: int = 2000
+    # Grok Bot outbound events (job.done, heartbeat). Inert when the webhook
+    # url or key is empty. Rate cap folds bursts so a bot is never flooded.
+    grokbot_webhook_url: str = ""
+    grokbot_webhook_key: str = ""
+    grokbot_max_events_per_hour: int = 120
+    grokbot_timeout_seconds: float = 10.0
     decisions_backend: Literal["auto", "jev", "haiku", "rules"] = "auto"
     # Own call budget (counts batch calls) so decisions can't starve the ranker.
     decisions_max_calls: int = 200
