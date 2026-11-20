@@ -836,6 +836,371 @@ class TestCaptionSafeAreaCheck:
         assert result.verdict == Verdict.PASS
 
 
+# --- Frames-to-Jev experiment (off by default) ---
+
+
+def _synthetic_frame(path: Path, size: tuple[int, int] = (320, 320)) -> Path:
+    """Write a synthetic JPEG (invented placeholder art; no real footage)."""
+    from PIL import Image
+
+    img = Image.new("RGB", size, color=(40, 80, 120))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    img.save(path, format="JPEG", quality=90)
+    return path
+
+
+class FakeFramesScorer:
+    """Stub FramesJevScorer for gate wiring tests (no network)."""
+
+    def __init__(
+        self,
+        results: list[CriterionResult] | None = None,
+        *,
+        error: str | None = None,
+        latency_ms: int = 50,
+        input_tokens: int | None = 900,
+    ):
+        from ai_video_editor.grokbot.quality_gate import FramesScoreBundle
+
+        self._FramesScoreBundle = FramesScoreBundle
+        self._results = results
+        self.error = error
+        self.latency_ms = latency_ms
+        self.input_tokens = input_tokens
+        self.calls: list[tuple] = []
+
+    def score_all(self, criteria, frames, metadata, *, already_passed=None):
+        self.calls.append((list(criteria), list(frames), metadata, already_passed))
+        if self.error:
+            results = [
+                CriterionResult(
+                    criterion_id=c.id,
+                    verdict=Verdict.UNSURE,
+                    confidence=0.0,
+                    reason=self.error,
+                )
+                for c in criteria
+            ]
+            return self._FramesScoreBundle(
+                results=results,
+                latency_ms=self.latency_ms,
+                error=self.error,
+            )
+        if self._results is not None:
+            return self._FramesScoreBundle(
+                results=self._results,
+                latency_ms=self.latency_ms,
+                input_tokens=self.input_tokens,
+            )
+        return self._FramesScoreBundle(
+            results=[
+                CriterionResult(
+                    criterion_id=c.id, verdict=Verdict.PASS, confidence=0.9, reason="frames pass"
+                )
+                for c in criteria
+            ],
+            latency_ms=self.latency_ms,
+            input_tokens=self.input_tokens,
+        )
+
+
+class TestJevFramesFlagsDefaultOff:
+    def test_flag_off_default_uses_haiku_path_not_frames(
+        self, test_video, scratch_dir, monkeypatch
+    ):
+        from ai_video_editor import config
+
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_enabled", True)
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_daily_cap", 100)
+        assert config.settings.grokbot_quality_gate_jev_frames_enabled is False
+        assert config.settings.grokbot_quality_gate_jev_frames_shadow is False
+
+        fake_vision = FakeVisionClient(description="Kill at 5s for PlayerOne_placeholder")
+        frames_scorer = FakeFramesScorer()
+
+        class FakeBatched:
+            def score_all(self, criteria, vision_description, metadata, *, already_passed=None):
+                return [
+                    CriterionResult(
+                        criterion_id=c.id,
+                        verdict=Verdict.PASS,
+                        confidence=0.9,
+                        reason="haiku path",
+                    )
+                    for c in criteria
+                ]
+
+        with patch(
+            "ai_video_editor.grokbot.quality_gate._sample_frames",
+            return_value=[scratch_dir / "frame_001.jpg"],
+        ):
+            (scratch_dir / "frame_001.jpg").write_bytes(b"\x00")
+            result, _ = run_quality_gate(
+                test_video,
+                [QualityCriterion(id="c1", text="Shows a kill")],
+                RenderMetadata(duration_seconds=10.0),
+                scratch_dir,
+                vision_client=fake_vision,
+                batched_scorer=FakeBatched(),
+                frames_scorer=frames_scorer,
+            )
+
+        assert frames_scorer.calls == []
+        assert result.vision_description == "Kill at 5s for PlayerOne_placeholder"
+        assert result.timings.get("scoring_path") == "haiku_description"
+        assert result.criteria_results[0].reason == "haiku path"
+
+
+class TestJevFramesEnabled:
+    def test_frames_enabled_skips_haiku_and_uses_frames_scorer(
+        self, test_video, scratch_dir, monkeypatch
+    ):
+        from ai_video_editor import config
+
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_enabled", True)
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_daily_cap", 100)
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_jev_frames_enabled", True)
+
+        fake_vision = FakeVisionClient(description="should not be used")
+        frames_scorer = FakeFramesScorer(
+            [
+                CriterionResult(
+                    criterion_id="c1",
+                    verdict=Verdict.PASS,
+                    confidence=0.88,
+                    reason="frames jev",
+                )
+            ]
+        )
+
+        with patch(
+            "ai_video_editor.grokbot.quality_gate._sample_frames",
+            return_value=[scratch_dir / "frame_001.jpg"],
+        ):
+            (scratch_dir / "frame_001.jpg").write_bytes(b"\x00")
+            result, _ = run_quality_gate(
+                test_video,
+                [QualityCriterion(id="c1", text="Shows a kill")],
+                RenderMetadata(duration_seconds=10.0),
+                scratch_dir,
+                vision_client=fake_vision,
+                frames_scorer=frames_scorer,
+            )
+
+        assert len(frames_scorer.calls) == 1
+        assert fake_vision.calls == []
+        assert result.vision_description == ""
+        assert result.timings.get("scoring_path") == "jev_frames"
+        assert result.criteria_results[0].reason == "frames jev"
+        assert result.cost_estimate.get("frames_jev_input_tokens") == 900
+
+    def test_frames_error_falls_back_to_haiku(self, test_video, scratch_dir, monkeypatch):
+        from ai_video_editor import config
+
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_enabled", True)
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_daily_cap", 100)
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_jev_frames_enabled", True)
+
+        fake_vision = FakeVisionClient(description="fallback description")
+        frames_scorer = FakeFramesScorer(error="frames jev error: boom")
+
+        class FakeBatched:
+            def score_all(self, criteria, vision_description, metadata, *, already_passed=None):
+                assert vision_description == "fallback description"
+                return [
+                    CriterionResult(
+                        criterion_id=c.id,
+                        verdict=Verdict.PASS,
+                        confidence=0.9,
+                        reason="haiku fallback",
+                    )
+                    for c in criteria
+                ]
+
+        with patch(
+            "ai_video_editor.grokbot.quality_gate._sample_frames",
+            return_value=[scratch_dir / "frame_001.jpg"],
+        ):
+            (scratch_dir / "frame_001.jpg").write_bytes(b"\x00")
+            result, _ = run_quality_gate(
+                test_video,
+                [QualityCriterion(id="c1", text="Shows a kill")],
+                RenderMetadata(duration_seconds=10.0),
+                scratch_dir,
+                vision_client=fake_vision,
+                batched_scorer=FakeBatched(),
+                frames_scorer=frames_scorer,
+            )
+
+        assert len(frames_scorer.calls) == 1
+        assert len(fake_vision.calls) == 1
+        assert result.timings.get("scoring_path") == "haiku_description"
+        assert result.criteria_results[0].reason == "haiku fallback"
+        # Fail-safe: never a silent pass from the frames error itself
+        assert result.criteria_results[0].verdict != Verdict.PASS or "fallback" in (
+            result.criteria_results[0].reason
+        )
+
+
+class TestJevFramesShadow:
+    def test_shadow_keeps_haiku_verdict_and_logs_agreement(
+        self, test_video, scratch_dir, monkeypatch, caplog
+    ):
+        import logging
+
+        from ai_video_editor import config
+
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_enabled", True)
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_daily_cap", 100)
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_jev_frames_shadow", True)
+
+        fake_vision = FakeVisionClient(description="haiku saw a kill")
+        frames_scorer = FakeFramesScorer(
+            [
+                CriterionResult(
+                    criterion_id="c1",
+                    verdict=Verdict.FAIL,
+                    confidence=0.9,
+                    reason="frames disagree",
+                )
+            ],
+            latency_ms=77,
+            input_tokens=1234,
+        )
+
+        class FakeBatched:
+            def score_all(self, criteria, vision_description, metadata, *, already_passed=None):
+                return [
+                    CriterionResult(
+                        criterion_id=c.id,
+                        verdict=Verdict.PASS,
+                        confidence=0.95,
+                        reason="haiku authority",
+                    )
+                    for c in criteria
+                ]
+
+        with (
+            patch(
+                "ai_video_editor.grokbot.quality_gate._sample_frames",
+                return_value=[scratch_dir / "frame_001.jpg"],
+            ),
+            caplog.at_level(logging.INFO, logger="ai_video_editor.grokbot.quality_gate"),
+        ):
+            (scratch_dir / "frame_001.jpg").write_bytes(b"\x00")
+            result, revisions = run_quality_gate(
+                test_video,
+                [QualityCriterion(id="c1", text="Shows a kill")],
+                RenderMetadata(duration_seconds=10.0),
+                scratch_dir,
+                vision_client=fake_vision,
+                batched_scorer=FakeBatched(),
+                frames_scorer=frames_scorer,
+            )
+
+        assert result.passed
+        assert revisions == []
+        assert result.criteria_results[0].reason == "haiku authority"
+        assert result.criteria_results[0].verdict == Verdict.PASS
+        assert len(frames_scorer.calls) == 1
+        assert any("quality_gate_jev_frames_shadow" in r.message for r in caplog.records)
+        assert any("agreement=" in r.message for r in caplog.records)
+        assert any("1234" in r.message for r in caplog.records)
+
+
+class TestFramesJevScorerTransport:
+    def test_sends_header_assets_and_clip_json_in_one_batch(self, tmp_path, monkeypatch):
+        from ai_video_editor.decisions.backends import jev as jev_mod
+        from ai_video_editor.grokbot.quality_gate import FramesJevScorer
+
+        frame = _synthetic_frame(tmp_path / "raw.jpg", (400, 400))
+        recorded = {}
+
+        class StubTransport:
+            def __init__(self) -> None:
+                self.last_usage = {"input_tokens": 555}
+
+            def ask(self, state, questions, *, assets=None):
+                recorded["state"] = state
+                recorded["questions"] = questions
+                recorded["assets"] = assets
+                return {key: {"type": "noul", "noul": 0.9} for key in questions}
+
+        monkeypatch.setattr(jev_mod, "default_transport", lambda: StubTransport())
+        scorer = FramesJevScorer(transport=StubTransport())
+        bundle = scorer.score_all(
+            [
+                QualityCriterion(id="visual", text="Shows action", audio_led=False),
+                QualityCriterion(id="audio", text="Funny callout", audio_led=True),
+            ],
+            [frame],
+            RenderMetadata(
+                duration_seconds=12.0,
+                aspect_ratio="9:16",
+                digest_moment_labels=["funny_callout"],
+                captions=["Paraphrased play beat"],
+                game="league",
+            ),
+        )
+
+        assert bundle.error is None
+        assert bundle.input_tokens == 555
+        assert recorded["assets"]
+        assert all(
+            a.get("type") == "image" and "data_base64" in a for a in recorded["assets"].values()
+        )
+        assert "clip" in recorded["state"]
+        assert recorded["state"]["clip"]["game"] == "league"
+        assert len(recorded["state"]["frames"]) == 1
+        # Every asset ref appears in state
+        for ref in recorded["assets"]:
+            assert any(ref == entry["frame"] for entry in recorded["state"]["frames"])
+        assert len(recorded["questions"]) == 2
+        assert all(q["type"] == "noul" for q in recorded["questions"].values())
+        assert len(bundle.results) == 2
+        # Audio-led must not be FAIL from frames alone (pass/unsure only here)
+        audio = next(r for r in bundle.results if r.criterion_id == "audio")
+        assert audio.verdict != Verdict.FAIL
+
+    def test_transport_error_is_unsure_never_pass(self, tmp_path):
+        from ai_video_editor.grokbot.quality_gate import FramesJevScorer
+
+        frame = _synthetic_frame(tmp_path / "raw.jpg")
+
+        class Boom:
+            def ask(self, state, questions, *, assets=None):
+                raise RuntimeError("network down")
+
+        scorer = FramesJevScorer(transport=Boom())
+        bundle = scorer.score_all(
+            [QualityCriterion(id="c1", text="Shows a kill")],
+            [frame],
+            RenderMetadata(duration_seconds=8.0),
+        )
+        assert bundle.error
+        assert bundle.results[0].verdict == Verdict.UNSURE
+        assert bundle.results[0].confidence == 0.0
+
+
+class TestPrepareJevFrame:
+    def test_upscales_tiny_frame_into_jev_range(self, tmp_path):
+        from PIL import Image
+
+        from ai_video_editor.grokbot.quality_gate import (
+            _JEV_MAX_SIDE,
+            _JEV_MIN_SIDE,
+            prepare_jev_frame,
+        )
+
+        src = _synthetic_frame(tmp_path / "tiny.jpg", (64, 64))
+        dest = tmp_path / "out.jpg"
+        prepare_jev_frame(src, dest)
+        with Image.open(dest) as img:
+            w, h = img.size
+        assert w >= _JEV_MIN_SIDE and h >= _JEV_MIN_SIDE
+        assert w <= _JEV_MAX_SIDE and h <= _JEV_MAX_SIDE
+
+
 # --- QualityCriterion model tests ---
 
 

@@ -38,15 +38,33 @@ _log = logging.getLogger(__name__)
 _SYSTEM_ONE_PATH = "/v1/systemone"
 
 
+_IMAGES_HEADER = "TypeSafe-Danger-Zone-Images"
+
+
 class JevTransport(Protocol):
     """Send one state plus its questions (System One JSON), get the raw
-    `answers` object back, keyed like the questions."""
+    `answers` object back, keyed like the questions.
 
-    def ask(self, state: dict, questions: dict[str, dict]) -> dict[str, dict]: ...
+    Optional `assets` turns on image support (header + top-level assets map).
+    Omit it for text-only requests — those stay unchanged.
+    """
+
+    def ask(
+        self,
+        state: dict,
+        questions: dict[str, dict],
+        *,
+        assets: dict[str, dict] | None = None,
+    ) -> dict[str, dict]: ...
 
 
 class HttpTransport:
-    """`POST {base_url}/v1/systemone` with bearer auth."""
+    """`POST {base_url}/v1/systemone` with bearer auth.
+
+    Pass `assets` only when the state/questions reference images. That adds
+    the Danger-Zone header and the top-level `assets` map. Text-only calls
+    (no assets) keep the same body and headers as before.
+    """
 
     def __init__(
         self,
@@ -61,19 +79,31 @@ class HttpTransport:
         self._url = (base_url or settings.typesafe_base_url).rstrip("/") + _SYSTEM_ONE_PATH
         self._client = client or httpx.Client(timeout=timeout or settings.typesafe_timeout_seconds)
         self._headers = {"Authorization": f"Bearer {api_key}"}
+        self.last_usage: dict[str, Any] = {}
 
-    def ask(self, state: dict, questions: dict[str, dict]) -> dict[str, dict]:
-        body = {"model": self.model, "state": state, "questions": questions}
-        response = self._client.post(self._url, json=body, headers=self._headers)
+    def ask(
+        self,
+        state: dict,
+        questions: dict[str, dict],
+        *,
+        assets: dict[str, dict] | None = None,
+    ) -> dict[str, dict]:
+        body: dict[str, Any] = {"model": self.model, "state": state, "questions": questions}
+        headers = self._headers
+        if assets:
+            body["assets"] = assets
+            headers = {**self._headers, _IMAGES_HEADER: "true"}
+        response = self._client.post(self._url, json=body, headers=headers)
         if response.status_code != 200:
             raise DecisionError(f"jev HTTP {response.status_code}: {_error_detail(response)}")
         payload = response.json()
         usage = payload.get("usage") or {}
+        self.last_usage = usage if isinstance(usage, dict) else {}
         _log.debug(
             "jev %s answered %d questions (%s input tokens)",
             payload.get("model"),
             len(questions),
-            usage.get("input_tokens"),
+            usage.get("input_tokens") if isinstance(usage, dict) else None,
         )
         return payload["answers"]
 
