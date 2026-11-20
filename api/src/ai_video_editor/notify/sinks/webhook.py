@@ -7,6 +7,7 @@ are dropped and counted in `dropped` (surfaced by the heartbeat).
 from __future__ import annotations
 
 import logging
+import queue
 import threading
 import time
 from collections import deque
@@ -43,6 +44,9 @@ class WebhookSink:
         self.failed = 0
         self._lock = threading.Lock()
         self._sent: deque[float] = deque()
+        self._queue: queue.Queue[Event] = queue.Queue(maxsize=256)
+        self._worker = threading.Thread(target=self._run, daemon=True, name="webhook-sink")
+        self._worker.start()
 
     def send(self, event: Event) -> None:
         with self._lock:
@@ -52,7 +56,29 @@ class WebhookSink:
             if len(self._sent) >= self.max_per_hour:
                 self.dropped += 1
                 return
+            if self._queue.full():
+                self.dropped += 1
+                return
             self._sent.append(now)
+            self._queue.put_nowait(event)
+
+    def flush(self, timeout: float = 5.0) -> None:
+        """Wait for queued events to be posted (tests; emit never calls)."""
+        deadline = time.monotonic() + timeout
+        while self._queue.unfinished_tasks and time.monotonic() < deadline:
+            time.sleep(0.005)
+
+    def _run(self) -> None:
+        while True:
+            event = self._queue.get()
+            try:
+                self._post(event)
+            except Exception as exc:
+                logger.warning("webhook worker error: %s", exc)
+            finally:
+                self._queue.task_done()
+
+    def _post(self, event: Event) -> None:
         try:
             response = self.client.post(
                 self.url,

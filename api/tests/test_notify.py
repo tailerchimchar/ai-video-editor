@@ -32,7 +32,9 @@ def test_webhook_sink_posts_bearer_json():
         return httpx.Response(200)
 
     event = Event(event="job.done", payload={"id": 1})
-    _sink(handler).send(event)
+    sink = _sink(handler)
+    sink.send(event)
+    sink.flush()
     assert len(seen) == 1
     assert str(seen[0].url) == "https://bot.example/hook"
     assert seen[0].headers["Authorization"] == "Bearer k"
@@ -43,7 +45,10 @@ def test_webhook_sink_failure_never_raises():
     def handler(request):
         raise httpx.ConnectError("boom")
 
-    assert _sink(handler).send(Event(event="x")) is None
+    sink = _sink(handler)
+    assert sink.send(Event(event="x")) is None
+    sink.flush()
+    assert sink.failed == 1
 
 
 def test_webhook_sink_rate_cap_folds_extra_events():
@@ -58,10 +63,12 @@ def test_webhook_sink_rate_cap_folds_extra_events():
     for _ in range(3):
         now[0] += 10
         sink.send(Event(event="x"))
+        sink.flush()
     assert len(calls) == 2
     assert sink.dropped == 1
     now[0] += 3600
     sink.send(Event(event="x"))
+    sink.flush()
     assert len(calls) == 3
 
 
@@ -115,6 +122,7 @@ def test_webhook_non_2xx_is_logged_and_counted(caplog):
     sink = _sink(lambda request: httpx.Response(401, text="bad key " + "x" * 300))
     with caplog.at_level("WARNING"):
         assert sink.send(Event(event="x")) is None
+        sink.flush()
     assert sink.failed == 1
     assert "401" in caplog.text
     assert "bad key" in caplog.text
@@ -156,3 +164,25 @@ def test_webhook_factory_returns_single_instance_under_threads(monkeypatch):
     for t in threads:
         t.join()
     assert len({id(s) for s in got}) == 1
+
+
+def test_send_returns_before_the_post_completes():
+    import threading
+    import time
+
+    release = threading.Event()
+    calls = []
+
+    def handler(request):
+        release.wait(5)
+        calls.append(request)
+        return httpx.Response(200)
+
+    sink = _sink(handler)
+    start = time.monotonic()
+    sink.send(Event(event="x"))
+    assert time.monotonic() - start < 0.5
+    assert calls == []
+    release.set()
+    sink.flush()
+    assert len(calls) == 1
