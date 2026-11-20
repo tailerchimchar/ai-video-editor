@@ -224,11 +224,11 @@ Sent when publishing fails for any reason. When this event is sent, `round.publi
 
 | reason | meaning |
 |---|---|
-| `names_file_missing` | The player names file does not exist (default: `api/player-names.txt`) |
-| `names_file_unreadable` | The player names file exists but could not be read |
+| `names_file_missing` | The player names file does not exist (block mode only) |
+| `names_file_unreadable` | The player names file exists but could not be read (block mode only) |
 | `upload failed` | A Drive upload failed |
 
-**Note:** The player names file always defaults to `api/player-names.txt` when not explicitly configured. If this file is missing, publishing is blocked (fail closed). There is no way to skip the name check.
+**Note:** The `names_file_missing` and `names_file_unreadable` reasons only occur when `GROKBOT_PLAYER_NAME_CHECK=block`. In `off` (default) or `warn` modes, a missing or unreadable file does not block publishing.
 
 Example (upload failure):
 
