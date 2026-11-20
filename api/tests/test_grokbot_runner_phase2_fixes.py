@@ -101,6 +101,18 @@ def test_stale_but_same_hash_resumes_without_applying(h):  # noqa: F811
     assert ev.payload["resumed"] is True
 
 
+def test_stale_same_hash_incomplete_reposts_then_reports(h):  # noqa: F811
+    it = plan_item()
+    h.api.version = "9"
+    h.api.hash = _hash_of(it)
+    h.api.complete = False
+    h.repo.add(it)
+    assert h.runner.tick() == ["applied"]
+    assert len(h.api.applied) == 1
+    ev = next(e for e in h.events if e.event == "render.done")
+    assert "resumed" not in ev.payload
+
+
 def test_stale_different_hash_still_rejects(h):  # noqa: F811
     h.api.version = "9"
     h.api.hash = "other"

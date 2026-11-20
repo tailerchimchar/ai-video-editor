@@ -39,6 +39,7 @@ class P2Api:
         self.recorded = []
         self.record_error = None
         self.hash = None
+        self.complete = True
         self.version_error = None
         self.out = tmp / "out" / "compilation.mp4"
         self.out.parent.mkdir(parents=True, exist_ok=True)
@@ -57,6 +58,9 @@ class P2Api:
 
     def plan_hash(self, cid):
         return self.hash
+
+    def plan_complete(self, cid):
+        return self.complete
 
     def apply_plan(self, cid, plan):
         if self.apply_error:

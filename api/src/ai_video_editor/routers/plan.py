@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from ..edit_plan import (
+    STEPS,
     EditPlan,
     PlanNotExecutableError,
     PlanProgress,
@@ -57,4 +58,5 @@ async def plan_version(compilation_id: str) -> dict:
     return {
         "version": EditsPlanExecutor(folder, compilation_id).current_version(compilation_id),
         "plan_hash": progress.plan_hash if progress else None,
+        "plan_complete": bool(progress and progress.completed_steps >= len(STEPS)),
     }

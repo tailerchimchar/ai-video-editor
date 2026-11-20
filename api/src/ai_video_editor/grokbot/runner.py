@@ -61,6 +61,7 @@ class ApiClient(Protocol):
     def compilation_output(self, compilation_id: str) -> str | None: ...
     def plan_version(self, compilation_id: str) -> str: ...
     def plan_hash(self, compilation_id: str) -> str | None: ...
+    def plan_complete(self, compilation_id: str) -> bool: ...
     def apply_plan(self, compilation_id: str, plan: dict) -> dict: ...
     def record_correction(self, body: dict) -> None: ...
     def recent_corrections(self, game: str) -> list[dict]: ...
@@ -103,6 +104,9 @@ class HttpApiClient:
 
     def plan_hash(self, compilation_id: str) -> str | None:
         return self._plan_state(compilation_id).get("plan_hash")
+
+    def plan_complete(self, compilation_id: str) -> bool:
+        return bool(self._plan_state(compilation_id).get("plan_complete"))
 
     def apply_plan(self, compilation_id: str, plan: dict) -> dict:
         # Rendering can take minutes; the default 30s timeout is far too short.
@@ -348,7 +352,12 @@ class Runner:
                     current=current,
                 )
                 return
-            resumed = True
+            # The hash is saved before any step runs, so only a complete run counts as
+            # applied; a partial one is re-POSTed and the executor resumes from its snapshot.
+            if self.api.plan_complete(item.compilation_id):
+                resumed = True
+            else:
+                self.api.apply_plan(item.compilation_id, plan_dict)
         else:
             self.api.apply_plan(item.compilation_id, item.plan.model_dump(mode="json"))
         output = self.api.compilation_output(item.compilation_id)
