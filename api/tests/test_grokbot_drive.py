@@ -3,6 +3,7 @@ prune and error mapping. MockTransport only, no network."""
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -33,9 +34,9 @@ def _base(calls):
         if request.method == "GET":
             return httpx.Response(200, json={"files": []})
         if "uploadType=multipart" in str(request.url):
-            if FOLDER_MIME.encode() in request.content:
-                return httpx.Response(200, json={"id": "SUB"})
             return httpx.Response(200, json={"id": "f1"})
+        if request.url.path == "/drive/v3/files":  # JSON folder create
+            return httpx.Response(200, json={"id": "SUB"})
         return httpx.Response(200, json={})
 
     return handler
@@ -80,9 +81,15 @@ def test_subfolder_created_once_and_reused(tmp_path):
     up = _uploader(_base(calls))
     up.upload(f, name="a", subfolder="renders")
     up.upload(f, name="b", subfolder="renders")
-    creates = [c for c in calls if c.method == "POST" and FOLDER_MIME.encode() in c.content]
+    creates = [c for c in calls if c.method == "POST" and c.url.path == "/drive/v3/files"]
     lists = [c for c in calls if c.method == "GET"]
     assert len(creates) == 1
+    assert json.loads(creates[0].content) == {
+        "name": "renders",
+        "mimeType": FOLDER_MIME,
+        "parents": ["ROOT"],
+    }
+    assert creates[0].headers["Content-Type"] == "application/json"
     assert len(lists) == 1
     assert "name='renders'" in lists[0].url.params["q"]
     assert "'ROOT' in parents" in lists[0].url.params["q"]
@@ -111,6 +118,81 @@ def test_prune_deletes_only_older_files():
     assert "'SUB' in parents" in file_q
     cutoff = (NOW - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%S")
     assert f"createdTime < '{cutoff}" in file_q
+
+
+def test_prune_follows_next_page_token():
+    file_queries: list[httpx.QueryParams] = []
+    deleted: list[str] = []
+
+    def handler(request):
+        if _is_token(request):
+            return httpx.Response(200, json={"access_token": "AT", "expires_in": 3600})
+        if request.method == "DELETE":
+            deleted.append(request.url.path.rsplit("/", 1)[1])
+            return httpx.Response(204)
+        params = request.url.params
+        if f"mimeType='{FOLDER_MIME}'" in params["q"]:
+            return httpx.Response(200, json={"files": [{"id": "SUB"}]})
+        file_queries.append(params)
+        if params.get("pageToken") == "p2":
+            return httpx.Response(200, json={"files": [{"id": "c"}]})
+        return httpx.Response(
+            200, json={"files": [{"id": "a"}, {"id": "b"}], "nextPageToken": "p2"}
+        )
+
+    assert _uploader(handler).prune(subfolder="previews", older_than_days=7) == 3
+    assert deleted == ["a", "b", "c"]
+    assert len(file_queries) == 2
+    assert "pageToken" not in file_queries[0]
+    assert "nextPageToken" in file_queries[0]["fields"]
+
+
+def test_q_values_are_escaped():
+    assert drive._q_escape("it's") == "it\\'s"
+    assert drive._q_escape("a\\b") == "a\\\\b"
+    seen: list[str] = []
+
+    def handler(request):
+        if _is_token(request):
+            return httpx.Response(200, json={"access_token": "AT", "expires_in": 3600})
+        if request.method == "GET":
+            seen.append(request.url.params["q"])
+            return httpx.Response(200, json={"files": [{"id": "SUB"}]})
+        return httpx.Response(200, json={"id": "x"})
+
+    up = DriveUploader(
+        "c",
+        "s",
+        "r",
+        "RO'OT",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        now=lambda: NOW,
+    )
+    up.prune(subfolder="kid's clips", older_than_days=1)
+    assert "'RO\\'OT' in parents" in seen[0]
+    assert "name='kid\\'s clips'" in seen[0]
+
+
+def test_drive_auth_creates_root_folder_and_returns_both_values():
+    from ai_video_editor.grokbot import drive_auth
+
+    calls: list[httpx.Request] = []
+
+    def handler(request):
+        calls.append(request)
+        if _is_token(request):
+            return httpx.Response(200, json={"access_token": "AT", "refresh_token": "RT"})
+        return httpx.Response(200, json={"id": "ROOTID"})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    refresh, folder = drive_auth.exchange_and_create_folder(
+        "code", "cid", "sec", "my-folder", client=client
+    )
+    assert (refresh, folder) == ("RT", "ROOTID")
+    create = calls[-1]
+    assert create.headers["Authorization"] == "Bearer AT"
+    assert json.loads(create.content) == {"name": "my-folder", "mimeType": FOLDER_MIME}
+    assert drive_auth.DEFAULT_FOLDER_NAME == "ai-video-editor-bots"
 
 
 def test_non_2xx_raises_drive_error(tmp_path):

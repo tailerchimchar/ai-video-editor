@@ -48,6 +48,31 @@ def _check(resp: httpx.Response, what: str) -> httpx.Response:
     return resp
 
 
+def _q_escape(value: str) -> str:
+    """Escape a value for interpolation inside a quoted Drive `q` string."""
+    return value.replace("\\", "\\\\").replace("'", "\\'")
+
+
+def create_folder(
+    access_token: str,
+    name: str,
+    parent: str | None = None,
+    *,
+    client: httpx.Client | None = None,
+) -> str:
+    """Create a Drive folder (JSON POST to /files) and return its id."""
+    metadata: dict = {"name": name, "mimeType": FOLDER_MIME}
+    if parent:
+        metadata["parents"] = [parent]
+    resp = _check(
+        (client or httpx).post(
+            FILES_URL, json=metadata, headers={"Authorization": f"Bearer {access_token}"}
+        ),
+        "folder create",
+    )
+    return resp.json()["id"]
+
+
 class DriveUploader:
     def __init__(
         self,
@@ -99,8 +124,8 @@ class DriveUploader:
         if name in self._subfolders:
             return self._subfolders[name]
         q = (
-            f"'{self._folder_id}' in parents and mimeType='{FOLDER_MIME}' "
-            f"and name='{name}' and trashed=false"
+            f"'{_q_escape(self._folder_id)}' in parents and mimeType='{FOLDER_MIME}' "
+            f"and name='{_q_escape(name)}' and trashed=false"
         )
         resp = _check(
             self._client.get(
@@ -112,10 +137,8 @@ class DriveUploader:
         if files:
             folder_id = files[0]["id"]
         else:
-            folder_id = self._multipart(
-                {"name": name, "mimeType": FOLDER_MIME, "parents": [self._folder_id]},
-                b"",
-                FOLDER_MIME,
+            folder_id = create_folder(
+                self._access_token(), name, self._folder_id, client=self._client
             )
         self._subfolders[name] = folder_id
         return folder_id
@@ -149,20 +172,27 @@ class DriveUploader:
         parent = self._subfolder_id(subfolder)
         cutoff = (self._now() - timedelta(days=older_than_days)).astimezone(timezone.utc)
         q = (
-            f"'{parent}' in parents and trashed=false "
+            f"'{_q_escape(parent)}' in parents and trashed=false "
             f"and createdTime < '{cutoff.strftime('%Y-%m-%dT%H:%M:%S')}Z'"
         )
-        resp = _check(
-            self._client.get(
-                FILES_URL, params={"q": q, "fields": "files(id)"}, headers=self._headers()
-            ),
-            "list",
-        )
         deleted = 0
-        for f in resp.json().get("files", []):
-            _check(self._client.delete(f"{FILES_URL}/{f['id']}", headers=self._headers()), "delete")
-            deleted += 1
-        return deleted
+        page_token: str | None = None
+        while True:
+            params = {"q": q, "fields": "nextPageToken, files(id)"}
+            if page_token:
+                params["pageToken"] = page_token
+            body = _check(
+                self._client.get(FILES_URL, params=params, headers=self._headers()), "list"
+            ).json()
+            for f in body.get("files", []):
+                _check(
+                    self._client.delete(f"{FILES_URL}/{f['id']}", headers=self._headers()),
+                    "delete",
+                )
+                deleted += 1
+            page_token = body.get("nextPageToken")
+            if not page_token:
+                return deleted
 
 
 def uploader_from_settings() -> Uploader | None:

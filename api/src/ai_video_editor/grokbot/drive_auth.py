@@ -16,15 +16,19 @@ from urllib.parse import parse_qs, urlencode, urlparse
 
 import httpx
 
+from .drive import DriveError, create_folder
+
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 SCOPE = "https://www.googleapis.com/auth/drive.file"
 HOST, PORT = "127.0.0.1", 8765
 REDIRECT_URI = f"http://{HOST}:{PORT}/"
+DEFAULT_FOLDER_NAME = "ai-video-editor-bots"
 
 _DESCRIPTION = (
-    "Authorize Drive access once and print a refresh token. Put the printed "
-    "token in api/.env as GROKBOT_DRIVE_REFRESH_TOKEN. Needs "
+    "Authorize Drive access once, create the root bot folder, and print a "
+    "refresh token and folder id. Put them in api/.env as "
+    "GROKBOT_DRIVE_REFRESH_TOKEN and GROKBOT_DRIVE_FOLDER_ID. Needs "
     "GROKBOT_DRIVE_CLIENT_ID / GROKBOT_DRIVE_CLIENT_SECRET (or pass them)."
 )
 
@@ -65,6 +69,11 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="drive-auth", description=_DESCRIPTION)
     parser.add_argument("--client-id", default=None)
     parser.add_argument("--client-secret", default=None)
+    parser.add_argument(
+        "--folder-name",
+        default=DEFAULT_FOLDER_NAME,
+        help=f"Name of the root Drive folder to create (default: {DEFAULT_FOLDER_NAME}).",
+    )
     args = parser.parse_args(argv)
 
     from ..config import settings
@@ -94,7 +103,33 @@ def main(argv: list[str] | None = None) -> None:
     webbrowser.open(url)
     code = _wait_for_code(state)
 
-    resp = httpx.post(
+    try:
+        refresh, folder_id = exchange_and_create_folder(
+            code, client_id, client_secret, args.folder_name
+        )
+    except DriveError as e:
+        sys.exit(str(e))
+    print("\nShown once. Put these two lines in api/.env:\n")
+    print("GROKBOT_DRIVE_REFRESH_TOKEN=" + refresh)
+    print("GROKBOT_DRIVE_FOLDER_ID=" + folder_id)
+
+
+def exchange_and_create_folder(
+    code: str,
+    client_id: str,
+    client_secret: str,
+    folder_name: str = DEFAULT_FOLDER_NAME,
+    *,
+    client: httpx.Client | None = None,
+) -> tuple[str, str]:
+    """Trade the auth code for tokens, then create the root bot folder.
+
+    The `drive.file` scope only sees files this app created, so the root
+    folder must be created here rather than by hand in the Drive UI.
+    Returns (refresh_token, folder_id).
+    """
+    http = client or httpx.Client(timeout=30.0)
+    resp = http.post(
         TOKEN_URL,
         data={
             "code": code,
@@ -103,15 +138,15 @@ def main(argv: list[str] | None = None) -> None:
             "redirect_uri": REDIRECT_URI,
             "grant_type": "authorization_code",
         },
-        timeout=30.0,
     )
     if not resp.is_success:
-        sys.exit(f"Token exchange failed: HTTP {resp.status_code} {resp.text[:200]}")
-    refresh = resp.json().get("refresh_token")
+        raise DriveError(f"Token exchange failed: HTTP {resp.status_code} {resp.text[:200]}")
+    body = resp.json()
+    refresh = body.get("refresh_token")
     if not refresh:
-        sys.exit("No refresh token returned; revoke the app's access and retry.")
-    print("\nRefresh token (shown once):\n" + refresh)
-    print("\nPut it in api/.env as:\nGROKBOT_DRIVE_REFRESH_TOKEN=" + refresh)
+        raise DriveError("No refresh token returned; revoke the app's access and retry.")
+    folder_id = create_folder(body["access_token"], folder_name, client=http)
+    return refresh, folder_id
 
 
 if __name__ == "__main__":
