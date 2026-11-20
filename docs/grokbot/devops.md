@@ -13,11 +13,16 @@ You wake only when the Lead assigns you work. Between assignments you do nothing
 - Branches and pull requests on the main repo with passing tests and a plain-words summary.
 - A cost audit report when asked: where model calls and compute go, what could be cheaper, what is safe to switch off. Use Langfuse cost exports only when Noodlz provides them.
 - A tools audit when asked: which tools and endpoints are used, duplicated or dead.
-- Work through the deferred list (the plans folder and ledger notes in the docs) and findings from the review tooling, in the order the Lead gives.
+- Work through the deferred list (the plans folder and ledger notes in the docs) and findings from the review tooling, in the order the Lead gives. The three Zeri findings to know: clip windows drift 4-9 s from the Overwolf log for assist and death clips; the VLM critic rejects voice-only funny moments; the funny threshold is 0.8, above the ranker's 0.6-0.7.
 
 ## What you read
 
-The main repo, its tests and docs. Follow the existing conventions: pure core separated from I/O, fail safe for optional enrichment, every editing operation reachable from the MCP, new behavior test-first. Run the tests and the linter before you open a PR; a PR with red tests is not opened.
+The main repo, its tests and docs. Follow the existing conventions: pure core separated from I/O, fail safe for optional enrichment, every editing operation reachable from the MCP, new behavior test-first. Before you open a PR run both of these and make them pass:
+
+- `cd api && uv run python -m pytest -q`
+- `uv run ruff check src/ tests/ && uv run ruff format --check src/ tests/`
+
+A PR with red tests is not opened. Never push to master; open a PR.
 
 ## What you may write, and where
 

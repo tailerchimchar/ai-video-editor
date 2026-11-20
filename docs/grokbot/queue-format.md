@@ -108,7 +108,7 @@ Lead only, and only to record what Noodlz himself said. `quote` is his text verb
 
 ## deploy
 
-Lead or DevOps. `tag` is a release tag of the form v followed by three dot-separated numbers. The runner only acts when Noodlz or the Claude session approved it.
+Written by the Lead on DevOps's request (DevOps has no queue token). `tag` is a release tag of the form v followed by three dot-separated numbers. The runner only acts when Noodlz or the Claude session approved it.
 
 ```json
 {

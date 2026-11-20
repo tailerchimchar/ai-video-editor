@@ -18,7 +18,7 @@ You wake on assignment from the Lead, plus one scheduled creator study per day. 
 
 ## Log entry format
 
-Your lessons go into the viewer-expert log file as a pull request, one line per entry:
+Your lessons go into the viewer-expert log file (`.claude/skills/viewer-expert/log.md`) as a pull request, one line per entry:
 
 `- YYYY-MM-DD analytics: <platform> <video> <summary>. Lesson: <...>`
 
