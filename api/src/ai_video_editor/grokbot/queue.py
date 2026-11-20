@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import uuid
 from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,6 +17,7 @@ from pydantic import (
     Field,
     TypeAdapter,
     ValidationError,
+    field_validator,
     model_validator,
 )
 
@@ -49,6 +51,12 @@ class Envelope(_Strict):
     author_bot: Literal["lead", "editor", "devops"]
     created: str
     schema_version: Literal[1]
+
+    @field_validator("id")
+    @classmethod
+    def _uuid_id(cls, v: str) -> str:
+        # Ids become filenames: only canonical lowercase UUIDs are allowed.
+        return str(uuid.UUID(v))
 
 
 class CopyBlock(_Strict):
