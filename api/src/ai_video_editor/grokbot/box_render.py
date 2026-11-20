@@ -35,7 +35,7 @@ from typing import TYPE_CHECKING
 from ..config import settings
 from ..edits import cropped_hud_9x16
 from ..notify import Event, emit
-from ..storage import DriveStorage, StorageError
+from ..storage import BoxRenderStorage, DriveStorage, StorageError
 
 if TYPE_CHECKING:
     from ..grokbot.drive import Uploader
@@ -356,6 +356,7 @@ def run_box_render(
     *,
     emit_fn=emit,
     lock: RenderLock | None = None,
+    storage: BoxRenderStorage | None = None,
 ) -> RenderResult:
     """Run a box render job end-to-end.
 
@@ -366,6 +367,14 @@ def run_box_render(
     5. Upload outputs to Drive
     6. Emit video.rendered event
     7. Clean up scratch (HIGH RISK: only after all uploads succeed)
+
+    Args:
+        uploader: Drive uploader (used to build DriveStorage if storage is None)
+        render_input: Input specification for the render job
+        emit_fn: Event emitter function
+        lock: Optional render lock (defaults to RenderLock())
+        storage: Optional storage backend for dependency injection.
+            When None, DriveStorage is built from uploader and a temp scratch dir.
 
     Returns RenderResult with success/failure details.
     """
@@ -384,11 +393,15 @@ def run_box_render(
         return result
 
     scratch_dir: Path | None = None
+    _storage: BoxRenderStorage
     try:
-        scratch_dir = Path(tempfile.mkdtemp(prefix=SCRATCH_PREFIX))
+        if storage is not None:
+            _storage = storage
+            scratch_dir = _storage.scratch_dir
+        else:
+            scratch_dir = Path(tempfile.mkdtemp(prefix=SCRATCH_PREFIX))
+            _storage = DriveStorage(uploader, scratch_dir)
         _log.info("box render started: plan=%s scratch=%s", render_input.edit_plan_id, scratch_dir)
-
-        storage = DriveStorage(uploader, scratch_dir)
         download_start = time.monotonic()
         local_clips = []
 
@@ -399,7 +412,7 @@ def run_box_render(
                 _emit_failure(emit_fn, result, "download")
                 return result
             try:
-                local_path = storage.download_clip(drive_id, f"clip_{i:03d}.mp4")
+                local_path = _storage.download_clip(drive_id, f"clip_{i:03d}.mp4")
                 local_clips.append(local_path)
             except StorageError as e:
                 result.error = f"download failed: clip {i}: {e}"
@@ -447,7 +460,7 @@ def run_box_render(
             aspect_slug = output.aspect.replace(":", "x")
             name = f"{render_input.edit_plan_id}_{aspect_slug}.mp4"
             try:
-                drive_id = storage.upload_file(
+                drive_id = _storage.upload_file(
                     output.local_path, name, settings.grokbot_box_finished_folder
                 )
                 output.drive_id = drive_id

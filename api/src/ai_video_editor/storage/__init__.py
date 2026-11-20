@@ -11,6 +11,7 @@ Implementations:
 """
 
 from .backend import (
+    BoxRenderStorage,
     LocalStorage,
     StorageBackend,
     StorageError,
@@ -18,6 +19,7 @@ from .backend import (
 from .drive_backend import DriveStorage
 
 __all__ = [
+    "BoxRenderStorage",
     "DriveStorage",
     "LocalStorage",
     "StorageBackend",
