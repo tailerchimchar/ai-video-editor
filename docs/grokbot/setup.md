@@ -73,20 +73,23 @@ The runner talks to the local API, so the API must be running first. Env for the
 
 When you turn on `GROKBOT_EXECUTE_PLANS` or `GROKBOT_RECORD_VERDICTS`, held items younger than 24 hours run on the next tick; older ones are marked expired and reported in one `queue.expired` event.
 
-**Pin the runner.** The runner never pulls code. Run it from its own checkout of the main repo at a release tag, not from the folder you develop in:
+**Pin the runner.** The runner never pulls code. Run it from its own checkout of the main repo at a release tag, not from the folder you develop in. The checkout lives next to the repo:
 
 ```
-git worktree add C:\ave-runner v0.1.0
-cd C:\ave-runner\api
+git tag -a v0.1.0 -m "..."
+git worktree add C:\Users\taile\source\repos\ai-video-editor-runner v0.1.0
+cd C:\Users\taile\source\repos\ai-video-editor-runner\api
 uv sync
 ```
 
-A deploy means moving that checkout to the new tag (`git -C C:\ave-runner checkout v0.1.1`, then restart the two tasks). Copy `api\.env` into `C:\ave-runner\api\`.
+A deploy means moving that checkout to the new tag (`git -C C:\Users\taile\source\repos\ai-video-editor-runner checkout v0.1.1`, then restart the two tasks). Copy `api\.env` into the checkout's `api\` folder.
 
-Create two Task Scheduler tasks, both "At log on", "If the task fails, restart every 1 minute" with a high retry count, and "Run task as soon as possible after a scheduled start is missed". In each task's action set **Start in** to `C:\ave-runner\api` so `api\.env` loads (Task Scheduler otherwise starts in `C:\Windows\System32` and the runner exits with "run from the api directory so api/.env loads").
+Two Task Scheduler tasks exist, `AVE API` and `AVE Grok Runner` (registered 2026-11-20 with PowerShell `Register-ScheduledTask`). Both are "At log on", restart every minute on failure, and "run as soon as possible after a missed start". Each action is `cmd.exe /c <uv.exe> run <script> >> <logs>\<name>.log 2>&1` with **Start in** set to the checkout's `api` folder so `api\.env` loads (Task Scheduler otherwise starts in `C:\Windows\System32` and the runner exits with "run from the api directory so api/.env loads"). Do not quote the paths in the cmd argument: with two quoted paths `cmd /c` strips the outer quotes and the task exits with result 1 and no log.
 
-1. API: program `uv`, arguments `run dev`.
-2. Runner: program `uv`, arguments `run grokbot-runner`. Give it a one-minute start delay so the API is up first.
+1. `AVE API`: `uv run dev`, log at `<checkout>\logs\api.log`.
+2. `AVE Grok Runner`: `uv run grokbot-runner`, one-minute start delay so the API is up first, log at `<checkout>\logs\runner.log`.
+
+Start or restart them with `Start-ScheduledTask 'AVE API'` / `Stop-ScheduledTask`. The runner logs one line per tick at INFO.
 
 ## 8. Power
 

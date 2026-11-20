@@ -715,6 +715,12 @@ def check_repo_dir(repo_dir: Path | None) -> str | None:
 
 
 def main() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        stream=sys.stderr,
+    )
+    logger.info("grokbot runner starting")
     repo_dir = settings.grokbot_queue_repo_dir
     problem = check_repo_dir(repo_dir)
     if problem:
