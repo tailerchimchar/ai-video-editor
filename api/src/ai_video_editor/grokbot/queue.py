@@ -246,7 +246,7 @@ class AppliedLedger:
                 "INSERT INTO queue_applied (id, kind, applied_at, outcome) "
                 "VALUES (?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
                 "outcome=excluded.outcome, applied_at=excluded.applied_at "
-                "WHERE queue_applied.outcome='deferred'",
+                "WHERE queue_applied.outcome IN ('deferred','applying')",
                 (id, kind, datetime.now(timezone.utc).isoformat(), outcome),
             )
         )

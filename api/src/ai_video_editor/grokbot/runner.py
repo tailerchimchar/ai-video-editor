@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sys
 import time
 import urllib.parse
@@ -60,6 +61,7 @@ class ApiClient(Protocol):
     def plan_version(self, compilation_id: str) -> str: ...
     def apply_plan(self, compilation_id: str, plan: dict) -> dict: ...
     def record_correction(self, body: dict) -> None: ...
+    def recent_corrections(self, game: str) -> list[dict]: ...
 
 
 class HttpApiClient:
@@ -80,7 +82,7 @@ class HttpApiClient:
 
     def compilation_output(self, compilation_id: str) -> str | None:
         r = self._client.get(
-            f"{self._base}/api/v1/compile/{urllib.parse.quote(compilation_id, safe='')}"
+            f"{self._base}/api/v1/edit/compile/{urllib.parse.quote(compilation_id, safe='')}"
         )
         if not r.is_success:
             return None
@@ -91,23 +93,37 @@ class HttpApiClient:
 
     def plan_version(self, compilation_id: str) -> str:
         r = self._client.get(f"{self._comp_url(compilation_id)}/plan/version")
-        r.raise_for_status()
+        self._check(r)
         return str(r.json()["version"])
 
     def apply_plan(self, compilation_id: str, plan: dict) -> dict:
         # Rendering can take minutes; the default 30s timeout is far too short.
         r = self._client.post(f"{self._comp_url(compilation_id)}/plan", json=plan, timeout=900.0)
-        if 400 <= r.status_code < 500:
-            try:
-                detail = r.json().get("detail", r.text)
-            except ValueError:
-                detail = r.text
-            raise ApiError(r.status_code, detail)
-        r.raise_for_status()
+        self._check(r)
         return r.json()
 
     def record_correction(self, body: dict) -> None:
         r = self._client.post(f"{self._base}/api/v1/mentor/record_correction", json=body)
+        self._check(r)
+
+    def recent_corrections(self, game: str) -> list[dict]:
+        r = self._client.get(
+            f"{self._base}/api/v1/mentor/recent_corrections",
+            params={"game": game, "limit": 100},
+        )
+        self._check(r)
+        return r.json().get("corrections", [])
+
+    @staticmethod
+    def _check(r: httpx.Response) -> None:
+        """4xx is permanent (ApiError); 5xx raises HTTPStatusError (transient)."""
+        if 400 <= r.status_code < 500:
+            try:
+                body = r.json()
+                detail = body.get("detail", body) if isinstance(body, dict) else body
+            except ValueError:
+                detail = r.text
+            raise ApiError(r.status_code, detail)
         r.raise_for_status()
 
 
@@ -125,6 +141,14 @@ def _inside(path: str, *roots: Path) -> bool:
     except (OSError, ValueError):
         return False
     return any(p.is_relative_to(Path(r).resolve()) for r in roots)
+
+
+_PATH_RE = re.compile(r"[A-Za-z]:[\\/][^\s\"']+|/[^\s\"']+")
+
+
+def _safe_detail(detail, limit: int = 500) -> str:
+    """API detail for a rejection reason: no absolute paths, bounded length."""
+    return _PATH_RE.sub("<path>", str(detail))[:limit]
 
 
 _DEFERRED = (EditPlanItem, VerdictItem, DeployItem)
@@ -157,6 +181,7 @@ class Runner:
         self._heartbeat_sent = False
         self._wrote = False
         self._outcomes: list[str] = []
+        self._prior: dict[str, str] = {}
 
     # -- emitting ------------------------------------------------------
     def _send(self, event: str, payload: dict) -> None:
@@ -191,6 +216,8 @@ class Runner:
         outcome = outcomes.get(id)
         if outcome is None:
             return False
+        if outcome == "applying":
+            return False
         if outcome != "deferred":
             return True
         if item is None:  # kind unknown yet: let it through if any flag is on
@@ -206,6 +233,7 @@ class Runner:
 
         control, normal, pending = [], [], 0
         outcomes = self.ledger.outcomes()
+        self._prior = outcomes
         for path, text in self.repo.list_items():
             filename = Path(path).name
             if self._done(Path(path).stem, outcomes):
@@ -273,7 +301,7 @@ class Runner:
         elif isinstance(item, EditPlanItem) and settings.grokbot_execute_plans:
             self._edit_plan(filename, item)
         elif isinstance(item, VerdictItem) and settings.grokbot_record_verdicts:
-            self._verdict(item)
+            self._verdict(filename, item)
         elif isinstance(item, _DEFERRED):
             self._defer(item)
 
@@ -287,6 +315,16 @@ class Runner:
             return None
 
     def _edit_plan(self, filename: str, item: EditPlanItem) -> None:
+        try:
+            self._run_plan(filename, item)
+        except ApiError as e:
+            self._reject(
+                filename, item.id, item.kind, f"api {e.status}: {_safe_detail(e.detail)}"
+            )
+        except httpx.HTTPError as e:  # transient: leave unmarked, retry next tick
+            logger.warning("plan %s hit a transient API error: %s", item.id, e)
+
+    def _run_plan(self, filename: str, item: EditPlanItem) -> None:
         current = self.api.plan_version(item.compilation_id)
         if current != item.base_version:
             self._reject(
@@ -297,69 +335,91 @@ class Runner:
                 current=current,
             )
             return
-        try:
-            self.api.apply_plan(item.compilation_id, item.plan.model_dump(mode="json"))
-        except ApiError as e:
-            self._reject(filename, item.id, item.kind, f"plan rejected ({e.status}): {e.detail}")
-            return
+        self.api.apply_plan(item.compilation_id, item.plan.model_dump(mode="json"))
         output = self.api.compilation_output(item.compilation_id)
         if not output or not Path(output).is_file():
             self._reject(filename, item.id, item.kind, "plan applied but no rendered output found")
             return
         result = self._watch(output)
-        if result.critique is None:
-            self._reject(
-                filename, item.id, item.kind, f"plan applied; critic failed: {result.error}"
-            )
-            return
         c = result.critique
-        critique_path = Path(output).parent / "critique.json"
-        critique_path.write_text(c.model_dump_json(indent=2), encoding="utf-8")
         mp4 = self._upload(Path(output), f"{item.id}.mp4", "renders")
-        crit = self._upload(critique_path, f"{item.id}-critique.json", "digests")
-        self._send(
-            "render.done",
-            {
-                "plan_id": item.id,
-                "drive": {"mp4": mp4, "critique": crit},
-                "critic": {
+        crit = None
+        if c is not None:
+            critique_path = Path(output).parent / "critique.json"
+            critique_path.write_text(c.model_dump_json(indent=2), encoding="utf-8")
+            crit = self._upload(critique_path, f"{item.id}-critique.json", "digests")
+        payload = {
+            "plan_id": item.id,
+            "drive": {"mp4": mp4, "critique": crit},
+            "critic": (
+                {
                     "verdict": c.overall_verdict,
                     "opener": c.opener_strength,
                     "climax": c.climax_strength,
                     "pacing": c.pacing,
-                },
-                "copy": item.copy.model_dump(mode="json") if item.copy else None,
-            },
-        )
+                }
+                if c is not None
+                else None
+            ),
+            "copy": item.copy.model_dump(mode="json") if item.copy else None,
+        }
+        if c is None:
+            payload["critic_error"] = _safe_detail(result.error or "critic returned nothing")
+        self._send("render.done", payload)
+        # The plan is applied; a resend would be stale, so never leave it unmarked.
         self._mark(item.id, item.kind, "applied")
 
-    def _verdict(self, item: VerdictItem) -> None:
+    def _log_decision(self, item: VerdictItem, reason: str) -> None:
+        self.previews_dir.parent.mkdir(parents=True, exist_ok=True)
+        line = {
+            "id": item.id,
+            "game": item.game,
+            "clip_ref": item.clip_ref,
+            "verdict": item.verdict,
+            "rule": item.rule,
+            "reason": reason,
+            "logged_at": datetime.now(timezone.utc).isoformat(),
+        }
+        with (self.previews_dir.parent / "decisions.log").open("a", encoding="utf-8") as f:
+            f.write(json.dumps(line) + "\n")
+        self._mark(item.id, item.kind, "logged")
+
+    def _verdict(self, filename: str, item: VerdictItem) -> None:
         # Only a verdict that quotes Noodlz may reach the mentor corrections.
         if not item.has_quote:
-            self.previews_dir.parent.mkdir(parents=True, exist_ok=True)
-            line = {
-                "id": item.id,
-                "game": item.game,
-                "clip_ref": item.clip_ref,
-                "verdict": item.verdict,
-                "rule": item.rule,
-                "logged_at": datetime.now(timezone.utc).isoformat(),
-            }
-            with (self.previews_dir.parent / "decisions.log").open("a", encoding="utf-8") as f:
-                f.write(json.dumps(line) + "\n")
-            self._mark(item.id, item.kind, "logged")
+            self._log_decision(item, "no quote")
             return
-        self.api.record_correction(
-            {
-                "game": item.game,
-                "feedback": item.quote,
-                "rule": item.rule,
-                "clip_ref": item.clip_ref,
-                "source_context": f"grokbot:{item.id}",
-                "tags": ["grokbot"],
-                "verdict": item.verdict,
-            }
-        )
+        if len(item.quote.strip()) < 3 or len(item.rule.strip()) < 3:
+            self._log_decision(item, "quote or rule shorter than 3 characters")
+            return
+        source = f"grokbot:{item.id}"
+        try:
+            if self._prior.get(item.id) == "applying":
+                # A crash or 5xx may have left the post half-done: check before re-posting.
+                recorded = self.api.recent_corrections(item.game)
+                if any(c.get("source_context") == source for c in recorded):
+                    self._mark(item.id, item.kind, "applied")
+                    return
+            self.ledger.mark(item.id, item.kind, "applying")
+            self.api.record_correction(
+                {
+                    "game": item.game,
+                    "feedback": item.quote,
+                    "rule": item.rule,
+                    "clip_ref": item.clip_ref,
+                    "source_context": source,
+                    "tags": ["grokbot"],
+                    "verdict": item.verdict,
+                }
+            )
+        except ApiError as e:
+            self._reject(
+                filename, item.id, item.kind, f"api {e.status}: {_safe_detail(e.detail)}"
+            )
+            return
+        except httpx.HTTPError as e:  # transient: stays "applying", re-checked next tick
+            logger.warning("verdict %s hit a transient API error: %s", item.id, e)
+            return
         self._mark(item.id, item.kind, "applied")
 
     def _defer(self, item) -> None:

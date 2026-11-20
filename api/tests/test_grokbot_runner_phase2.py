@@ -1,5 +1,4 @@
 import json
-import uuid  # noqa: F401
 from types import SimpleNamespace
 
 import pytest
@@ -38,6 +37,8 @@ class P2Api:
         self.apply_error = None
         self.applied = []
         self.recorded = []
+        self.record_error = None
+        self.version_error = None
         self.out = tmp / "out" / "compilation.mp4"
         self.out.parent.mkdir(parents=True, exist_ok=True)
         self.out.write_bytes(b"x")
@@ -49,6 +50,8 @@ class P2Api:
         return str(self.out)
 
     def plan_version(self, cid):
+        if self.version_error:
+            raise self.version_error
         return self.version
 
     def apply_plan(self, cid, plan):
@@ -58,7 +61,12 @@ class P2Api:
         return {"progress": {}, "problems": []}
 
     def record_correction(self, body):
+        if self.record_error:
+            raise self.record_error
         self.recorded.append(body)
+
+    def recent_corrections(self, game):
+        return list(self.recorded)
 
 
 def fake_watch(path):
