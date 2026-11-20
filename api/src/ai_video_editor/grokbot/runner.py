@@ -6,6 +6,7 @@ import json
 import logging
 import sys
 import time
+import urllib.parse
 from collections.abc import Callable
 from importlib import metadata
 from pathlib import Path
@@ -53,7 +54,7 @@ class HttpApiClient:
         self._client = client or httpx.Client(timeout=30.0)
 
     def asset_path(self, asset_id: str) -> tuple[str, float]:
-        r = self._client.get(f"{self._base}/api/v1/assets/{asset_id}")
+        r = self._client.get(f"{self._base}/api/v1/assets/{urllib.parse.quote(asset_id, safe='')}")
         if r.status_code == 404:
             raise LookupError(f"asset {asset_id} not found")
         r.raise_for_status()
@@ -64,7 +65,9 @@ class HttpApiClient:
         return body["path"], float(dur)
 
     def compilation_output(self, compilation_id: str) -> str | None:
-        r = self._client.get(f"{self._base}/api/v1/compilations/{compilation_id}")
+        r = self._client.get(
+            f"{self._base}/api/v1/compilations/{urllib.parse.quote(compilation_id, safe='')}"
+        )
         if not r.is_success:
             return None
         return r.json().get("output_path")
@@ -74,7 +77,16 @@ class RunnerState(BaseModel):
     sleeping: bool = False
     buffered: list[dict] = []
     last_heartbeat: float = 0.0
+    pending_push: bool = False
     version: str = _version()
+
+
+def _inside(path: str, *roots: Path) -> bool:
+    try:
+        p = Path(path).resolve()
+    except (OSError, ValueError):
+        return False
+    return any(p.is_relative_to(Path(r).resolve()) for r in roots)
 
 
 _DEFERRED = (EditPlanItem, VerdictItem, DeployItem)
@@ -177,10 +189,20 @@ class Runner:
         # Items wait for the tick after a wake, and for the whole sleep.
         if not self.state.sleeping and not woke:
             for filename, item in normal:
-                self._handle(filename, item)
+                try:
+                    self._handle(filename, item)
+                except Exception as e:
+                    logger.exception("item %s failed", item.id)
+                    self._reject(
+                        filename, item.id, item.kind, f"internal error: {type(e).__name__}"
+                    )
 
         if self._wrote:
-            self.repo.commit_push(f"runner: {len(self._outcomes)} outcomes")
+            self.state.pending_push = not self.repo.commit_push(
+                f"runner: {len(self._outcomes)} outcomes"
+            )
+        elif self.state.pending_push:
+            self.state.pending_push = not self.repo.retry_push()
         return self._outcomes
 
     def _handle(self, filename: str, item) -> None:
@@ -214,7 +236,13 @@ class Runner:
             )
             return
         self.previews_dir.mkdir(parents=True, exist_ok=True)
+        if not _inside(path, settings.outplayed_media_dir, settings.workspace_dir):
+            self._reject(filename, item.id, item.kind, "asset path outside allowed roots")
+            return
         out = self.previews_dir / f"{item.id}.mp4"
+        if out.resolve().parent != self.previews_dir.resolve():
+            self._reject(filename, item.id, item.kind, "preview path escapes previews dir")
+            return
         ok, err = self._trim(path, str(out), item.start_s, item.end_s)
         if not ok:
             self._reject(filename, item.id, item.kind, f"trim failed: {err}")
@@ -267,28 +295,49 @@ class Runner:
         )
 
 
+def run_once(runner: Runner) -> None:
+    """One loop body. Tick and heartbeat fail independently."""
+    try:
+        runner.tick()
+    except Exception:
+        logger.exception("runner tick failed")
+    try:
+        if runner.heartbeat_due():
+            runner.heartbeat()
+    except Exception:
+        logger.exception("runner heartbeat failed")
+
+
+def check_repo_dir(repo_dir: Path | None) -> str | None:
+    """Return a refusal reason, or None when the dir is a usable queue repo."""
+    if repo_dir is None:
+        return "GROKBOT_QUEUE_REPO_DIR is not set"
+    root = Path(repo_dir)
+    if not (root / ".git").exists():
+        return f"{root} is not a git repo (no .git)"
+    if not (root / "queue").is_dir():
+        return f"{root} has no queue/ directory"
+    return None
+
+
 def main() -> None:
     repo_dir = settings.grokbot_queue_repo_dir
-    if repo_dir is None:
-        print("GROKBOT_QUEUE_REPO_DIR is not set", file=sys.stderr)
+    problem = check_repo_dir(repo_dir)
+    if problem:
+        print(problem, file=sys.stderr)
         sys.exit(1)
     grok_dir = Path(settings.workspace_dir) / "grokbot"
     grok_dir.mkdir(parents=True, exist_ok=True)
     runner = Runner(
         repo=GitQueueRepo(repo_dir),
-        api=HttpApiClient("http://localhost:8000"),
+        api=HttpApiClient(settings.grokbot_api_base_url),
         uploader=uploader_from_settings(),
-        # Outside the queue repo so `git add -A` never commits it.
+        # Outside the queue repo so it is never committed.
         ledger=AppliedLedger(grok_dir / "runner-ledger.db"),
         previews_dir=grok_dir / "previews",
     )
     while True:
-        try:
-            runner.tick()
-            if runner.heartbeat_due():
-                runner.heartbeat()
-        except Exception:
-            logger.exception("runner tick failed")
+        run_once(runner)
         time.sleep(settings.grokbot_runner_poll_seconds)
 
 

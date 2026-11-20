@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -73,6 +73,7 @@ class Settings(BaseSettings):
     grokbot_drive_folder_id: str = ""
     grokbot_drive_preview_retention_days: int = 7
     grokbot_queue_repo_dir: Path | None = None
+    grokbot_api_base_url: str = "http://127.0.0.1:8000"
     grokbot_runner_poll_seconds: int = 60
     grokbot_heartbeat_seconds: int = 300
     grokbot_queue_depth_cap: int = 10
@@ -395,6 +396,14 @@ class Settings(BaseSettings):
     intensity_vlm_weight: float = 0.2
     intensity_voice_weight: float = 0.1
     intensity_death_penalty: float = 0.1
+
+    @field_validator("grokbot_queue_repo_dir", mode="before")
+    @classmethod
+    def _blank_repo_dir_is_none(cls, v):
+        # An empty env var would otherwise become Path("."), the cwd repo.
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return None
+        return v
 
     model_config = {
         "env_file": ".env",

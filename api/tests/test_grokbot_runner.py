@@ -5,9 +5,10 @@ from types import SimpleNamespace
 
 import pytest
 
+from ai_video_editor.config import Settings, settings
 from ai_video_editor.grokbot.git_queue import GitQueueRepo
-from ai_video_editor.grokbot.queue import AppliedLedger
-from ai_video_editor.grokbot.runner import Runner
+from ai_video_editor.grokbot.queue import AppliedLedger, QueueRejected, parse_item
+from ai_video_editor.grokbot.runner import Runner, check_repo_dir, run_once
 
 
 def env(kind, **kw):
@@ -45,8 +46,16 @@ class FakeRepo:
         self.files.pop(relative_path, None)
         (self.root / relative_path).unlink(missing_ok=True)
 
+    push_ok = True
+    retries = 0
+
     def commit_push(self, message):
         self.pushed.append(message)
+        return self.push_ok
+
+    def retry_push(self):
+        self.retries += 1
+        return self.push_ok
 
     def add(self, item_dict):
         self.files[f"queue/{item_dict['id']}.json"] = json.dumps(item_dict)
@@ -55,11 +64,12 @@ class FakeRepo:
 class FakeApi:
     def __init__(self, duration=30.0):
         self.duration = duration
+        self.path = str(Path(settings.outplayed_media_dir) / "a.mp4")
         self.calls = []
 
     def asset_path(self, asset_id):
         self.calls.append(asset_id)
-        return ("C:/x/a.mp4", self.duration)
+        return (self.path, self.duration)
 
     def compilation_output(self, cid):
         self.calls.append(cid)
@@ -253,3 +263,107 @@ def test_git_queue_repo_uses_argv_lists(tmp_path):
     assert calls[0] == ["git", "-C", str(tmp_path), "pull", "--ff-only"]
     assert any(c[3:5] == ["commit", "-m"] and c[5] == "msg" for c in calls)
     assert calls[-1][3] == "push"
+
+
+def test_blank_repo_dir_is_none():
+    assert Settings(grokbot_queue_repo_dir="  ").grokbot_queue_repo_dir is None
+    assert Settings(grokbot_queue_repo_dir="").grokbot_queue_repo_dir is None
+
+
+def test_main_refuses_non_repo(tmp_path):
+    assert "not set" in check_repo_dir(None)
+    assert ".git" in check_repo_dir(tmp_path)
+    (tmp_path / ".git").mkdir()
+    assert "queue" in check_repo_dir(tmp_path)
+    (tmp_path / "queue").mkdir()
+    assert check_repo_dir(tmp_path) is None
+
+
+def test_poison_item_is_isolated(h):
+    bad = preview()
+    good = env("deploy", tag="v1.0.0")
+    h.repo.add(bad)
+    h.repo.add(good)
+
+    def boom(*a):
+        raise RuntimeError("x")
+
+    h.api.asset_path = boom
+    h.runner._trim = boom  # asset_path boom is treated as transient; force a real raise
+    out = h.runner.tick()
+    assert "deferred" in out
+    assert good["id"] in h.runner.ledger.outcomes()
+
+
+def test_unexpected_handler_error_is_rejected(h):
+    bad = preview()
+    h.repo.add(bad)
+
+    def boom(*a):
+        raise RuntimeError("x")
+
+    h.runner._trim = boom
+    assert h.runner.tick() == ["rejected"]
+    rej = json.loads(h.repo.files[f"rejected/{bad['id']}.json"])
+    assert rej["reason"] == "internal error: RuntimeError"
+    assert "queue.rejected" in names(h)
+
+
+def test_heartbeat_survives_failing_tick(h):
+    def boom():
+        raise RuntimeError("x")
+
+    h.repo.pull = boom
+    run_once(h.runner)
+    assert "heartbeat" in names(h)
+
+
+def test_failed_push_is_retried(h):
+    h.repo.push_ok = False
+    h.repo.files["queue/bad.json"] = "nope"
+    h.runner.tick()
+    assert h.runner.state.pending_push
+    h.runner.tick()
+    assert h.repo.retries == 1
+    h.repo.push_ok = True
+    h.runner.tick()
+    assert not h.runner.state.pending_push
+
+
+def test_pull_failure_resets_only_without_local_commits(tmp_path):
+    def make(status):
+        calls = []
+
+        def run(argv, **kw):
+            calls.append(argv[3:])
+            rc = 1 if argv[3] == "pull" else 0
+            out = status if argv[3] == "status" else "main\n"
+            return SimpleNamespace(returncode=rc, stdout=out, stderr="")
+
+        return calls, GitQueueRepo(tmp_path, run=run)
+
+    calls, repo = make("## main...origin/main [behind 2]\n")
+    repo.pull()
+    assert ["reset", "--hard", "origin/main"] in calls
+    calls, repo = make("## main...origin/main [ahead 1, behind 2]\n")
+    repo.pull()
+    assert not any(c[0] in ("reset", "fetch") for c in calls)
+
+
+def test_item_id_must_be_uuid():
+    base = env("sleep")
+    base["id"] = "C:evil"
+    with pytest.raises(QueueRejected):
+        parse_item(json.dumps(base))
+    base["id"] = str(uuid.uuid4()).upper()
+    assert parse_item(json.dumps(base)).id == base["id"].lower()
+
+
+def test_asset_path_outside_roots_rejected(h):
+    h.api.path = "C:/Windows/evil.mp4"
+    it = preview()
+    h.repo.add(it)
+    assert h.runner.tick() == ["rejected"]
+    assert not h.trims
+    reason = json.loads(h.repo.files[f"rejected/{it['id']}.json"])["reason"]
+    assert "outside allowed roots" in reason
