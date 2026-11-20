@@ -38,15 +38,23 @@ logger = logging.getLogger(__name__)
 CLIP_PADDING_SECONDS = 10.0
 
 
-def _load_player_names(path: Path | None) -> tuple[set[str], str | None]:
+def _default_player_names_path() -> Path:
+    """Return the conventional repo-relative path for the player names file.
+
+    Resolved relative to this module's location (api/src/.../grokbot/publish.py)
+    to find api/player-names.txt regardless of cwd.
+    """
+    # publish.py is at api/src/ai_video_editor/grokbot/publish.py
+    # We want api/player-names.txt (4 levels up)
+    return Path(__file__).parent.parent.parent.parent / "player-names.txt"
+
+
+def _load_player_names(path: Path) -> tuple[set[str], str | None]:
     """Load player names from a local file (one name per line).
 
-    Returns (names, error_reason). When path is None, returns (empty set, None)
-    meaning no check is configured. When path is set but the file is missing or
-    unreadable, returns (empty set, reason) to block publishing (fail closed).
+    Returns (names, error_reason). When the file is missing or unreadable,
+    returns (empty set, reason) to block publishing (fail closed).
     """
-    if path is None:
-        return set(), None
     if not path.is_file():
         logger.error(
             "publish: player names file %s not found, blocking publish (fail closed)", path
@@ -189,40 +197,42 @@ def publish_round(
     is used as given. `api` (a runner `ApiClient`) supplies the
     compilation's current plan version when `compilation_id` is given.
 
-    `player_names_path`: optional path to a local file with player names (one per
-    line). If set and the digest contains any name, publishing is blocked like
-    the transcript leak check. If the file is missing or unreadable, publishing
-    is blocked (fail closed) and round.publish_failed is emitted.
+    `player_names_path`: path to a local file with player names (one per line).
+    If the digest contains any name, publishing is blocked like the transcript
+    leak check. If the file is missing or unreadable, publishing is blocked
+    (fail closed) and round.publish_failed is emitted. When None, defaults to
+    the conventional repo-relative path (api/player-names.txt).
 
     Raises:
         DigestLeakError: If transcript text appears in the digest.
         PlayerNameLeakError: If a player name appears in the digest.
-        PlayerNamesFileError: If the player names file is configured but missing/unreadable.
+        PlayerNamesFileError: If the player names file is missing or unreadable.
         PublishUploadError: If an upload fails when an uploader is configured.
     """
     round_dir = Path(round_dir)
 
-    # Privacy gate 2 (early): player names file must be readable if configured
-    # This runs before digest build so no work is wasted on a missing file
-    if player_names_path is not None:
-        player_names, file_error = _load_player_names(player_names_path)
-        if file_error is not None:
-            failure_payload = {
-                "round": round_dir.name,
-                "step": "names_file",
-                "reason": file_error,
-                "failed_clips": [],
-                "digest_failed": False,
-            }
-            logger.error(
-                "publish: round %s blocked - player names file error: %s",
-                round_dir.name,
-                file_error,
-            )
-            emit(Event(event="round.publish_failed", payload=failure_payload))
-            raise PlayerNamesFileError(player_names_path, file_error)
-    else:
-        player_names = set()
+    # Privacy gate 2 (early): player names file must be readable
+    # Default to the conventional repo-relative path if not explicitly set
+    names_path = player_names_path
+    if names_path is None:
+        names_path = _default_player_names_path()
+
+    player_names, file_error = _load_player_names(names_path)
+    if file_error is not None:
+        failure_payload = {
+            "round": round_dir.name,
+            "step": "names_file",
+            "reason": file_error,
+            "failed_clips": [],
+            "digest_failed": False,
+        }
+        logger.error(
+            "publish: round %s blocked - player names file error: %s",
+            round_dir.name,
+            file_error,
+        )
+        emit(Event(event="round.publish_failed", payload=failure_payload))
+        raise PlayerNamesFileError(names_path, file_error)
 
     digest: Digest = build_digest(round_dir, game=game)
     digest.compilation_id = compilation_id
@@ -334,10 +344,11 @@ def main(argv: list[str] | None = None) -> None:
     from .drive import uploader_from_settings
     from .runner import HttpApiClient
 
-    # Player names path: CLI arg overrides env/config
+    # Player names path: CLI arg overrides env/config, which overrides default
     names_path = args.player_names
     if names_path is None and settings.grokbot_player_names_path:
         names_path = Path(settings.grokbot_player_names_path)
+    # If still None, publish_round will use _default_player_names_path()
 
     api = HttpApiClient(settings.grokbot_api_base_url) if args.compilation_id else None
     try:

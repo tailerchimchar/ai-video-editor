@@ -224,9 +224,11 @@ Sent when publishing fails for any reason. When this event is sent, `round.publi
 
 | reason | meaning |
 |---|---|
-| `names_file_missing` | The configured player names file does not exist |
+| `names_file_missing` | The player names file does not exist (default: `api/player-names.txt`) |
 | `names_file_unreadable` | The player names file exists but could not be read |
 | `upload failed` | A Drive upload failed |
+
+**Note:** The player names file always defaults to `api/player-names.txt` when not explicitly configured. If this file is missing, publishing is blocked (fail closed). There is no way to skip the name check.
 
 Example (upload failure):
 

@@ -36,13 +36,24 @@ class FailingUploader:
 
 
 @pytest.fixture
-def round_dir(tmp_path, monkeypatch):
+def player_names_file(tmp_path):
+    """Create a valid player-names file with placeholder names for tests."""
+    names_file = tmp_path / "player-names.txt"
+    # Use names that do NOT appear in the fixture digest
+    names_file.write_text("InventedName1\nInventedName2\nPlaceholderPlayer\n")
+    return names_file
+
+
+@pytest.fixture
+def round_dir(tmp_path, monkeypatch, player_names_file):
     # Clips must live under an allowed root to be uploaded.
     monkeypatch.setattr(settings, "workspace_dir", tmp_path)
     dest = tmp_path / "2026-11-20_zeri"
     shutil.copytree(FIXTURE, dest)
     for c in json.loads((dest / "clips.json").read_text()):
         (dest / c["file"]).write_bytes(b"mp4")
+    # Monkeypatch the default player names path to our fixture file
+    monkeypatch.setattr(pub, "_default_player_names_path", lambda: player_names_file)
     return dest
 
 
@@ -545,9 +556,33 @@ def test_unreadable_names_file_blocks_publishing(round_dir, tmp_path, monkeypatc
             names_file.chmod(0o644)
 
 
-def test_no_names_path_configured_allows_publishing(round_dir):
-    """When player_names_path is None (not configured), publishing proceeds."""
-    payload, events, _ = run(round_dir, player_names_path=None)
+def test_unset_names_path_uses_default_and_blocks_if_missing(tmp_path, monkeypatch):
+    """When player_names_path is None, the default path is used and must exist."""
+    # Set up a round dir without monkeypatching the default path
+    monkeypatch.setattr(settings, "workspace_dir", tmp_path)
+    dest = tmp_path / "2026-11-20_zeri"
+    shutil.copytree(FIXTURE, dest)
+    for c in json.loads((dest / "clips.json").read_text()):
+        (dest / c["file"]).write_bytes(b"mp4")
 
-    assert [e.event for e in events] == ["round.published"]
-    assert payload["clips"] == 3
+    # Point default path to a non-existent file
+    missing_default = tmp_path / "nonexistent-player-names.txt"
+    monkeypatch.setattr(pub, "_default_player_names_path", lambda: missing_default)
+
+    events = []
+    with pytest.raises(pub.PlayerNamesFileError) as exc_info:
+        pub.publish_round(
+            dest,
+            game="league",
+            compilation_id="comp-1",
+            api=FakeApi(),
+            uploader=FakeUploader(ids=ids),
+            ask_many=False,
+            player_names_path=None,  # Use default
+            emit=events.append,
+        )
+
+    assert exc_info.value.reason == "names_file_missing"
+    event_names = [e.event for e in events]
+    assert "round.publish_failed" in event_names
+    assert "round.published" not in event_names
