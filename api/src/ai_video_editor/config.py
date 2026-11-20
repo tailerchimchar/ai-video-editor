@@ -104,8 +104,9 @@ class Settings(BaseSettings):
     grokbot_quality_gate_confidence_threshold: float = 0.7
     # Max retries per criterion before routing to owner approval.
     grokbot_quality_gate_max_retries: int = 2
-    # Daily cap on quality gate VLM calls (0 = unlimited). Resets at UTC midnight.
-    grokbot_quality_gate_daily_cap: int = 0
+    # Daily cap on quality gate VLM calls. 0 or negative = gate disabled.
+    # Default 100 allows ~100 renders/day with the gate. Resets at UTC midnight.
+    grokbot_quality_gate_daily_cap: int = 100
     # Timeout for the entire quality gate step (vision + Jev scoring).
     grokbot_quality_gate_timeout_seconds: float = 60.0
 

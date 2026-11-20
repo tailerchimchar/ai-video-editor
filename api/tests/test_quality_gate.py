@@ -185,13 +185,57 @@ class TestRunQualityGate:
         assert result.skipped
         assert "disabled" in result.skip_reason
 
+    def test_daily_cap_zero_disables_gate(self, test_video, scratch_dir, monkeypatch):
+        """GROKBOT_QUALITY_GATE_DAILY_CAP=0 means gate disabled."""
+        from ai_video_editor import config
+
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_enabled", True)
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_daily_cap", 0)
+
+        result, _revisions = run_quality_gate(
+            test_video,
+            [QualityCriterion(id="c1", text="test")],
+            RenderMetadata(),
+            scratch_dir,
+        )
+        assert result.passed
+        assert result.skipped
+        assert "daily cap" in result.skip_reason.lower() or "disabled" in result.skip_reason.lower()
+
+    def test_daily_cap_negative_disables_gate(self, test_video, scratch_dir, monkeypatch):
+        """Negative daily cap means gate disabled."""
+        from ai_video_editor import config
+
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_enabled", True)
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_daily_cap", -1)
+
+        result, _revisions = run_quality_gate(
+            test_video,
+            [QualityCriterion(id="c1", text="test")],
+            RenderMetadata(),
+            scratch_dir,
+        )
+        assert result.passed
+        assert result.skipped
+
     def test_all_criteria_pass(self, test_video, scratch_dir, monkeypatch):
         from ai_video_editor import config
 
         monkeypatch.setattr(config.settings, "grokbot_quality_gate_enabled", True)
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_daily_cap", 100)
 
         fake_vision = FakeVisionClient(description="Kill at 5s, good quality")
-        fake_jev = FakeJevScorer()
+
+        # Create a fake batched scorer that returns PASS
+        class FakeBatchedScorer:
+            def score_all(self, criteria, vision_description, metadata, *, already_passed=None):
+                return [
+                    CriterionResult(
+                        criterion_id=c.id, verdict=Verdict.PASS, confidence=0.9, reason="pass"
+                    )
+                    for c in criteria
+                    if c.id not in (already_passed or set())
+                ]
 
         with patch(
             "ai_video_editor.grokbot.quality_gate._sample_frames",
@@ -205,7 +249,7 @@ class TestRunQualityGate:
                 RenderMetadata(duration_seconds=10.0, aspect_ratio="9:16"),
                 scratch_dir,
                 vision_client=fake_vision,
-                jev_scorer=fake_jev,
+                batched_scorer=FakeBatchedScorer(),
             )
 
         assert result.passed
@@ -218,20 +262,24 @@ class TestRunQualityGate:
         from ai_video_editor import config
 
         monkeypatch.setattr(config.settings, "grokbot_quality_gate_enabled", True)
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_daily_cap", 100)
         monkeypatch.setattr(config.settings, "grokbot_quality_gate_confidence_threshold", 0.7)
         monkeypatch.setattr(config.settings, "grokbot_quality_gate_max_retries", 2)
 
         fake_vision = FakeVisionClient(description="Scoreboard only, no action")
-        fake_jev = FakeJevScorer(
-            results={
-                "c1": CriterionResult(
-                    criterion_id="c1",
-                    verdict=Verdict.FAIL,
-                    confidence=0.85,
-                    reason="No kill visible",
-                )
-            }
-        )
+
+        class FailingBatchedScorer:
+            def score_all(self, criteria, vision_description, metadata, *, already_passed=None):
+                return [
+                    CriterionResult(
+                        criterion_id=c.id,
+                        verdict=Verdict.FAIL,
+                        confidence=0.85,
+                        reason="No kill visible",
+                    )
+                    for c in criteria
+                    if c.id not in (already_passed or set())
+                ]
 
         with patch(
             "ai_video_editor.grokbot.quality_gate._sample_frames",
@@ -245,7 +293,7 @@ class TestRunQualityGate:
                 RenderMetadata(duration_seconds=10.0),
                 scratch_dir,
                 vision_client=fake_vision,
-                jev_scorer=fake_jev,
+                batched_scorer=FailingBatchedScorer(),
             )
 
         assert not result.passed
@@ -257,19 +305,23 @@ class TestRunQualityGate:
         from ai_video_editor import config
 
         monkeypatch.setattr(config.settings, "grokbot_quality_gate_enabled", True)
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_daily_cap", 100)
         monkeypatch.setattr(config.settings, "grokbot_quality_gate_confidence_threshold", 0.7)
 
         fake_vision = FakeVisionClient()
-        fake_jev = FakeJevScorer(
-            results={
-                "c1": CriterionResult(
-                    criterion_id="c1",
-                    verdict=Verdict.FAIL,
-                    confidence=0.5,
-                    reason="Uncertain",
-                )
-            }
-        )
+
+        class LowConfidenceScorer:
+            def score_all(self, criteria, vision_description, metadata, *, already_passed=None):
+                return [
+                    CriterionResult(
+                        criterion_id=c.id,
+                        verdict=Verdict.FAIL,
+                        confidence=0.5,
+                        reason="Uncertain",
+                    )
+                    for c in criteria
+                    if c.id not in (already_passed or set())
+                ]
 
         with patch(
             "ai_video_editor.grokbot.quality_gate._sample_frames",
@@ -283,30 +335,35 @@ class TestRunQualityGate:
                 RenderMetadata(duration_seconds=10.0),
                 scratch_dir,
                 vision_client=fake_vision,
-                jev_scorer=fake_jev,
+                batched_scorer=LowConfidenceScorer(),
             )
 
         assert result.passed
         assert revisions == []
 
     def test_retry_cap_exhausted(self, test_video, scratch_dir, monkeypatch):
+        """When a criterion has exhausted retries, it should not emit a new revision."""
         from ai_video_editor import config
 
         monkeypatch.setattr(config.settings, "grokbot_quality_gate_enabled", True)
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_daily_cap", 100)
         monkeypatch.setattr(config.settings, "grokbot_quality_gate_confidence_threshold", 0.7)
         monkeypatch.setattr(config.settings, "grokbot_quality_gate_max_retries", 2)
 
         fake_vision = FakeVisionClient()
-        fake_jev = FakeJevScorer(
-            results={
-                "c1": CriterionResult(
-                    criterion_id="c1",
-                    verdict=Verdict.FAIL,
-                    confidence=0.9,
-                    reason="Still failing",
-                )
-            }
-        )
+
+        class StillFailingScorer:
+            def score_all(self, criteria, vision_description, metadata, *, already_passed=None):
+                # Always return FAIL to simulate a criterion that keeps failing
+                return [
+                    CriterionResult(
+                        criterion_id=c.id,
+                        verdict=Verdict.FAIL,
+                        confidence=0.9,
+                        reason="Still failing",
+                    )
+                    for c in criteria
+                ]
 
         with patch(
             "ai_video_editor.grokbot.quality_gate._sample_frames",
@@ -321,9 +378,11 @@ class TestRunQualityGate:
                 scratch_dir,
                 retry_counts={"c1": 2},
                 vision_client=fake_vision,
-                jev_scorer=fake_jev,
+                batched_scorer=StillFailingScorer(),
             )
 
+        # With max_retries=2 and retry_count=2, we've exhausted retries
+        # Result should pass (gate doesn't block), but criterion is marked as exhausted
         assert result.passed
         assert "c1" in result.retries_exhausted
         assert revisions == []
@@ -331,27 +390,23 @@ class TestRunQualityGate:
 
 class TestAudioLedCriteria:
     def test_audio_led_uses_metadata_only(self, test_video, scratch_dir, monkeypatch):
+        """Audio-led criteria should have empty vision_description in state."""
         from ai_video_editor import config
 
         monkeypatch.setattr(config.settings, "grokbot_quality_gate_enabled", True)
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_daily_cap", 100)
 
         fake_vision = FakeVisionClient(description="Boring scoreboard")
-        calls_recorded = []
+        states_recorded = []
 
-        class RecordingJevScorer:
-            def score_criterion(self, criterion, vision_description, metadata):
-                calls_recorded.append(
-                    {
-                        "criterion": criterion,
-                        "vision_description": vision_description,
-                        "metadata": metadata,
-                    }
-                )
-                return CriterionResult(
-                    criterion_id=criterion.id,
-                    verdict=Verdict.PASS,
-                    confidence=0.9,
-                )
+        def mock_ask_many(items):
+            from ai_video_editor.decisions.models import Answer
+
+            for _q, state in items:
+                states_recorded.append(state)
+            return [Answer(value=True, probability=0.9, backend="jev") for _ in items]
+
+        monkeypatch.setattr("ai_video_editor.decisions.ask_many", mock_ask_many)
 
         with patch(
             "ai_video_editor.grokbot.quality_gate._sample_frames",
@@ -372,15 +427,14 @@ class TestAudioLedCriteria:
                 ),
                 scratch_dir,
                 vision_client=fake_vision,
-                jev_scorer=RecordingJevScorer(),
             )
 
-        assert len(calls_recorded) == 2
-        visual_call = next(c for c in calls_recorded if c["criterion"].id == "visual")
-        audio_call = next(c for c in calls_recorded if c["criterion"].id == "audio")
+        assert len(states_recorded) == 2
+        visual_state = states_recorded[0]
+        audio_state = states_recorded[1]
 
-        assert visual_call["criterion"].audio_led is False
-        assert audio_call["criterion"].audio_led is True
+        assert visual_state["vision_description"] == "Boring scoreboard"
+        assert audio_state["vision_description"] == ""
 
 
 class TestVisionError:
@@ -388,6 +442,7 @@ class TestVisionError:
         from ai_video_editor import config
 
         monkeypatch.setattr(config.settings, "grokbot_quality_gate_enabled", True)
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_daily_cap", 100)
 
         class FailingVisionClient:
             def describe_video(self, frames, *, system_prompt, user_prompt):
@@ -414,10 +469,12 @@ class TestVisionError:
 
 
 class TestNoFramesExtracted:
-    def test_no_frames_skips_gate(self, test_video, scratch_dir, monkeypatch):
+    def test_no_frames_marks_criteria_unsure(self, test_video, scratch_dir, monkeypatch):
+        """No frames extracted marks Jev criteria as unsure (not skipped)."""
         from ai_video_editor import config
 
         monkeypatch.setattr(config.settings, "grokbot_quality_gate_enabled", True)
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_daily_cap", 100)
 
         with patch("ai_video_editor.grokbot.quality_gate._sample_frames", return_value=[]):
             result, _revisions = run_quality_gate(
@@ -428,8 +485,9 @@ class TestNoFramesExtracted:
             )
 
         assert result.passed
-        assert result.skipped
-        assert "no frames" in result.skip_reason
+        assert len(result.criteria_results) == 1
+        assert result.criteria_results[0].verdict == Verdict.UNSURE
+        assert "no frames" in result.criteria_results[0].reason
 
 
 # --- E2E tests with fake storage ---
@@ -474,7 +532,7 @@ class TestDefaultJevScorer:
         """DefaultJevScorer routes through the decisions module."""
         from ai_video_editor.decisions.models import Answer
 
-        mock_ask = MagicMock(return_value=Answer(value=True, probability=0.9, backend="rules"))
+        mock_ask = MagicMock(return_value=Answer(value=True, probability=0.9, backend="jev"))
         monkeypatch.setattr("ai_video_editor.decisions.ask", mock_ask)
 
         scorer = DefaultJevScorer()
@@ -486,6 +544,107 @@ class TestDefaultJevScorer:
 
         assert result.verdict == Verdict.PASS
         assert mock_ask.called
+
+    def test_rules_fallback_counts_as_unsure_not_pass(self, monkeypatch):
+        """Rules backend fallback must NOT be treated as a confident pass."""
+        from ai_video_editor.decisions.models import Answer
+
+        mock_ask = MagicMock(return_value=Answer(value=True, probability=1.0, backend="rules"))
+        monkeypatch.setattr("ai_video_editor.decisions.ask", mock_ask)
+
+        scorer = DefaultJevScorer()
+        result = scorer.score_criterion(
+            QualityCriterion(id="c1", text="Shows a kill"),
+            "Kill at 5s",
+            RenderMetadata(duration_seconds=10.0),
+        )
+
+        assert result.verdict == Verdict.UNSURE
+        assert "rules fallback" in result.reason.lower()
+
+    def test_jev_error_counts_as_unsure(self, monkeypatch):
+        """When Jev raises an error, the criterion must be unsure, not pass."""
+        from ai_video_editor.decisions.models import DecisionError
+
+        mock_ask = MagicMock(side_effect=DecisionError("Jev unavailable"))
+        monkeypatch.setattr("ai_video_editor.decisions.ask", mock_ask)
+
+        scorer = DefaultJevScorer()
+        result = scorer.score_criterion(
+            QualityCriterion(id="c1", text="Shows a kill"),
+            "Kill at 5s",
+            RenderMetadata(duration_seconds=10.0),
+        )
+
+        assert result.verdict == Verdict.UNSURE
+        assert result.confidence == 0.0
+
+
+class TestBatchedJevScoring:
+    def test_one_jev_request_per_render(self, test_video, scratch_dir, monkeypatch):
+        """All criteria should be scored in one batched Jev request per render."""
+        from ai_video_editor import config
+        from ai_video_editor.grokbot.quality_gate import BatchedJevScorer
+
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_enabled", True)
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_daily_cap", 100)
+
+        ask_many_calls = []
+
+        def mock_ask_many(items):
+            from ai_video_editor.decisions.models import Answer
+
+            ask_many_calls.append(items)
+            return [Answer(value=True, probability=0.9, backend="jev") for _ in items]
+
+        monkeypatch.setattr("ai_video_editor.decisions.ask_many", mock_ask_many)
+
+        scorer = BatchedJevScorer()
+        criteria = [
+            QualityCriterion(id="c1", text="Shows a kill"),
+            QualityCriterion(id="c2", text="Good pacing"),
+            QualityCriterion(id="c3", text="Clear audio"),
+        ]
+        results = scorer.score_all(
+            criteria,
+            vision_description="A multikill at 5s",
+            metadata=RenderMetadata(duration_seconds=30.0),
+        )
+
+        assert len(ask_many_calls) == 1
+        assert len(ask_many_calls[0]) == 3
+        assert len(results) == 3
+
+    def test_retry_only_failed_criteria(self, monkeypatch):
+        """On retry, only failed criteria are re-asked."""
+        from ai_video_editor.grokbot.quality_gate import BatchedJevScorer
+
+        ask_many_calls = []
+
+        def mock_ask_many(items):
+            from ai_video_editor.decisions.models import Answer
+
+            ask_many_calls.append(items)
+            return [Answer(value=True, probability=0.9, backend="jev") for _ in items]
+
+        monkeypatch.setattr("ai_video_editor.decisions.ask_many", mock_ask_many)
+
+        scorer = BatchedJevScorer()
+        criteria = [
+            QualityCriterion(id="c1", text="Shows a kill"),
+            QualityCriterion(id="c2", text="Good pacing"),
+        ]
+        already_passed = {"c1"}
+        scorer.score_all(
+            criteria,
+            vision_description="A multikill at 5s",
+            metadata=RenderMetadata(duration_seconds=30.0),
+            already_passed=already_passed,
+        )
+
+        assert len(ask_many_calls) == 1
+        assert len(ask_many_calls[0]) == 1
+        assert ask_many_calls[0][0][0].prompt  # Only c2 was asked
 
 
 class TestDefaultVisionClient:
@@ -504,6 +663,59 @@ class TestDefaultVisionClient:
 
         assert description == "A kill happens"
         assert mock_backend.call.called
+
+
+# --- Timing checks (pure functions, not Jev) ---
+
+
+class TestTimingChecks:
+    def test_check_hook_within_first_n_seconds(self):
+        """Hook timing is computed from metadata, not Jev."""
+        from ai_video_editor.grokbot.quality_gate import check_timing_criteria
+
+        meta = RenderMetadata(
+            duration_seconds=30.0,
+            clip_windows=[{"start_s": 0.0, "end_s": 5.0, "has_hook": True}],
+        )
+        result = check_timing_criteria("hook_within_3s", meta)
+        assert result is not None
+        assert result.verdict in (Verdict.PASS, Verdict.FAIL)
+
+    def test_check_dead_air_over_n_seconds(self):
+        """Dead air check is computed from metadata, not Jev."""
+        from ai_video_editor.grokbot.quality_gate import check_timing_criteria
+
+        meta = RenderMetadata(
+            duration_seconds=30.0,
+            clip_windows=[
+                {"start_s": 0.0, "end_s": 5.0},
+                {"start_s": 15.0, "end_s": 20.0},  # 10s gap = dead air
+            ],
+        )
+        result = check_timing_criteria("no_dead_air_over_5s", meta)
+        assert result is not None
+        assert result.verdict == Verdict.FAIL
+
+    def test_check_duration_limit(self):
+        """Duration limit is computed from metadata, not Jev."""
+        from ai_video_editor.grokbot.quality_gate import check_timing_criteria
+
+        meta = RenderMetadata(duration_seconds=120.0)
+        result = check_timing_criteria("duration_under_60s", meta)
+        assert result is not None
+        assert result.verdict == Verdict.FAIL
+
+        meta_ok = RenderMetadata(duration_seconds=45.0)
+        result_ok = check_timing_criteria("duration_under_60s", meta_ok)
+        assert result_ok.verdict == Verdict.PASS
+
+    def test_unknown_timing_criterion_returns_none(self):
+        """Non-timing criteria return None (should go to Jev)."""
+        from ai_video_editor.grokbot.quality_gate import check_timing_criteria
+
+        meta = RenderMetadata(duration_seconds=30.0)
+        result = check_timing_criteria("shows_a_kill", meta)
+        assert result is None
 
 
 # --- QualityCriterion model tests ---
