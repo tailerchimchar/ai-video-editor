@@ -86,22 +86,33 @@ class JevScores:
 
 @dataclass
 class CascadeStats:
-    """Observability counters for one cascade batch."""
+    """Observability counters for one cascade batch.
+
+    Metrics:
+      - escalated_unsure: candidates Jev couldn't decide (go to Haiku for full ranking)
+      - timing_refine: confident keeps sent to Haiku only for in/out timing
+      - haiku_candidates_saved: confidently rejected candidates that never reach Haiku
+      - haiku_call_skipped: 1 if nothing needed Haiku in this batch, else 0
+      - escalation_rate: escalated_unsure / total_candidates (true uncertainty rate)
+    """
 
     total_candidates: int = 0
     jev_decided: int = 0
     jev_kept: int = 0
     jev_rejected: int = 0
-    escalated_to_haiku: int = 0
-    haiku_calls_skipped: int = 0
+    escalated_unsure: int = 0
+    timing_refine: int = 0
+    haiku_candidates_saved: int = 0
+    haiku_call_skipped: int = 0
     jev_latency_ms: float = 0.0
     haiku_latency_ms: float = 0.0
 
     @property
     def escalation_rate(self) -> float:
+        """True uncertainty rate: unsure candidates / total candidates."""
         if self.total_candidates == 0:
             return 0.0
-        return self.escalated_to_haiku / self.total_candidates
+        return self.escalated_unsure / self.total_candidates
 
 
 class JevScorer(Protocol):
@@ -397,10 +408,12 @@ def cascade_rank(
         else:
             unsure.append(candidate)
 
-    stats.escalated_to_haiku = len(unsure) + len(confident_keeps)
-    stats.haiku_calls_skipped = stats.jev_rejected
+    stats.escalated_unsure = len(unsure)
+    stats.timing_refine = len(confident_keeps)
+    stats.haiku_candidates_saved = stats.jev_rejected
 
     haiku_candidates = unsure + [c for c, _ in confident_keeps]
+    stats.haiku_call_skipped = 1 if not haiku_candidates else 0
 
     haiku_results: list[RankedCandidate] = []
     if haiku_candidates:
@@ -456,17 +469,32 @@ def cascade_rank(
 
     _log.info(
         "cascade_rank: candidates=%d jev_decided=%d (kept=%d rejected=%d) "
-        "escalated_to_haiku=%d escalation_rate=%.2f haiku_calls_skipped=%d "
+        "escalated_unsure=%d timing_refine=%d escalation_rate=%.2f "
+        "haiku_candidates_saved=%d haiku_call_skipped=%d "
         "jev_latency_ms=%.0f haiku_latency_ms=%.0f",
         stats.total_candidates,
         stats.jev_decided,
         stats.jev_kept,
         stats.jev_rejected,
-        stats.escalated_to_haiku,
+        stats.escalated_unsure,
+        stats.timing_refine,
         stats.escalation_rate,
-        stats.haiku_calls_skipped,
+        stats.haiku_candidates_saved,
+        stats.haiku_call_skipped,
         stats.jev_latency_ms,
         stats.haiku_latency_ms,
+    )
+
+    cost_log.set_cascade_metrics(
+        total_candidates=stats.total_candidates,
+        jev_decided=stats.jev_decided,
+        jev_kept=stats.jev_kept,
+        jev_rejected=stats.jev_rejected,
+        escalated_unsure=stats.escalated_unsure,
+        timing_refine=stats.timing_refine,
+        escalation_rate=stats.escalation_rate,
+        haiku_candidates_saved=stats.haiku_candidates_saved,
+        haiku_call_skipped=stats.haiku_call_skipped,
     )
 
     cost_log.emit()

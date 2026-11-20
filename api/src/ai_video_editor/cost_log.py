@@ -58,6 +58,34 @@ class ModelCall:
 
 
 @dataclass
+class CascadeMetrics:
+    """Cascade-specific metrics for the cost record."""
+
+    total_candidates: int = 0
+    jev_decided: int = 0
+    jev_kept: int = 0
+    jev_rejected: int = 0
+    escalated_unsure: int = 0
+    timing_refine: int = 0
+    escalation_rate: float = 0.0
+    haiku_candidates_saved: int = 0
+    haiku_call_skipped: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "total_candidates": self.total_candidates,
+            "jev_decided": self.jev_decided,
+            "jev_kept": self.jev_kept,
+            "jev_rejected": self.jev_rejected,
+            "escalated_unsure": self.escalated_unsure,
+            "timing_refine": self.timing_refine,
+            "escalation_rate": round(self.escalation_rate, 4),
+            "haiku_candidates_saved": self.haiku_candidates_saved,
+            "haiku_call_skipped": self.haiku_call_skipped,
+        }
+
+
+@dataclass
 class CostLog:
     """Per-video/run cost record. Accumulates model calls and emits a
     structured log line when done."""
@@ -65,6 +93,7 @@ class CostLog:
     video_id: str | None = None
     run_id: str | None = None
     calls: list[ModelCall] = field(default_factory=list)
+    cascade_metrics: CascadeMetrics | None = None
 
     def record_call(
         self,
@@ -109,9 +138,35 @@ class CostLog:
     def total_frames(self) -> int:
         return sum(c.frame_count or 0 for c in self.calls)
 
+    def set_cascade_metrics(
+        self,
+        *,
+        total_candidates: int,
+        jev_decided: int,
+        jev_kept: int,
+        jev_rejected: int,
+        escalated_unsure: int,
+        timing_refine: int,
+        escalation_rate: float,
+        haiku_candidates_saved: int,
+        haiku_call_skipped: int,
+    ) -> None:
+        """Set cascade-specific metrics for the cost record."""
+        self.cascade_metrics = CascadeMetrics(
+            total_candidates=total_candidates,
+            jev_decided=jev_decided,
+            jev_kept=jev_kept,
+            jev_rejected=jev_rejected,
+            escalated_unsure=escalated_unsure,
+            timing_refine=timing_refine,
+            escalation_rate=escalation_rate,
+            haiku_candidates_saved=haiku_candidates_saved,
+            haiku_call_skipped=haiku_call_skipped,
+        )
+
     def to_dict(self) -> dict[str, Any]:
         """Return a dict suitable for attaching to run results."""
-        return {
+        result: dict[str, Any] = {
             "video_id": self.video_id,
             "run_id": self.run_id,
             "calls": [c.to_dict() for c in self.calls],
@@ -123,6 +178,9 @@ class CostLog:
                 "total_cost_dollars": self.total_cost_dollars,
             },
         }
+        if self.cascade_metrics is not None:
+            result["cascade"] = self.cascade_metrics.to_dict()
+        return result
 
     def emit(self) -> None:
         """Emit a structured log line with the cost record."""

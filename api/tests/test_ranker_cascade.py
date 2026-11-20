@@ -209,7 +209,9 @@ class TestConfidenceRouting:
 
         assert result.stats.jev_rejected == 1
         assert result.stats.jev_kept == 1
-        assert result.stats.haiku_calls_skipped == 1
+        assert result.stats.haiku_candidates_saved == 1
+        assert result.stats.timing_refine == 1
+        assert result.stats.escalated_unsure == 0
         assert len(ranker.called_with) == 1
         assert ranker.called_with[0]["id"] == "c2"
         assert len(result.rankings) == 1
@@ -229,7 +231,7 @@ class TestConfidenceRouting:
         )
 
         assert result.stats.jev_decided == 0
-        assert result.stats.escalated_to_haiku == 1
+        assert result.stats.escalated_unsure == 1
         assert len(ranker.called_with) == 1
         assert ranker.called_with[0]["id"] == "c1"
 
@@ -262,8 +264,10 @@ class TestConfidenceRouting:
         assert result.stats.total_candidates == 4
         assert result.stats.jev_kept == 2
         assert result.stats.jev_rejected == 1
-        assert result.stats.escalated_to_haiku == 3
-        assert result.stats.haiku_calls_skipped == 1
+        assert result.stats.escalated_unsure == 1
+        assert result.stats.timing_refine == 2
+        assert result.stats.haiku_candidates_saved == 1
+        assert result.stats.escalation_rate == 0.25
         haiku_ids = {c["id"] for c in ranker.called_with}
         assert haiku_ids == {"keep1", "unsure1", "keep2"}
         assert "reject1" not in haiku_ids
@@ -285,7 +289,7 @@ class TestFailSafe:
         )
 
         assert result.stats.jev_decided == 0
-        assert result.stats.escalated_to_haiku == 2
+        assert result.stats.escalated_unsure == 2
         assert len(ranker.called_with) == 2
 
     def test_rules_fallback_marks_unsure(self):
@@ -301,7 +305,7 @@ class TestFailSafe:
         )
 
         assert result.stats.jev_decided == 0
-        assert result.stats.escalated_to_haiku == 1
+        assert result.stats.escalated_unsure == 1
         assert len(ranker.called_with) == 1
 
     def test_thin_signals_audio_peak_always_unsure(self):
@@ -317,7 +321,7 @@ class TestFailSafe:
         )
 
         assert result.stats.jev_decided == 0
-        assert result.stats.escalated_to_haiku == 1
+        assert result.stats.escalated_unsure == 1
 
     def test_thin_signals_transcript_keyword_always_unsure(self):
         candidates = [_candidate("c1", source="transcript_keyword", event_type="funny_callout")]
@@ -333,7 +337,7 @@ class TestFailSafe:
 
         assert result.stats.jev_decided == 0
         assert result.stats.jev_rejected == 0
-        assert result.stats.escalated_to_haiku == 1
+        assert result.stats.escalated_unsure == 1
 
     def test_promoted_audio_peak_can_be_confident(self):
         """Audio peaks promoted to a visible event type can be confidently decided."""
@@ -372,7 +376,7 @@ class TestThresholds:
         )
 
         assert result.stats.jev_decided == 0
-        assert result.stats.escalated_to_haiku == 1
+        assert result.stats.escalated_unsure == 1
 
     def test_below_reject_threshold_is_unsure(self):
         candidates = [_candidate("c1")]
@@ -388,7 +392,7 @@ class TestThresholds:
         )
 
         assert result.stats.jev_decided == 0
-        assert result.stats.escalated_to_haiku == 1
+        assert result.stats.escalated_unsure == 1
 
     def test_custom_thresholds_are_respected(self):
         candidates = [_candidate("c1"), _candidate("c2")]
@@ -532,8 +536,10 @@ class TestIntegration:
         assert "unsure" in haiku_ids
         assert "audio_only" in haiku_ids
 
-        assert result.stats.haiku_calls_skipped == 1
-        assert result.stats.escalation_rate == 0.75
+        assert result.stats.haiku_candidates_saved == 1
+        assert result.stats.escalated_unsure == 2
+        assert result.stats.timing_refine == 1
+        assert result.stats.escalation_rate == 0.5
 
     def test_empty_candidates_returns_empty_result(self):
         result = cascade_rank("league", [], jev_scorer=FakeJevScorer({}))
@@ -555,8 +561,47 @@ class TestIntegration:
         )
 
         assert result.stats.jev_rejected == 3
-        assert result.stats.escalated_to_haiku == 7
+        assert result.stats.haiku_candidates_saved == 3
+        assert result.stats.escalated_unsure == 7
         assert result.stats.escalation_rate == 0.7
+
+    def test_haiku_call_skipped_when_all_rejected(self):
+        """When all candidates are confidently rejected, haiku_call_skipped=1."""
+        candidates = [_candidate("c1"), _candidate("c2")]
+        scorer = FakeJevScorer(
+            {
+                "c1": _confident_reject(0.95),
+                "c2": _confident_reject(0.95),
+            }
+        )
+        ranker = FakeHaikuRanker()
+
+        result = cascade_rank(
+            "league",
+            candidates,
+            jev_scorer=scorer,
+            haiku_ranker=ranker,
+            reject_threshold=0.8,
+        )
+
+        assert result.stats.haiku_call_skipped == 1
+        assert len(ranker.called_with) == 0
+
+    def test_haiku_call_not_skipped_when_some_unsure(self):
+        """When some candidates need Haiku, haiku_call_skipped=0."""
+        candidates = [_candidate("c1")]
+        scorer = FakeJevScorer({"c1": _unsure()})
+        ranker = FakeHaikuRanker()
+
+        result = cascade_rank(
+            "league",
+            candidates,
+            jev_scorer=scorer,
+            haiku_ranker=ranker,
+        )
+
+        assert result.stats.haiku_call_skipped == 0
+        assert len(ranker.called_with) == 1
 
 
 class TestCostLogging:
@@ -617,6 +662,44 @@ class TestCostLogging:
         assert result.cost_log.video_id == "test-video"
         assert result.cost_log.run_id == "test-run"
         assert len(result.cost_log.calls) == 2
+
+    def test_cascade_metrics_in_cost_log(self):
+        """Cost log should include cascade metrics from stats."""
+        candidates = [
+            _candidate("keep1", event_type="ace"),
+            _candidate("reject1"),
+            _candidate("unsure1"),
+        ]
+        scorer = FakeJevScorer(
+            {
+                "keep1": _confident_keep(0.95),
+                "reject1": _confident_reject(0.92),
+                "unsure1": _unsure(),
+            }
+        )
+        ranker = FakeHaikuRanker()
+
+        result = cascade_rank(
+            "league",
+            candidates,
+            jev_scorer=scorer,
+            haiku_ranker=ranker,
+            keep_threshold=0.8,
+            reject_threshold=0.8,
+        )
+
+        d = result.cost_log.to_dict()
+        assert "cascade" in d
+        cascade = d["cascade"]
+        assert cascade["total_candidates"] == 3
+        assert cascade["jev_decided"] == 2
+        assert cascade["jev_kept"] == 1
+        assert cascade["jev_rejected"] == 1
+        assert cascade["escalated_unsure"] == 1
+        assert cascade["timing_refine"] == 1
+        assert cascade["haiku_candidates_saved"] == 1
+        assert cascade["haiku_call_skipped"] == 0
+        assert cascade["escalation_rate"] == round(1 / 3, 4)
 
     def test_cost_log_merge(self):
         log1 = CostLog()
