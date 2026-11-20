@@ -7,6 +7,7 @@ are dropped and counted in `dropped` (surfaced by the heartbeat).
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from collections import deque
 from collections.abc import Callable
@@ -34,24 +35,36 @@ class WebhookSink:
         self.url = url
         self.key = key
         self.max_per_hour = max_per_hour
-        self.client = client or httpx.Client(timeout=settings.grokbot_timeout_seconds)
+        self.client = client or httpx.Client(
+            timeout=httpx.Timeout(settings.grokbot_timeout_seconds)
+        )
         self.clock = clock
         self.dropped = 0
+        self.failed = 0
+        self._lock = threading.Lock()
         self._sent: deque[float] = deque()
 
     def send(self, event: Event) -> None:
-        now = self.clock()
-        while self._sent and now - self._sent[0] >= _WINDOW_SECONDS:
-            self._sent.popleft()
-        if len(self._sent) >= self.max_per_hour:
-            self.dropped += 1
-            return
-        self._sent.append(now)
+        with self._lock:
+            now = self.clock()
+            while self._sent and now - self._sent[0] >= _WINDOW_SECONDS:
+                self._sent.popleft()
+            if len(self._sent) >= self.max_per_hour:
+                self.dropped += 1
+                return
+            self._sent.append(now)
         try:
-            self.client.post(
+            response = self.client.post(
                 self.url,
                 json=event.model_dump(),
                 headers={"Authorization": f"Bearer {self.key}"},
             )
         except Exception as exc:
+            with self._lock:
+                self.failed += 1
             logger.warning("webhook send failed: %s", exc)
+            return
+        if response.status_code >= 300:
+            with self._lock:
+                self.failed += 1
+            logger.warning("webhook returned %s: %s", response.status_code, response.text[:200])

@@ -109,3 +109,50 @@ def test_sink_registry_adds_webhook_only_when_url_and_key_set(monkeypatch):
     monkeypatch.setattr(settings, "grokbot_webhook_key", "k")
     assert isinstance(sinks.SINKS["webhook"](), WebhookSink)
     assert sinks.SINKS["log"]() is not None
+
+
+def test_webhook_non_2xx_is_logged_and_counted(caplog):
+    sink = _sink(lambda request: httpx.Response(401, text="bad key " + "x" * 300))
+    with caplog.at_level("WARNING"):
+        assert sink.send(Event(event="x")) is None
+    assert sink.failed == 1
+    assert "401" in caplog.text
+    assert "bad key" in caplog.text
+    assert "Bearer" not in caplog.text
+    assert "x" * 250 not in caplog.text
+
+
+def test_webhook_client_has_overall_timeout(monkeypatch):
+    monkeypatch.setattr(settings, "grokbot_timeout_seconds", 7.0)
+    t = WebhookSink("https://x", "k", max_per_hour=1).client.timeout
+    assert (t.connect, t.read, t.write, t.pool) == (7.0, 7.0, 7.0, 7.0)
+
+
+def test_webhook_concurrent_sends_respect_cap():
+    import threading
+
+    sink = _sink(lambda request: httpx.Response(200), max_per_hour=5, clock=lambda: 1.0)
+    threads = [threading.Thread(target=sink.send, args=(Event(event="x"),)) for _ in range(40)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(sink._sent) == 5
+    assert sink.dropped == 35
+
+
+def test_webhook_factory_returns_single_instance_under_threads(monkeypatch):
+    import threading
+
+    monkeypatch.setattr(sinks, "_webhook", None)
+    monkeypatch.setattr(settings, "grokbot_webhook_url", "https://x")
+    monkeypatch.setattr(settings, "grokbot_webhook_key", "k")
+    got = []
+    threads = [
+        threading.Thread(target=lambda: got.append(sinks.SINKS["webhook"]())) for _ in range(20)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len({id(s) for s in got}) == 1

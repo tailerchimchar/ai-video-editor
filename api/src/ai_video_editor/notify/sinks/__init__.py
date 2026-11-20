@@ -6,6 +6,7 @@ is unconfigured, so an unconfigured sink is simply skipped.
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable
 from typing import Protocol
 
@@ -20,6 +21,7 @@ class Sink(Protocol):
 
 
 _webhook: WebhookSink | None = None
+_webhook_lock = threading.Lock()
 
 
 def _log() -> Sink | None:
@@ -32,9 +34,10 @@ def _webhook_factory() -> Sink | None:
     url, key = settings.grokbot_webhook_url, settings.grokbot_webhook_key
     if not url or not key:
         return None
-    if _webhook is None or (_webhook.url, _webhook.key) != (url, key):
-        _webhook = WebhookSink(url, key, max_per_hour=settings.grokbot_max_events_per_hour)
-    return _webhook
+    with _webhook_lock:
+        if _webhook is None or (_webhook.url, _webhook.key) != (url, key):
+            _webhook = WebhookSink(url, key, max_per_hour=settings.grokbot_max_events_per_hour)
+        return _webhook
 
 
 SINKS: dict[str, Callable[[], Sink | None]] = {
