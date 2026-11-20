@@ -89,6 +89,9 @@ class _RankerOutput(BaseModel):
     results: list[RankedCandidate]
 
 
+_last_usage: dict[str, dict[str, int]] = {}
+
+
 @observe(name="rank-highlight-candidates", as_type="generation")
 def rank_candidates(game: str | None, candidates: list[dict]) -> list[RankedCandidate]:
     """Rank candidates for one video. `candidates` are highlight_candidates
@@ -124,6 +127,11 @@ def rank_candidates(game: str | None, candidates: list[dict]) -> list[RankedCand
         output_format=_RankerOutput,
     )
     results = response.parsed_output.results
+
+    _last_usage["rank"] = {
+        "input_tokens": response.usage.input_tokens,
+        "output_tokens": response.usage.output_tokens,
+    }
 
     record_generation(
         response,
