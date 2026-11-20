@@ -59,6 +59,14 @@ class Settings(BaseSettings):
     # include-probability is below this.
     prefilter_min_probability: float = 0.35
 
+    # Grok Bot team: dedicated Google Drive folder the PC uploads to and the
+    # cloud bots read. Inert until all four are set (run `drive-auth` once).
+    grokbot_drive_client_id: str = ""
+    grokbot_drive_client_secret: str = ""
+    grokbot_drive_refresh_token: str = ""
+    grokbot_drive_folder_id: str = ""
+    grokbot_drive_preview_retention_days: int = 7
+
     # Riot API candidate source (League). Free dev key from
     # developer.riotgames.com. Source stays inert until all three are set.
     riot_api_key: str = ""

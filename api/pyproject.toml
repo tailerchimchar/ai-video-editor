@@ -27,6 +27,7 @@ dependencies = [
 [project.scripts]
 dev = "ai_video_editor.cli:dev"
 dev-reload = "ai_video_editor.cli:dev_reload"
+drive-auth = "ai_video_editor.grokbot.drive_auth:main"
 
 [dependency-groups]
 dev = [
