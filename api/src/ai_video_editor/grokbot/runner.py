@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 from .. import editing, notify
 from ..config import settings
+from ..edit_plan import EditPlan, plan_hash
 from ..notify import Event
 from ..vlm.watch_montage import watch_montage
 from .drive import Uploader, uploader_from_settings
@@ -59,6 +60,7 @@ class ApiClient(Protocol):
     def asset_path(self, asset_id: str) -> tuple[str, float]: ...
     def compilation_output(self, compilation_id: str) -> str | None: ...
     def plan_version(self, compilation_id: str) -> str: ...
+    def plan_hash(self, compilation_id: str) -> str | None: ...
     def apply_plan(self, compilation_id: str, plan: dict) -> dict: ...
     def record_correction(self, body: dict) -> None: ...
     def recent_corrections(self, game: str) -> list[dict]: ...
@@ -91,10 +93,16 @@ class HttpApiClient:
     def _comp_url(self, compilation_id: str) -> str:
         return f"{self._base}/api/v1/compilations/{urllib.parse.quote(compilation_id, safe='')}"
 
-    def plan_version(self, compilation_id: str) -> str:
+    def _plan_state(self, compilation_id: str) -> dict:
         r = self._client.get(f"{self._comp_url(compilation_id)}/plan/version")
         self._check(r)
-        return str(r.json()["version"])
+        return r.json()
+
+    def plan_version(self, compilation_id: str) -> str:
+        return str(self._plan_state(compilation_id)["version"])
+
+    def plan_hash(self, compilation_id: str) -> str | None:
+        return self._plan_state(compilation_id).get("plan_hash")
 
     def apply_plan(self, compilation_id: str, plan: dict) -> dict:
         # Rendering can take minutes; the default 30s timeout is far too short.
@@ -143,7 +151,7 @@ def _inside(path: str, *roots: Path) -> bool:
     return any(p.is_relative_to(Path(r).resolve()) for r in roots)
 
 
-_PATH_RE = re.compile(r"[A-Za-z]:[\\/][^\s\"']+|/[^\s\"']+")
+_PATH_RE = re.compile(r"[A-Za-z]:[\\/][^\"'\r\n]+|/[^\"'\r\n]+")
 
 
 def _safe_detail(detail, limit: int = 500) -> str:
@@ -318,24 +326,31 @@ class Runner:
         try:
             self._run_plan(filename, item)
         except ApiError as e:
-            self._reject(
-                filename, item.id, item.kind, f"api {e.status}: {_safe_detail(e.detail)}"
-            )
+            self._reject(filename, item.id, item.kind, f"api {e.status}: {_safe_detail(e.detail)}")
         except httpx.HTTPError as e:  # transient: leave unmarked, retry next tick
             logger.warning("plan %s hit a transient API error: %s", item.id, e)
 
     def _run_plan(self, filename: str, item: EditPlanItem) -> None:
         current = self.api.plan_version(item.compilation_id)
+        resumed = False
         if current != item.base_version:
-            self._reject(
-                filename,
-                item.id,
-                item.kind,
-                f"base_version {item.base_version} != current {current}",
-                current=current,
-            )
-            return
-        self.api.apply_plan(item.compilation_id, item.plan.model_dump(mode="json"))
+            # A timed-out POST may have been applied server-side: the plan endpoint is
+            # idempotent by plan hash, so the same hash means "already applied".
+            plan_dict = item.plan.model_dump(mode="json")
+            if self.api.plan_hash(item.compilation_id) != plan_hash(
+                EditPlan.model_validate(plan_dict)
+            ):
+                self._reject(
+                    filename,
+                    item.id,
+                    item.kind,
+                    f"base_version {item.base_version} != current {current}",
+                    current=current,
+                )
+                return
+            resumed = True
+        else:
+            self.api.apply_plan(item.compilation_id, item.plan.model_dump(mode="json"))
         output = self.api.compilation_output(item.compilation_id)
         if not output or not Path(output).is_file():
             self._reject(filename, item.id, item.kind, "plan applied but no rendered output found")
@@ -363,6 +378,8 @@ class Runner:
             ),
             "copy": item.copy.model_dump(mode="json") if item.copy else None,
         }
+        if resumed:
+            payload["resumed"] = True
         if c is None:
             payload["critic_error"] = _safe_detail(result.error or "critic returned nothing")
         self._send("render.done", payload)
@@ -413,9 +430,7 @@ class Runner:
                 }
             )
         except ApiError as e:
-            self._reject(
-                filename, item.id, item.kind, f"api {e.status}: {_safe_detail(e.detail)}"
-            )
+            self._reject(filename, item.id, item.kind, f"api {e.status}: {_safe_detail(e.detail)}")
             return
         except httpx.HTTPError as e:  # transient: stays "applying", re-checked next tick
             logger.warning("verdict %s hit a transient API error: %s", item.id, e)

@@ -10,6 +10,7 @@ from ..edit_plan import (
     PlanNotExecutableError,
     PlanProgress,
     execute_plan,
+    load_progress,
     validate_plan,
 )
 from .edits import _load_compilation_folder, _update_compilation_output
@@ -52,4 +53,8 @@ async def apply_plan(compilation_id: str, plan: EditPlan):
 async def plan_version(compilation_id: str) -> dict:
     """The compilation's current journal version, for optimistic-concurrency checks."""
     folder = await _load_compilation_folder(compilation_id)
-    return {"version": EditsPlanExecutor(folder, compilation_id).current_version(compilation_id)}
+    progress = load_progress(folder)
+    return {
+        "version": EditsPlanExecutor(folder, compilation_id).current_version(compilation_id),
+        "plan_hash": progress.plan_hash if progress else None,
+    }

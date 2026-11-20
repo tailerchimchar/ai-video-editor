@@ -1,11 +1,22 @@
-from test_edit_plan import compilation  # noqa: F401  (fixture)
+from test_edit_plan import _http_plan, compilation  # noqa: F401  (fixture)
+
+from ai_video_editor.edit_plan import EditPlan, plan_hash
 
 
 def test_plan_version_endpoint(client, compilation):  # noqa: F811
     comp_id, _folder = compilation
     r = client.get(f"/api/v1/compilations/{comp_id}/plan/version")
     assert r.status_code == 200
-    assert r.json() == {"version": "1"}
+    assert r.json() == {"version": "1", "plan_hash": None}
+
+
+def test_plan_version_returns_hash_after_plan_runs(client, compilation):  # noqa: F811
+    comp_id, _folder = compilation
+    plan = _http_plan()
+    assert client.post(f"/api/v1/compilations/{comp_id}/plan", json=plan).status_code == 200
+    body = client.get(f"/api/v1/compilations/{comp_id}/plan/version").json()
+    assert body["plan_hash"] == plan_hash(EditPlan.model_validate(plan))
+    assert body["version"] != "1"
 
 
 def test_plan_version_endpoint_404_for_unknown(client):

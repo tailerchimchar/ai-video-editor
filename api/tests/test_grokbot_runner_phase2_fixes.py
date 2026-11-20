@@ -84,6 +84,46 @@ def test_rejection_detail_is_truncated_and_paths_stripped(h):  # noqa: F811
     assert "bob" not in reason and "<path>" in reason
 
 
+def _hash_of(item):
+    from ai_video_editor.edit_plan import EditPlan, plan_hash
+
+    return plan_hash(EditPlan.model_validate(item["plan"]))
+
+
+def test_stale_but_same_hash_resumes_without_applying(h):  # noqa: F811
+    it = plan_item()
+    h.api.version = "9"
+    h.api.hash = _hash_of(it)
+    h.repo.add(it)
+    assert h.runner.tick() == ["applied"]
+    assert h.api.applied == []
+    ev = next(e for e in h.events if e.event == "render.done")
+    assert ev.payload["resumed"] is True
+
+
+def test_stale_different_hash_still_rejects(h):  # noqa: F811
+    h.api.version = "9"
+    h.api.hash = "other"
+    h.repo.add(plan_item())
+    assert h.runner.tick() == ["rejected"]
+    assert h.api.applied == []
+
+
+def test_applying_is_not_seen(h):  # noqa: F811
+    h.runner.ledger.mark("y", "verdict", "applying")
+    assert not h.runner.ledger.seen("y")
+    h.runner.ledger.mark("z", "verdict", "applied")
+    assert h.runner.ledger.seen("z")
+
+
+def test_path_with_spaces_is_scrubbed(h):  # noqa: F811
+    h.api.apply_error = ApiError(409, "failed on C:\\My Videos\\clip one.mp4")
+    h.repo.add(plan_item())
+    h.runner.tick()
+    reason = rejected(h).payload["reason"]
+    assert "Videos" not in reason and "clip" not in reason
+
+
 def test_final_ledger_outcomes_are_immutable(h):  # noqa: F811
     led = h.runner.ledger
     led.mark("x", "verdict", "applied")
