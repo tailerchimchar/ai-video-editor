@@ -95,19 +95,19 @@ class Settings(BaseSettings):
 
     # Quality gate: optional post-render check using VLM + Jev scoring.
     # Off by default to preserve existing render flow unchanged.
-    quality_gate_enabled: bool = False
+    grokbot_quality_gate_enabled: bool = False
     # Max frames sampled per render for the vision pass (at most 6).
-    quality_gate_max_frames: int = 6
+    grokbot_quality_gate_max_frames: int = 6
     # Max pixel width for sampled frames (512 keeps token cost low).
-    quality_gate_frame_max_width: int = 512
+    grokbot_quality_gate_frame_max_width: int = 512
     # Confidence threshold: only confident fails trigger revisions.
-    quality_gate_confidence_threshold: float = 0.7
+    grokbot_quality_gate_confidence_threshold: float = 0.7
     # Max retries per criterion before routing to owner approval.
-    quality_gate_max_retries: int = 2
+    grokbot_quality_gate_max_retries: int = 2
     # Daily cap on quality gate VLM calls (0 = unlimited). Resets at UTC midnight.
-    quality_gate_daily_cap: int = 0
+    grokbot_quality_gate_daily_cap: int = 0
     # Timeout for the entire quality gate step (vision + Jev scoring).
-    quality_gate_timeout_seconds: float = 60.0
+    grokbot_quality_gate_timeout_seconds: float = 60.0
 
     # Riot API candidate source (League). Free dev key from
     # developer.riotgames.com. Source stays inert until all three are set.

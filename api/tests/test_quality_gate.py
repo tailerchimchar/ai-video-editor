@@ -173,7 +173,7 @@ class TestRunQualityGate:
     def test_gate_disabled_skips(self, test_video, scratch_dir, monkeypatch):
         from ai_video_editor import config
 
-        monkeypatch.setattr(config.settings, "quality_gate_enabled", False)
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_enabled", False)
 
         result, _revisions = run_quality_gate(
             test_video,
@@ -188,7 +188,7 @@ class TestRunQualityGate:
     def test_all_criteria_pass(self, test_video, scratch_dir, monkeypatch):
         from ai_video_editor import config
 
-        monkeypatch.setattr(config.settings, "quality_gate_enabled", True)
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_enabled", True)
 
         fake_vision = FakeVisionClient(description="Kill at 5s, good quality")
         fake_jev = FakeJevScorer()
@@ -217,9 +217,9 @@ class TestRunQualityGate:
     def test_confident_fail_emits_revision(self, test_video, scratch_dir, monkeypatch):
         from ai_video_editor import config
 
-        monkeypatch.setattr(config.settings, "quality_gate_enabled", True)
-        monkeypatch.setattr(config.settings, "quality_gate_confidence_threshold", 0.7)
-        monkeypatch.setattr(config.settings, "quality_gate_max_retries", 2)
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_enabled", True)
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_confidence_threshold", 0.7)
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_max_retries", 2)
 
         fake_vision = FakeVisionClient(description="Scoreboard only, no action")
         fake_jev = FakeJevScorer(
@@ -256,8 +256,8 @@ class TestRunQualityGate:
     def test_low_confidence_fail_does_not_emit_revision(self, test_video, scratch_dir, monkeypatch):
         from ai_video_editor import config
 
-        monkeypatch.setattr(config.settings, "quality_gate_enabled", True)
-        monkeypatch.setattr(config.settings, "quality_gate_confidence_threshold", 0.7)
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_enabled", True)
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_confidence_threshold", 0.7)
 
         fake_vision = FakeVisionClient()
         fake_jev = FakeJevScorer(
@@ -292,9 +292,9 @@ class TestRunQualityGate:
     def test_retry_cap_exhausted(self, test_video, scratch_dir, monkeypatch):
         from ai_video_editor import config
 
-        monkeypatch.setattr(config.settings, "quality_gate_enabled", True)
-        monkeypatch.setattr(config.settings, "quality_gate_confidence_threshold", 0.7)
-        monkeypatch.setattr(config.settings, "quality_gate_max_retries", 2)
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_enabled", True)
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_confidence_threshold", 0.7)
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_max_retries", 2)
 
         fake_vision = FakeVisionClient()
         fake_jev = FakeJevScorer(
@@ -333,7 +333,7 @@ class TestAudioLedCriteria:
     def test_audio_led_uses_metadata_only(self, test_video, scratch_dir, monkeypatch):
         from ai_video_editor import config
 
-        monkeypatch.setattr(config.settings, "quality_gate_enabled", True)
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_enabled", True)
 
         fake_vision = FakeVisionClient(description="Boring scoreboard")
         calls_recorded = []
@@ -387,7 +387,7 @@ class TestVisionError:
     def test_vision_error_skips_gate(self, test_video, scratch_dir, monkeypatch):
         from ai_video_editor import config
 
-        monkeypatch.setattr(config.settings, "quality_gate_enabled", True)
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_enabled", True)
 
         class FailingVisionClient:
             def describe_video(self, frames, *, system_prompt, user_prompt):
@@ -417,7 +417,7 @@ class TestNoFramesExtracted:
     def test_no_frames_skips_gate(self, test_video, scratch_dir, monkeypatch):
         from ai_video_editor import config
 
-        monkeypatch.setattr(config.settings, "quality_gate_enabled", True)
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_enabled", True)
 
         with patch("ai_video_editor.grokbot.quality_gate._sample_frames", return_value=[]):
             result, _revisions = run_quality_gate(
@@ -441,7 +441,7 @@ class TestBoxRenderIntegration:
         from ai_video_editor import config
         from ai_video_editor.grokbot.box_render import RenderOutput, RenderResult
 
-        monkeypatch.setattr(config.settings, "quality_gate_enabled", True)
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_enabled", True)
 
         result = RenderResult(
             ok=True,
