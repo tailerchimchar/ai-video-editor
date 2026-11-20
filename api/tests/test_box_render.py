@@ -397,6 +397,58 @@ class TestRunBoxRenderE2E:
             assert len(failed) == 1
             assert failed[0].payload["stage"] == "download"
 
+    def test_uses_injected_storage_for_download_and_upload(self, tmp_path, test_clip):
+        """Test that run_box_render uses injected storage backend."""
+        events: list = []
+        uploader = FakeUploader()
+
+        scratch = tmp_path / "scratch"
+        scratch.mkdir()
+        local_clip = scratch / "clip_000.mp4"
+        shutil.copy(test_clip, local_clip)
+
+        lock = RenderLock(str(tmp_path / "test.lock"))
+
+        fake_storage = MagicMock()
+        fake_storage.scratch_dir = scratch
+        fake_storage.download_clip.return_value = local_clip
+        fake_storage.upload_file.side_effect = [
+            "injected-9x16-id",
+            "injected-16x9-id",
+        ]
+
+        render_input = RenderInput(
+            edit_plan_id="plan-injected",
+            edit_plan_version="1",
+            asset_id="asset-injected",
+            clips=[{"drive_id": "d1", "clip_ref": "1"}],
+            trims=[{"clip_id": "1", "start_s": 0, "end_s": 1}],
+            concat_order=["1"],
+            game="league",
+        )
+
+        result = run_box_render(
+            uploader,
+            render_input,
+            emit_fn=lambda e: events.append(e),
+            lock=lock,
+            storage=fake_storage,
+        )
+
+        assert result.ok
+        assert len(result.outputs) == 2
+
+        fake_storage.download_clip.assert_called_once_with("d1", "clip_000.mp4")
+
+        assert fake_storage.upload_file.call_count == 2
+        upload_calls = fake_storage.upload_file.call_args_list
+        upload_names = [call[0][1] for call in upload_calls]
+        assert "plan-injected_9x16.mp4" in upload_names
+        assert "plan-injected_16x9.mp4" in upload_names
+
+        assert result.outputs[0].drive_id == "injected-9x16-id"
+        assert result.outputs[1].drive_id == "injected-16x9-id"
+
 
 # --- Queue item tests ---
 

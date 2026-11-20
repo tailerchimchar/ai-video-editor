@@ -66,6 +66,29 @@ class StorageBackend(Protocol):
         ...
 
 
+@runtime_checkable
+class BoxRenderStorage(Protocol):
+    """Protocol for box render storage operations.
+
+    This protocol defines the specific operations needed by the box
+    render job: downloading clips from Drive, uploading outputs, and
+    accessing the scratch directory. DriveStorage implements this.
+    """
+
+    @property
+    def scratch_dir(self) -> Path:
+        """Local scratch directory for downloaded clips and render outputs."""
+        ...
+
+    def download_clip(self, drive_id: str, local_name: str) -> Path:
+        """Download a clip from Drive to scratch. Returns the local path."""
+        ...
+
+    def upload_file(self, local_path: Path, name: str, subfolder: str) -> str:
+        """Upload a local file to Drive. Returns the Drive file ID."""
+        ...
+
+
 class LocalStorage:
     """Filesystem-backed storage (the default on the PC).
 
