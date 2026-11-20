@@ -42,14 +42,20 @@ class GitQueueRepo:
         )
 
     def pull(self) -> None:
-        r = self._g("pull", "--ff-only")
+        # Rebase: the runner pushes rejected/ while bots push queue/, so
+        # histories diverge in normal operation.
+        r = self._g("pull", "--rebase", "--autostash")
         if r.returncode == 0:
             return
         logger.warning("queue pull failed: %s", (r.stderr or "")[:200])
+        self._g("rebase", "--abort")  # harmless when no rebase is in progress
         self._resync()
 
     def _resync(self) -> None:
         """Diverged from origin: hard-reset, but only with nothing unpushed."""
+        dirty = self._g("status", "--porcelain")
+        if dirty.returncode != 0 or (getattr(dirty, "stdout", "") or "").strip():
+            return  # uncommitted runner writes would be wiped
         status = self._g("status", "-sb")
         head = (getattr(status, "stdout", "") or "").splitlines()[:1]
         if status.returncode != 0 or (head and "ahead" in head[0]):
@@ -82,9 +88,11 @@ class GitQueueRepo:
         """Commit what the runner wrote, then push. True when pushed."""
         for path in _TRACKED:  # one call each: a missing path must not abort the rest
             self._g("add", "-A", "--", path)
-        r = self._g("commit", "-m", message)
-        if r.returncode != 0:
-            logger.warning("queue commit failed: %s", (r.stderr or "")[:200])
+        if self._g("diff", "--cached", "--quiet").returncode != 0:  # something staged
+            r = self._g("commit", "-m", message)
+            if r.returncode != 0:
+                logger.warning("queue commit failed: %s", (r.stderr or "")[:200])
+                return False
         return self.retry_push()
 
     def retry_push(self) -> bool:

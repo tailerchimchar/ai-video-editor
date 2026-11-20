@@ -193,9 +193,12 @@ class Runner:
                     self._handle(filename, item)
                 except Exception as e:
                     logger.exception("item %s failed", item.id)
-                    self._reject(
-                        filename, item.id, item.kind, f"internal error: {type(e).__name__}"
-                    )
+                    try:
+                        self._reject(
+                            filename, item.id, item.kind, f"internal error: {type(e).__name__}"
+                        )
+                    except Exception:
+                        logger.exception("could not record rejection for %s", item.id)
 
         if self._wrote:
             self.state.pending_push = not self.repo.commit_push(

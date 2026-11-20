@@ -249,7 +249,7 @@ def test_git_queue_repo_uses_argv_lists(tmp_path):
 
     def run(argv, **kw):
         calls.append(argv)
-        rc = 1 if "push" in argv else 0
+        rc = 1 if ("push" in argv or "diff" in argv) else 0
         return SimpleNamespace(returncode=rc, stdout="", stderr="boom")
 
     (tmp_path / "queue").mkdir()
@@ -260,7 +260,7 @@ def test_git_queue_repo_uses_argv_lists(tmp_path):
     repo.write("rejected/a.json", "{}")
     repo.commit_push("msg")
     assert all(isinstance(c, list) for c in calls)
-    assert calls[0] == ["git", "-C", str(tmp_path), "pull", "--ff-only"]
+    assert calls[0] == ["git", "-C", str(tmp_path), "pull", "--rebase", "--autostash"]
     assert any(c[3:5] == ["commit", "-m"] and c[5] == "msg" for c in calls)
     assert calls[-1][3] == "push"
 
@@ -288,11 +288,11 @@ def test_poison_item_is_isolated(h):
     def boom(*a):
         raise RuntimeError("x")
 
-    h.api.asset_path = boom
-    h.runner._trim = boom  # asset_path boom is treated as transient; force a real raise
+    h.runner._trim = boom  # raises past the transient asset_path guard
     out = h.runner.tick()
-    assert "deferred" in out
-    assert good["id"] in h.runner.ledger.outcomes()
+    assert sorted(out) == ["deferred", "rejected"]
+    assert h.runner.ledger.outcomes()[good["id"]] == "deferred"
+    assert h.runner.ledger.outcomes()[bad["id"]] == "rejected"
 
 
 def test_unexpected_handler_error_is_rejected(h):
@@ -330,24 +330,123 @@ def test_failed_push_is_retried(h):
     assert not h.runner.state.pending_push
 
 
-def test_pull_failure_resets_only_without_local_commits(tmp_path):
-    def make(status):
-        calls = []
+def _git_fake(
+    tmp_path,
+    *,
+    porcelain="",
+    status="## main...origin/main [behind 2]\n",
+    pull_rc=1,
+    cached_rc=1,
+    commit_rc=0,
+):
+    calls = []
 
-        def run(argv, **kw):
-            calls.append(argv[3:])
-            rc = 1 if argv[3] == "pull" else 0
-            out = status if argv[3] == "status" else "main\n"
-            return SimpleNamespace(returncode=rc, stdout=out, stderr="")
+    def run(argv, **kw):
+        sub = argv[3:]
+        calls.append(sub)
+        rc, out = 0, ""
+        if sub[0] == "pull":
+            rc = pull_rc
+        elif sub[:2] == ["status", "--porcelain"]:
+            out = porcelain
+        elif sub[:2] == ["status", "-sb"]:
+            out = status
+        elif sub[0] == "rev-parse":
+            out = "main\n"
+        elif sub[:2] == ["diff", "--cached"]:
+            rc = cached_rc
+        elif sub[0] == "commit":
+            rc = commit_rc
+        return SimpleNamespace(returncode=rc, stdout=out, stderr="")
 
-        return calls, GitQueueRepo(tmp_path, run=run)
+    return calls, GitQueueRepo(tmp_path, run=run)
 
-    calls, repo = make("## main...origin/main [behind 2]\n")
+
+def test_pull_uses_rebase_autostash_and_aborts_on_failure(tmp_path):
+    calls, repo = _git_fake(tmp_path, status="## main...origin/main [ahead 1, behind 2]\n")
+    repo.pull()
+    assert calls[0] == ["pull", "--rebase", "--autostash"]
+    assert ["rebase", "--abort"] in calls
+    assert not any(c[0] in ("reset", "fetch") for c in calls)
+
+
+def test_pull_failure_resets_only_when_clean_and_not_ahead(tmp_path):
+    calls, repo = _git_fake(tmp_path)
     repo.pull()
     assert ["reset", "--hard", "origin/main"] in calls
-    calls, repo = make("## main...origin/main [ahead 1, behind 2]\n")
+    calls, repo = _git_fake(tmp_path, porcelain=" M queue/x.json\n")
     repo.pull()
-    assert not any(c[0] in ("reset", "fetch") for c in calls)
+    assert not any(c[0] == "reset" for c in calls)
+
+
+def test_commit_push_adds_each_path_separately(tmp_path):
+    calls, repo = _git_fake(tmp_path)
+    assert repo.commit_push("m") is True
+    adds = [c for c in calls if c[0] == "add"]
+    assert adds == [
+        ["add", "-A", "--", "queue"],
+        ["add", "-A", "--", "rejected"],
+        ["add", "-A", "--", "SLEEP"],
+    ]
+
+
+def test_commit_failure_returns_false_and_nothing_staged_skips_commit(tmp_path):
+    calls, repo = _git_fake(tmp_path, commit_rc=1)
+    assert repo.commit_push("m") is False
+    assert not any(c[0] == "push" for c in calls)
+    calls, repo = _git_fake(tmp_path, cached_rc=0)
+    assert repo.commit_push("m") is True
+    assert not any(c[0] == "commit" for c in calls)
+
+
+def test_main_uses_configured_api_base_url(tmp_path, monkeypatch):
+    from ai_video_editor.grokbot import runner as runner_mod
+
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "queue").mkdir()
+    seen = {}
+
+    class FakeHttp:
+        def __init__(self, base_url, client=None):
+            seen["url"] = base_url
+
+    class StopError(Exception):
+        pass
+
+    def stop(_runner):
+        raise StopError
+
+    monkeypatch.setattr(settings, "grokbot_queue_repo_dir", tmp_path)
+    monkeypatch.setattr(settings, "workspace_dir", tmp_path)
+    monkeypatch.setattr(settings, "grokbot_api_base_url", "http://example.invalid:9")
+    monkeypatch.setattr(runner_mod, "HttpApiClient", FakeHttp)
+    monkeypatch.setattr(runner_mod, "uploader_from_settings", lambda: None)
+    monkeypatch.setattr(runner_mod, "run_once", stop)
+    with pytest.raises(StopError):
+        runner_mod.main()
+    assert seen["url"] == "http://example.invalid:9"
+
+
+def test_failing_reject_write_does_not_abort_tick(h):
+    bad = preview()
+    good = env("deploy", tag="v1.0.0")
+    h.repo.add(bad)
+    h.repo.add(good)
+
+    def boom(*a):
+        raise RuntimeError("x")
+
+    h.runner._trim = boom
+    real_write = h.repo.write
+
+    def write(path, text):
+        if path.startswith("rejected/"):
+            raise OSError("disk")
+        real_write(path, text)
+
+    h.repo.write = write
+    h.runner.tick()
+    assert h.runner.ledger.outcomes()[good["id"]] == "deferred"
 
 
 def test_item_id_must_be_uuid():
