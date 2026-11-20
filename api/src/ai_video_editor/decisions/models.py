@@ -11,10 +11,13 @@ class DecisionError(RuntimeError):
 
 
 class ChoiceQuestion(BaseModel):
-    """Pick one member of `options` (e.g. `taxonomy.Format`)."""
+    """Pick one member of `options` (e.g. `taxonomy.Format`). Optional
+    `descriptions` (option value -> one line) tell a backend what each
+    option means; an option without one is judged by its name alone."""
 
     prompt: str
     options: type[Enum]
+    descriptions: dict[str, str] | None = None
 
 
 class BoolQuestion(BaseModel):

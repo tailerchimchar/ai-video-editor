@@ -242,27 +242,35 @@ def test_haiku_call_is_traced_with_backend_metadata(monkeypatch):
 
 
 class FakeTransport:
+    """Jev-shaped: one request per state, raw System One answers back."""
+
     def __init__(self):
-        self.requests: list[tuple] = []
+        self.requests: list[tuple[dict, dict]] = []
 
-    def choice(self, prompt, options, state):
-        self.requests.append(("choice", prompt, options))
-        return options[1], 0.9
+    def ask(self, state, questions):
+        self.requests.append((state, questions))
+        return {key: self._reply(q) for key, q in questions.items()}
 
-    def score(self, prompt, lo, hi, state):
-        self.requests.append(("score", prompt, lo, hi))
-        return hi, 0.8
-
-    def bool(self, prompt, state):
-        self.requests.append(("bool", prompt))
-        return True, 0.7
+    @staticmethod
+    def _reply(question):
+        if question["type"] == "choice":
+            return {"type": "choice", "choice": "story", "probabilities": {"story": 0.9}}
+        if question["type"] == "score":
+            last = question["criteria"][-1]
+            return {
+                "type": "score",
+                "score": len(question["criteria"]) - 1,
+                "probabilities": {last: 0.8},
+            }
+        return {"type": "noul", "noul": 0.7}
 
 
 def test_jev_maps_each_question_kind_to_the_transport():
     transport = FakeTransport()
     choice = jev.answer(FORMAT_Q, {}, transport=transport)
     assert choice == Answer(value=Format.story, probability=0.9, backend="jev")
-    assert transport.requests[0][2] == [f.value for f in Format]
+    sent = next(iter(transport.requests[0][1].values()))
+    assert sent["criteria"].keys() == {f.value for f in Format}
     score = jev.answer(ScoreQuestion(prompt="s", lo=0, hi=5), {}, transport=transport)
     assert score.value == 5
     assert jev.answer(BoolQuestion(prompt="b"), {}, transport=transport).value is True
@@ -289,10 +297,8 @@ def test_auto_never_selects_haiku_even_with_anthropic_key(monkeypatch):
     assert select_backend() == "rules"
 
 
-def test_auto_selects_jev_only_with_key_and_transport(monkeypatch):
+def test_auto_selects_jev_only_with_a_key(monkeypatch):
     monkeypatch.setattr(settings, "typesafe_api_key", "ts")
-    assert select_backend() == "rules"  # key but no transport wired
-    monkeypatch.setattr(jev, "default_transport", lambda: FakeTransport())
     assert select_backend() == "jev"
     monkeypatch.setattr(settings, "typesafe_api_key", None)
     assert select_backend() == "rules"
@@ -470,10 +476,8 @@ def test_index_md_says_the_rules_prefilter_is_inactive(monkeypatch, tmp_path):
 
 
 class RaisingTransport:
-    def choice(self, *a):
+    def ask(self, state, questions):
         raise ConnectionError("down")
-
-    score = bool = choice
 
 
 def test_jev_transport_error_is_wrapped_and_ask_falls_back_to_rules(monkeypatch):
@@ -489,8 +493,9 @@ def test_jev_transport_error_is_wrapped_and_ask_falls_back_to_rules(monkeypatch)
 
 def test_jev_unknown_enum_value_is_wrapped():
     class BadValue(FakeTransport):
-        def choice(self, prompt, options, state):
-            return "not_a_format", 0.9
+        @staticmethod
+        def _reply(question):
+            return {"type": "choice", "choice": "not_a_format", "probabilities": {}}
 
     with pytest.raises(decisions.DecisionError):
         jev.answer(FORMAT_Q, {}, transport=BadValue())

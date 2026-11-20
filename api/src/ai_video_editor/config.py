@@ -42,8 +42,14 @@ class Settings(BaseSettings):
 
     # Typed decisions (decisions/): which backend answers Format/Topic
     # and include/exclude questions. `auto` = Jev if TYPESAFE_API_KEY is
-    # set and wired, else free local rules. Haiku only when explicit.
+    # set, else free local rules. Haiku only when explicit.
     typesafe_api_key: str | None = None
+    typesafe_model: str = "jev-latest"
+    typesafe_base_url: str = "https://api.typesafe.ai"
+    typesafe_timeout_seconds: float = 30.0
+    # Jev requests per server process (one request per clip/state). Jev
+    # bills input tokens only, so this is a runaway guard, not a budget.
+    typesafe_max_calls: int = 2000
     decisions_backend: Literal["auto", "jev", "haiku", "rules"] = "auto"
     # Own call budget (counts batch calls) so decisions can't starve the ranker.
     decisions_max_calls: int = 200

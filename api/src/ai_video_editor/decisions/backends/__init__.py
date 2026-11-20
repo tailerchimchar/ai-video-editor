@@ -29,7 +29,7 @@ class Backend:
 
 
 BACKENDS: dict[str, Backend] = {
-    "jev": Backend(jev.answer, jev.available),
+    "jev": Backend(jev.answer, jev.available, jev.answer_many),
     "haiku": Backend(haiku.answer, haiku.available, haiku.answer_many),
     "rules": Backend(rules.answer, rules.available),
 }

@@ -1,8 +1,8 @@
 """Typed decisions: ask questions about clips, get typed answers with a
 probability from whichever backend is configured.
 
-Backends (see `backends/`): Jev when TYPESAFE_API_KEY is set and a Jev
-transport exists, Claude Haiku structured output only when
+Backends (see `backends/`): Jev (TypeSafe System One, HTTP) when
+TYPESAFE_API_KEY is set, Claude Haiku structured output only when
 DECISIONS_BACKEND is explicitly "haiku", and free local rules
 otherwise. `auto` never selects Haiku (cost-happy). Rules are also the
 fallback whenever an LLM backend fails, so a decision never blocks the

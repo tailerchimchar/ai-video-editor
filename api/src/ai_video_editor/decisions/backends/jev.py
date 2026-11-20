@@ -1,14 +1,28 @@
-"""Jev backend (barebones seam): thin adapter over the typesafe-sdk shape.
+"""Jev backend: TypeSafe's System One model over its HTTP API.
 
-Jev answers `choice` / `score` / `bool` questions, each returning a value
-with a probability. The transport is injected so the adapter is tested
-with a fake; no real transport exists yet because there is no
-TYPESAFE_API_KEY to build one against. Wire `_default_transport` when
-the key and the SDK are available.
+One Jev request evaluates many questions against one state, in parallel
+and in isolation, so a batch of `(question, state)` items becomes one
+request per distinct state carrying every question asked about it.
+Our question kinds map onto Jev primitives:
+
+- `ChoiceQuestion` -> `choice` (criteria = option name -> description)
+- `BoolQuestion`   -> `noul`   (probability the statement is true)
+- `ScoreQuestion`  -> `score`  (ordered rubric, one level per integer)
+
+Jev returns calibrated probabilities, not text, so `Answer.probability`
+is the probability Jev assigned to the value we return. The transport is
+a one-method protocol (`ask(state, questions) -> answers`) so tests use a
+fake and the real one is a thin `httpx` POST.
 """
 
-from typing import Protocol
+from __future__ import annotations
 
+import logging
+from typing import Any, Protocol
+
+import httpx
+
+from ...anthropic_surface import SpendCapError, reserve_call
 from ...config import settings
 from ..models import (
     Answer,
@@ -19,48 +33,164 @@ from ..models import (
     TypedQuestion,
 )
 
+_log = logging.getLogger(__name__)
+
+_SYSTEM_ONE_PATH = "/v1/systemone"
+
 
 class JevTransport(Protocol):
-    """Each call returns `(value, probability)`."""
+    """Send one state plus its questions (System One JSON), get the raw
+    `answers` object back, keyed like the questions."""
 
-    def choice(self, prompt: str, options: list[str], state: dict) -> tuple[str, float]: ...
+    def ask(self, state: dict, questions: dict[str, dict]) -> dict[str, dict]: ...
 
-    def score(self, prompt: str, lo: int, hi: int, state: dict) -> tuple[int, float]: ...
 
-    def bool(self, prompt: str, state: dict) -> tuple[bool, float]: ...
+class HttpTransport:
+    """`POST {base_url}/v1/systemone` with bearer auth."""
+
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        base_url: str | None = None,
+        model: str | None = None,
+        timeout: float | None = None,
+        client: httpx.Client | None = None,
+    ) -> None:
+        self.model = model or settings.typesafe_model
+        self._url = (base_url or settings.typesafe_base_url).rstrip("/") + _SYSTEM_ONE_PATH
+        self._client = client or httpx.Client(timeout=timeout or settings.typesafe_timeout_seconds)
+        self._headers = {"Authorization": f"Bearer {api_key}"}
+
+    def ask(self, state: dict, questions: dict[str, dict]) -> dict[str, dict]:
+        body = {"model": self.model, "state": state, "questions": questions}
+        response = self._client.post(self._url, json=body, headers=self._headers)
+        if response.status_code != 200:
+            raise DecisionError(f"jev HTTP {response.status_code}: {_error_detail(response)}")
+        payload = response.json()
+        usage = payload.get("usage") or {}
+        _log.debug(
+            "jev %s answered %d questions (%s input tokens)",
+            payload.get("model"),
+            len(questions),
+            usage.get("input_tokens"),
+        )
+        return payload["answers"]
+
+
+def _error_detail(response: httpx.Response) -> str:
+    try:
+        detail = response.json().get("detail")
+    except ValueError:
+        return response.text[:200]
+    if isinstance(detail, list):
+        return "; ".join(str(item.get("msg", item)) for item in detail)
+    return str(detail)
 
 
 def default_transport() -> JevTransport | None:
-    """The real typesafe-sdk transport, or None until it is wired (needs
-    TYPESAFE_API_KEY and the SDK). `auto` selection requires it."""
-    return None
+    """The HTTP transport when TYPESAFE_API_KEY is set, else None."""
+    if not settings.typesafe_api_key:
+        return None
+    return HttpTransport(settings.typesafe_api_key)
 
 
 def available() -> bool:
-    return bool(settings.typesafe_api_key) and default_transport() is not None
+    return bool(settings.typesafe_api_key)
 
 
-def _ask_transport(question: TypedQuestion, state: dict, transport: JevTransport) -> Answer:
+# --- mapping: our typed questions <-> Jev primitives ---
+
+
+def to_jev_question(question: TypedQuestion) -> dict:
     if isinstance(question, ChoiceQuestion):
-        options = [member.value for member in question.options]
-        raw, probability = transport.choice(question.prompt, options, state)
-        value = question.options(raw)
+        descriptions = question.descriptions or {}
+        criteria = {m.value: descriptions.get(m.value, m.value) for m in question.options}
+        return {"type": "choice", "instructions": question.prompt, "criteria": criteria}
+    if isinstance(question, BoolQuestion):
+        return {"type": "noul", "instructions": question.prompt}
+    if isinstance(question, ScoreQuestion):
+        levels = [str(level) for level in range(question.lo, question.hi + 1)]
+        return {"type": "score", "instructions": question.prompt, "criteria": levels}
+    raise DecisionError(f"unsupported question: {type(question).__name__}")
+
+
+def from_jev_answer(question: TypedQuestion, raw: dict[str, Any]) -> Answer:
+    expected = to_jev_question(question)["type"]
+    if raw.get("type") != expected:
+        raise DecisionError(f"jev answered type {raw.get('type')!r}, expected {expected!r}")
+    probabilities = raw.get("probabilities") or {}
+    if isinstance(question, ChoiceQuestion):
+        try:
+            value = question.options(raw["choice"])
+        except (KeyError, ValueError) as exc:
+            raise DecisionError(f"jev choice {raw.get('choice')!r} is not an option") from exc
+        probability = probabilities.get(value.value, raw.get("confidence", 0.0))
     elif isinstance(question, BoolQuestion):
-        value, probability = transport.bool(question.prompt, state)
-    elif isinstance(question, ScoreQuestion):
-        value, probability = transport.score(question.prompt, question.lo, question.hi, state)
+        p_true = float(raw["noul"])
+        value = p_true >= 0.5
+        probability = p_true if value else 1.0 - p_true
     else:
-        raise DecisionError(f"unsupported question: {type(question).__name__}")
-    return Answer(value=value, probability=probability, backend="jev")
+        level = min(max(round(float(raw["score"])), 0), question.hi - question.lo)
+        value = question.lo + level
+        probability = probabilities.get(str(level), raw.get("confidence", 0.0))
+    return Answer(value=value, probability=float(probability), backend="jev")
 
 
-def answer(question: TypedQuestion, state: dict, transport: JevTransport | None = None) -> Answer:
-    transport = transport or default_transport()
-    if transport is None:
-        raise DecisionError("Jev transport is not wired yet: no typesafe-sdk client configured")
+# --- batching: one request per distinct state ---
+
+
+def _group_by_state(
+    items: list[tuple[TypedQuestion, dict]],
+) -> list[tuple[dict, list[int]]]:
+    """Positions of `items` sharing an identical state (one request each)."""
+    groups: list[tuple[dict, list[int]]] = []
+    for position, (_question, state) in enumerate(items):
+        for known, positions in groups:
+            if known == state:
+                positions.append(position)
+                break
+        else:
+            groups.append((state, [position]))
+    return groups
+
+
+Items = list[tuple[TypedQuestion, dict]]
+
+
+def _ask_state(
+    transport: JevTransport, items: Items, state: dict, positions: list[int]
+) -> list[Answer]:
     try:
-        return _ask_transport(question, state, transport)
+        reserve_call("jev", settings.typesafe_max_calls, "TYPESAFE_MAX_CALLS")
+    except SpendCapError as exc:
+        raise DecisionError(str(exc)) from exc
+    questions = {f"q{i}": to_jev_question(items[p][0]) for i, p in enumerate(positions)}
+    try:
+        raw_answers = transport.ask(state, questions)
     except DecisionError:
         raise
     except Exception as exc:  # a transport must never crash the pipeline
         raise DecisionError(f"jev call failed: {exc}") from exc
+    answers = []
+    for key, position in zip(questions, positions, strict=True):
+        if key not in raw_answers:
+            raise DecisionError(f"jev reply is missing question {key!r}")
+        answers.append(from_jev_answer(items[position][0], raw_answers[key]))
+    return answers
+
+
+def answer_many(items: Items, transport: JevTransport | None = None) -> list[Answer]:
+    transport = transport or default_transport()
+    if transport is None:
+        raise DecisionError("Jev is not configured: set TYPESAFE_API_KEY")
+    answers: list[Answer | None] = [None] * len(items)
+    for state, positions in _group_by_state(items):
+        results = _ask_state(transport, items, state, positions)
+        for position, result in zip(positions, results, strict=True):
+            answers[position] = result
+    return answers  # type: ignore[return-value]
+
+
+def answer(question: TypedQuestion, state: dict, transport: JevTransport | None = None) -> Answer:
+    return answer_many([(question, state)], transport=transport)[0]

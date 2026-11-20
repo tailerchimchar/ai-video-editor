@@ -150,7 +150,7 @@ The same protocol applies when Noodlz overrules a panel recommendation.
 ### 8.2 Decision adapter (D31, D32, D33)
 
 - Module: `api/src/ai_video_editor/decisions.py`. One function shape: `ask(question: TypedQuestion, state: dict) -> Answer` where `TypedQuestion` is a choice over a taxonomy enum, a yes/no, or a score, and `Answer` carries the value plus a probability.
-- Backends: **Jev** (TypeSafe AI, `typesafe-sdk`) when `TYPESAFE_API_KEY` is set; **Claude Haiku structured output** with the identical schema otherwise. Backend selection is per call and logged to Langfuse like every other paid call. Noodlz is on the Jev waitlist, so the Haiku path is the one exercised first (D33).
+- Backends: **Jev** (TypeSafe AI System One, `POST /v1/systemone` over HTTP; choice/noul/score primitives, one request per clip state) when `TYPESAFE_API_KEY` is set; **Claude Haiku structured output** with the identical schema only when `DECISIONS_BACKEND=haiku`; free local rules otherwise. Backend selection is per call. Jev access confirmed 2026-11-19 (console account exists); the transport is wired and unit-tested, first live run pending the key (D33).
 - **First uses (D32)**:
   1. `Format` and `Topic` classification over event state, replacing the hand-written frozensets in both classifiers. The rule sets stay as the offline fallback when no backend is configured.
   2. Include/exclude pre-filter: "is this candidate worth the panel's time?" over events + transcript excerpt, run before any agent or VLM call. Anything below a configurable probability is dropped from the panel brief but kept in the index.
@@ -207,7 +207,7 @@ After the stream: harvest Outplayed clips to the workspace immediately (retentio
 |---|---|
 | Panel cost | One batched round per video; typed JSON outputs; SKILL.md cap enforced by test; measure tokens per round in week one. |
 | Gaming-expert judges plays it cannot see (wave state, trades) from kill events alone | v1 relies on Noodlz's teaching plus VLM frames; follow-up J parses MATCH-V5 participantFrames. |
-| Jev access is waitlisted | Haiku fallback with the identical schema is the first path exercised; Jev is a drop-in. |
+| Jev classification quality is unmeasured | First live run compares Jev's Format/include answers against the panel's verdicts on the Zeri game before the pre-filter is trusted. |
 | librosa section detection is noisy on some genres | Sidecar with manual override; the drop timestamp is the only hard requirement. |
 | Taxonomy change breaks MCP tool outputs | Separate Format/Topic/Phase enums; old slugs as aliases; response-shape tests. |
 | Mentor's rules are Valorant-learned | LoL ties go to Noodlz for the first few videos; each becomes a logged lesson. |
@@ -249,7 +249,7 @@ After the stream: harvest Outplayed clips to the workspace immediately (retentio
 | D30 | Registry + plan safety | Effect-tools-only coverage test with params match; plan runs snapshot first and record step index | Half-applied cuts had no undo | Red Team | 2026-11-19 |
 | D31 | Decision backend | Jev (TypeSafe AI) via a decision adapter with a Haiku structured-output fallback | Cheap typed decisions; no hard vendor dependency | Interview | 2026-11-19 |
 | D32 | Jev first uses | Format + Topic classification; include/exclude pre-filter | Replaces hand rules; gates panel cost | Interview | 2026-11-19 |
-| D33 | Jev access | On the waitlist; build against the SDK shape, Haiku path first | Access not confirmed | Interview | 2026-11-19 |
+| D33 | Jev access | Account exists (no waitlist); HTTP transport wired against the documented System One API, no SDK dependency | Keep deps minimal; API is three fields | Interview + 2026-11-19 follow-up | 2026-11-19 |
 
 ## Dependency Graph & Implementation Order
 
