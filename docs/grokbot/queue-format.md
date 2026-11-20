@@ -1,0 +1,150 @@
+# Queue format
+
+Reference for Lead and Editor. Every item is one JSON file in the `queue/` folder of the queue repo, named after its `id` (for example the id followed by `.json`). The PC runner validates each file as hostile input and moves rejects to `rejected/` with the reason. Every example below is parsed by a test, so copy the shape exactly.
+
+## Envelope (every kind)
+
+| field | rule |
+|---|---|
+| `id` | a fresh uuid4 string, never reused |
+| `kind` | `edit_plan`, `preview_request`, `verdict`, `deploy`, `sleep` or `wake` |
+| `author_bot` | `lead`, `editor` or `devops` (the Viewer has no queue access) |
+| `created` | ISO 8601 UTC timestamp |
+| `schema_version` | the number 1 |
+
+Unknown fields are rejected. A file over 64 KB is rejected.
+
+## Hostile-string rules (apply to every string, keys included)
+
+A string is rejected if it contains any of these:
+
+- a web address (the letters http or https followed by a colon and two slashes)
+- a backslash
+- two slashes in a row
+- a dot followed by a slash
+- a slash directly after anything that is not a letter, digit, hyphen or underscore (so "and/or" is fine, a path is not)
+- any of the characters semicolon, pipe, ampersand, less-than, greater-than
+- a backtick
+- the two characters dollar sign and open parenthesis
+
+So: no links, no file paths, no shell-looking text. Refer to things by id, by clip reference, or in plain words. Put any link in a text message to Noodlz, never in a queue file.
+
+## edit_plan
+
+The Editor writes it. `compilation_id` and `base_version` come from the latest digest or a `queue.rejected` event; if `base_version` is stale the runner rejects the plan and sends the current state back. Every effect must have `at` equal to 0.0 (timed effects are not applied yet), and `cards` and `sfx` must stay empty. Use only formats and effect kinds listed in the editing-expert arsenal. `copy` is the Viewer's block, handed over by the Lead.
+
+```json
+{
+  "id": "0b6f1c9e-3d52-4c1a-9e57-6a1d2f8b7c10",
+  "kind": "edit_plan",
+  "author_bot": "editor",
+  "created": "2026-11-21T01:15:00Z",
+  "schema_version": 1,
+  "compilation_id": "comp-0042",
+  "base_version": "14",
+  "plan": {
+    "format": "hype_montage",
+    "source_clips": [
+      {"clip_ref": "clip-1", "start": 3.0, "end": 14.5, "intensity": 0.8},
+      {"clip_ref": "clip-2", "start": 0.0, "end": 9.0, "intensity": 0.6}
+    ],
+    "order": ["clip-1", "clip-2"],
+    "music": null,
+    "effects": [
+      {"clip_ref": "clip-1", "kind": "zoom", "at": 0.0, "params": {"factor": 1.3, "roi": "center"}}
+    ],
+    "cards": [],
+    "sfx": [],
+    "rejected": [
+      {"wanted": "slow motion on the last kill", "why": "not renderable yet"}
+    ]
+  },
+  "copy": {
+    "title": "He never saw it coming",
+    "caption": "Quiet lane, loud finish",
+    "hashtags": ["leagueoflegends", "adc"],
+    "thumbnail_t": 6.5
+  }
+}
+```
+
+## preview_request
+
+Lead or Editor. Exactly one of `asset_id` or `compilation_id` (the other is null or left out). The window must satisfy 0 <= `start_s` < `end_s` and be at most 20 seconds. `question` is what you want the preview to answer.
+
+```json
+{
+  "id": "5d0a7e24-8b3f-4f6e-a1c2-93e4b7d05a11",
+  "kind": "preview_request",
+  "author_bot": "editor",
+  "created": "2026-11-21T01:20:00Z",
+  "schema_version": 1,
+  "asset_id": "asset-0007",
+  "start_s": 120.0,
+  "end_s": 135.0,
+  "question": "Does the opening beat land without the caption?"
+}
+```
+
+## verdict
+
+Lead only, and only to record what Noodlz himself said. `quote` is his text verbatim and `quote_ts` is when he sent it. A verdict with an empty quote goes to the decisions log only and never reaches the mentor. `verdict` is `payoff`, `false_positive` or `style`. Never put a bot default or a bot opinion in `quote`.
+
+```json
+{
+  "id": "a3c91f07-52de-4b8a-8c40-1e7d6b92f3a2",
+  "kind": "verdict",
+  "author_bot": "lead",
+  "created": "2026-11-21T02:00:00Z",
+  "schema_version": 1,
+  "game": "league",
+  "clip_ref": "clip-3",
+  "verdict": "false_positive",
+  "rule": "A lone kill on a minion wave is not a highlight",
+  "quote": "nah that one is nothing",
+  "quote_ts": "2026-11-21T01:58:30Z"
+}
+```
+
+## deploy
+
+Lead or DevOps. `tag` is a release tag of the form v followed by three dot-separated numbers. The runner only acts when Noodlz or the Claude session approved it.
+
+```json
+{
+  "id": "c8e2b5f1-7a46-4d03-b9e8-2f5a01d6c3b4",
+  "kind": "deploy",
+  "author_bot": "devops",
+  "created": "2026-11-21T03:00:00Z",
+  "schema_version": 1,
+  "tag": "v0.3.2"
+}
+```
+
+## sleep and wake
+
+Lead only. No payload. Commit `sleep` when Noodlz texts sleep or the usage pool falls under his floor; commit `wake` when he texts wake.
+
+```json
+{
+  "id": "e1f4a7b2-90c3-4e58-a6d1-47b8c2e90f35",
+  "kind": "sleep",
+  "author_bot": "lead",
+  "created": "2026-11-21T04:00:00Z",
+  "schema_version": 1
+}
+```
+
+```json
+{
+  "id": "f7b3d9a0-15e8-4c6b-8d24-b0a96e1c7d58",
+  "kind": "wake",
+  "author_bot": "lead",
+  "created": "2026-11-21T12:00:00Z",
+  "schema_version": 1
+}
+```
+
+## Day-one note
+
+On day one the runner only acts on `preview_request`, `sleep` and `wake`. Other kinds are accepted into the decisions log so you can practice the format. A `queue.rejected` event tells you why a file was refused; fix the cause and write a new item with a new id.

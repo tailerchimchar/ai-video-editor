@@ -37,3 +37,45 @@ def test_expert_folder_has_learning_files(expert: str) -> None:
 def test_agents_dir_is_not_gitignored() -> None:
     gitignore = (REPO_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
     assert ".claude/agents/" not in [line.strip() for line in gitignore]
+
+
+# ---- Grok Bot skill files (spec-grokbot-team section 3, 10) ----
+
+GROKBOT_DIR = REPO_ROOT / "docs" / "grokbot"
+BOT_FILES = ("lead", "editor", "devops", "viewer")
+GROKBOT_FILES = (*BOT_FILES, "queue-format", "setup")
+BOT_REQUIRED_STRINGS = (
+    "never quote another player",
+    "never include summoner names",
+    "default",
+    "sleep",
+)
+
+
+@pytest.mark.parametrize("name", GROKBOT_FILES)
+def test_grokbot_doc_within_budget(name: str) -> None:
+    path = GROKBOT_DIR / f"{name}.md"
+    assert path.exists(), f"{path} missing"
+    lines = path.read_text(encoding="utf-8").count("\n") + 1
+    assert lines <= MAX_LINES, f"docs/grokbot/{name}.md is {lines} lines (max {MAX_LINES})"
+
+
+@pytest.mark.parametrize("name", BOT_FILES)
+def test_bot_file_has_required_strings(name: str) -> None:
+    path = GROKBOT_DIR / f"{name}.md"
+    assert path.exists(), f"{path} missing"
+    text = path.read_text(encoding="utf-8")
+    for needle in BOT_REQUIRED_STRINGS:
+        assert needle in text, f"docs/grokbot/{name}.md missing required string {needle!r}"
+
+
+def test_queue_format_examples_parse() -> None:
+    import re
+
+    from ai_video_editor.grokbot.queue import parse_item
+
+    path = GROKBOT_DIR / "queue-format.md"
+    assert path.exists(), f"{path} missing"
+    blocks = re.findall(r"```json\n(.*?)```", path.read_text(encoding="utf-8"), re.DOTALL)
+    kinds = {parse_item(block).kind for block in blocks}
+    assert kinds == {"edit_plan", "preview_request", "verdict", "deploy", "sleep", "wake"}
