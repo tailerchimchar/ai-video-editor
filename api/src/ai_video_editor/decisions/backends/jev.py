@@ -61,6 +61,8 @@ class HttpTransport:
         self._url = (base_url or settings.typesafe_base_url).rstrip("/") + _SYSTEM_ONE_PATH
         self._client = client or httpx.Client(timeout=timeout or settings.typesafe_timeout_seconds)
         self._headers = {"Authorization": f"Bearer {api_key}"}
+        # Last response usage (input_tokens, …) for callers that log cost.
+        self.last_usage: dict[str, int] = {}
 
     def ask(self, state: dict, questions: dict[str, dict]) -> dict[str, dict]:
         body = {"model": self.model, "state": state, "questions": questions}
@@ -69,6 +71,7 @@ class HttpTransport:
             raise DecisionError(f"jev HTTP {response.status_code}: {_error_detail(response)}")
         payload = response.json()
         usage = payload.get("usage") or {}
+        self.last_usage = {k: int(v) for k, v in usage.items() if isinstance(v, (int, float))}
         _log.debug(
             "jev %s answered %d questions (%s input tokens)",
             payload.get("model"),
