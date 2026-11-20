@@ -4,7 +4,9 @@ This suite tests the combined code from PRs #13, #14, #16, and #17 end-to-end
 with fully stubbed external services (Jev, Anthropic/Haiku, VLM, Drive).
 
 Covers:
-1) MCP editing tools: trim, concat, captions, 9:16 and 16:9 output via ffmpeg
+1) MCP editing tools via FastAPI endpoints: trim_source_to_clip, caption_video,
+   9:16 and 16:9 outputs. The MCP server is a thin HTTP adapter over these
+   endpoints - testing them verifies MCP tool behavior offline.
 2) Jev cost path with stubbed transports and LLM
 3) Agentic workflow wiring: round.published -> digest -> edit_plan -> box render
 4) End-to-end chain: round.published -> digest -> edit_plan -> render -> quality gate
@@ -12,10 +14,17 @@ Covers:
 All tests are offline (no network), deterministic, and fast (whole suite
 under a minute). External dependencies (ffmpeg) are skipped if unavailable.
 
-Design gaps documented here:
-- box_render.run_box_render() instantiates DriveStorage directly at line 397
-  with no injection seam. Tests must patch at the module level rather than
-  injecting a storage backend instance. See test_box_render_* tests.
+MCP tools tested via FastAPI TestClient (Section 1b):
+- POST /clips/trim_source -> MCP trim_source_to_clip
+- POST /clips/caption_video -> MCP caption_video (16:9 and 9:16)
+- POST /grokbot/render -> MCP submit_box_render (via box_render tests)
+
+The MCP server package (ai_video_editor_mcp) has separate dependencies (mcp,
+fastmcp) not in the api venv. Its own tests in mcp/tests/ verify the HTTP
+adapter layer with mocked transport.
+
+Box render tests use FakeBoxRenderStorage injected via the `storage` parameter
+(PR #14) instead of patching DriveStorage at the module level.
 """
 
 from __future__ import annotations
@@ -323,14 +332,11 @@ class TestMcpEditingToolsIntegration:
         assert "Second caption" in filters
         assert "enable='between" in filters
 
-    def test_mcp_trim_through_editing_primitive(self, isolation, test_clip, tmp_path):
-        """Test MCP trim_clip tool path: calls editing.trim_clip with ffprobe verification.
-
-        This tests the actual editing primitive that the MCP `trim_source_to_clip` tool uses.
-        """
+    def test_primitive_trim_clip(self, isolation, test_clip, tmp_path):
+        """Test editing.trim_clip primitive with ffprobe verification."""
         from ai_video_editor.editing import trim_clip
 
-        output = tmp_path / "trimmed_mcp_path.mp4"
+        output = tmp_path / "trimmed_primitive.mp4"
         ok, err = trim_clip(str(test_clip), str(output), start_seconds=0.5, end_seconds=2.0)
 
         assert ok, f"trim_clip failed: {err}"
@@ -339,14 +345,11 @@ class TestMcpEditingToolsIntegration:
         info = _probe_video(output)
         assert 1.0 < info["duration"] < 2.1, f"Trim duration wrong: {info['duration']}"
 
-    def test_mcp_concat_through_box_render(self, isolation, test_clip, tmp_path):
-        """Test MCP concat tool path: box render concat with ffprobe verification.
-
-        The MCP compile tools use box_render's _render_single_aspect for concat.
-        """
+    def test_primitive_concat_via_box_render(self, isolation, test_clip, tmp_path):
+        """Test box_render._render_single_aspect concat with ffprobe verification."""
         from ai_video_editor.grokbot.box_render import _render_single_aspect
 
-        scratch = tmp_path / "mcp_concat"
+        scratch = tmp_path / "concat_scratch"
         scratch.mkdir()
 
         clip2 = tmp_path / "clip_b.mp4"
@@ -371,14 +374,11 @@ class TestMcpEditingToolsIntegration:
         assert info["width"] == 1920
         assert info["height"] == 1080
 
-    def test_mcp_9x16_output_resolution(self, isolation, test_clip, tmp_path):
-        """Test MCP 9:16 output: box render produces correct portrait resolution.
-
-        MCP tools `compile_shorts`, `compile_outplayed_montage` etc. use this path.
-        """
+    def test_primitive_9x16_output_resolution(self, isolation, test_clip, tmp_path):
+        """Test box_render 9:16 output produces correct portrait resolution."""
         from ai_video_editor.grokbot.box_render import _render_single_aspect
 
-        scratch = tmp_path / "mcp_9x16"
+        scratch = tmp_path / "9x16_scratch"
         scratch.mkdir()
 
         output, err = _render_single_aspect(
@@ -397,14 +397,11 @@ class TestMcpEditingToolsIntegration:
         assert info["width"] == 720, f"9:16 width wrong: {info['width']}"
         assert info["height"] == 1280, f"9:16 height wrong: {info['height']}"
 
-    def test_mcp_16x9_output_resolution(self, isolation, test_clip, tmp_path):
-        """Test MCP 16:9 output: box render produces correct landscape resolution.
-
-        MCP tools use this for standard YouTube/horizontal output.
-        """
+    def test_primitive_16x9_output_resolution(self, isolation, test_clip, tmp_path):
+        """Test box_render 16:9 output produces correct landscape resolution."""
         from ai_video_editor.grokbot.box_render import _render_single_aspect
 
-        scratch = tmp_path / "mcp_16x9"
+        scratch = tmp_path / "16x9_scratch"
         scratch.mkdir()
 
         output, err = _render_single_aspect(
@@ -421,6 +418,120 @@ class TestMcpEditingToolsIntegration:
         info = _probe_video(output)
         assert info["width"] == 1920, f"16:9 width wrong: {info['width']}"
         assert info["height"] == 1080, f"16:9 height wrong: {info['height']}"
+
+
+# =============================================================================
+# SECTION 1b: MCP Endpoint Integration Tests (via FastAPI TestClient)
+#
+# These tests call the FastAPI endpoints that the MCP tools wrap, verifying
+# the full request/response cycle the MCP server uses.
+# =============================================================================
+
+
+class TestMcpEndpointIntegration:
+    """Tests for MCP tool endpoints via FastAPI TestClient.
+
+    The MCP server is a thin HTTP adapter - it calls these endpoints.
+    Testing them directly verifies the MCP tool behavior offline.
+    """
+
+    @pytest.fixture
+    def api_client(self, monkeypatch, tmp_path):
+        """Create a TestClient with isolated workspace."""
+        from fastapi.testclient import TestClient
+
+        from ai_video_editor.main import app
+
+        monkeypatch.setattr(settings, "workspace_dir", tmp_path)
+        monkeypatch.setattr(settings, "outplayed_media_dir", str(tmp_path / "media"))
+        return TestClient(app)
+
+    def test_mcp_trim_source_to_clip_endpoint(
+        self, api_client, test_clip, tmp_path, monkeypatch
+    ):
+        """Test POST /clips/trim_source (MCP trim_source_to_clip tool).
+
+        Verifies the endpoint returns {ok, output_path} and creates the file.
+        """
+        monkeypatch.setattr(settings, "workspace_dir", tmp_path)
+
+        resp = api_client.post(
+            "/api/v1/clips/trim_source",
+            json={
+                "source_path": str(test_clip),
+                "start_seconds": 0.5,
+                "end_seconds": 2.0,
+                "name": "mcp_trim_test",
+            },
+        )
+
+        assert resp.status_code == 200, f"Endpoint failed: {resp.text}"
+        body = resp.json()
+        assert body["ok"] is True
+        assert "output_path" in body
+
+        output = Path(body["output_path"])
+        assert output.exists(), f"Output file not created: {output}"
+
+        info = _probe_video(output)
+        assert 1.0 < info["duration"] < 2.5, f"Trim duration wrong: {info['duration']}"
+
+    def test_mcp_caption_video_endpoint(self, api_client, test_clip, tmp_path, monkeypatch):
+        """Test POST /clips/caption_video (MCP caption_video tool).
+
+        Verifies the endpoint burns captions onto a video and creates output.
+        """
+        monkeypatch.setattr(settings, "workspace_dir", tmp_path)
+
+        resp = api_client.post(
+            "/api/v1/clips/caption_video",
+            json={
+                "source_path": str(test_clip),
+                "segments": [
+                    {"text": "FIRST BLOOD", "start_seconds": 0.5, "end_seconds": 1.5},
+                    {"text": "DOUBLE KILL", "start_seconds": 2.0, "end_seconds": 2.8},
+                ],
+                "name": "mcp_caption_test",
+                "aspect": "16:9",
+            },
+        )
+
+        assert resp.status_code == 200, f"Caption endpoint failed: {resp.text}"
+        body = resp.json()
+        assert body["ok"] is True
+
+        output = Path(body["output_path"])
+        assert output.exists(), f"Caption output not created: {output}"
+
+        info = _probe_video(output)
+        assert info["width"] == 1920
+        assert info["height"] == 1080
+        assert info["duration"] > 2.0
+
+    def test_mcp_caption_video_9x16_aspect(self, api_client, test_clip, tmp_path, monkeypatch):
+        """Test POST /clips/caption_video with 9:16 aspect (MCP caption_video tool).
+
+        Verifies 9:16 aspect ratio output for TikTok/Reels.
+        """
+        monkeypatch.setattr(settings, "workspace_dir", tmp_path)
+
+        resp = api_client.post(
+            "/api/v1/clips/caption_video",
+            json={
+                "source_path": str(test_clip),
+                "segments": [{"text": "VERTICAL", "start_seconds": 0.5, "end_seconds": 2.0}],
+                "name": "mcp_caption_9x16",
+                "aspect": "9:16",
+            },
+        )
+
+        assert resp.status_code == 200
+        output = Path(resp.json()["output_path"])
+        assert output.exists()
+
+        info = _probe_video(output)
+        assert info["width"] == 720, f"9:16 caption width wrong: {info['width']}"
+        assert info["height"] == 1280, f"9:16 caption height wrong: {info['height']}"
 
 
 # =============================================================================
@@ -956,7 +1067,7 @@ class TestJevCostPathIntegration:
 
 
 class FakeStorageBackend:
-    """Fake storage backend for testing."""
+    """Fake storage backend implementing StorageBackend protocol."""
 
     def __init__(self, files: dict[str, bytes] | None = None):
         self._files = files or {}
@@ -999,6 +1110,67 @@ class FakeStorageBackend:
         self._files[remote_path] = content
 
 
+class FakeBoxRenderStorage:
+    """Fake storage implementing BoxRenderStorage protocol for box render tests.
+
+    This class implements the BoxRenderStorage protocol:
+    - scratch_dir: property returning local scratch directory
+    - download_clip(drive_id, local_name) -> Path: downloads clip to scratch
+    - upload_file(local_path, name, subfolder) -> str: uploads file, returns drive ID
+    """
+
+    def __init__(self, scratch: Path, clip_source: Path | None = None):
+        """Initialize fake storage.
+
+        Args:
+            scratch: Local scratch directory for clips and outputs
+            clip_source: Path to source clip file to copy for downloads
+        """
+        self._scratch = scratch
+        self._clip_source = clip_source
+        self.downloads: list[tuple[str, str]] = []
+        self.uploads: list[tuple[Path, str, str]] = []
+        self._upload_counter = 0
+        self._fail_download = False
+        self._fail_upload = False
+
+    @property
+    def scratch_dir(self) -> Path:
+        return self._scratch
+
+    def download_clip(self, drive_id: str, local_name: str) -> Path:
+        from ai_video_editor.storage import StorageError
+
+        if self._fail_download:
+            raise StorageError("Drive download failed: simulated error")
+
+        self.downloads.append((drive_id, local_name))
+        local_path = self._scratch / local_name
+        if self._clip_source and self._clip_source.exists():
+            shutil.copy(self._clip_source, local_path)
+        else:
+            local_path.write_bytes(b"\x00" * 100)
+        return local_path
+
+    def upload_file(self, local_path: Path, name: str, subfolder: str) -> str:
+        from ai_video_editor.storage import StorageError
+
+        if self._fail_upload:
+            raise StorageError("Drive upload failed: simulated error")
+
+        self.uploads.append((local_path, name, subfolder))
+        self._upload_counter += 1
+        return f"drive-fake-{self._upload_counter}"
+
+    def set_fail_download(self, fail: bool = True) -> None:
+        """Configure download to fail with StorageError."""
+        self._fail_download = fail
+
+    def set_fail_upload(self, fail: bool = True) -> None:
+        """Configure upload to fail with StorageError."""
+        self._fail_upload = fail
+
+
 class TestAgenticWorkflowWiringIntegration:
     """Integration tests for agentic workflow wiring."""
 
@@ -1038,7 +1210,11 @@ class TestAgenticWorkflowWiringIntegration:
     def test_box_render_emits_video_rendered_event(
         self, isolation, test_clip, monkeypatch, tmp_path
     ):
-        """Box render with fake Drive storage emits video.rendered event."""
+        """Box render with injected FakeBoxRenderStorage emits video.rendered event.
+
+        Uses the storage parameter introduced in PR #14 for dependency injection
+        instead of patching DriveStorage.
+        """
         from ai_video_editor.grokbot.box_render import (
             RenderInput,
             RenderLock,
@@ -1050,35 +1226,28 @@ class TestAgenticWorkflowWiringIntegration:
 
         scratch = tmp_path / "scratch"
         scratch.mkdir()
-        local_clip = scratch / "clip_000.mp4"
-        shutil.copy(test_clip, local_clip)
 
         lock = RenderLock(str(tmp_path / "test.lock"))
 
-        with patch("ai_video_editor.grokbot.box_render.DriveStorage") as mock_drive_storage:
-            mock_storage = MagicMock()
-            mock_storage.scratch_dir = scratch
-            mock_storage.download_clip.return_value = local_clip
-            mock_storage.upload_file.side_effect = ["drive-9x16-id", "drive-16x9-id"]
-            mock_drive_storage.return_value = mock_storage
+        fake_storage = FakeBoxRenderStorage(scratch, clip_source=test_clip)
 
-            render_input = RenderInput(
-                edit_plan_id="plan-e2e",
-                edit_plan_version="1",
-                asset_id="asset-e2e",
-                clips=[{"drive_id": "d1", "clip_ref": "1"}],
-                trims=[{"clip_id": "1", "start_s": 0, "end_s": 2}],
-                concat_order=["1"],
-                game="league",
-            )
+        render_input = RenderInput(
+            edit_plan_id="plan-e2e",
+            edit_plan_version="1",
+            asset_id="asset-e2e",
+            clips=[{"drive_id": "d1", "clip_ref": "1"}],
+            trims=[{"clip_id": "1", "start_s": 0, "end_s": 2}],
+            concat_order=["1"],
+            game="league",
+        )
 
-            with patch("tempfile.mkdtemp", return_value=str(scratch)):
-                result = run_box_render(
-                    MagicMock(),
-                    render_input,
-                    emit_fn=lambda e: events.append(e),
-                    lock=lock,
-                )
+        result = run_box_render(
+            MagicMock(),
+            render_input,
+            emit_fn=lambda e: events.append(e),
+            lock=lock,
+            storage=fake_storage,
+        )
 
         assert result.ok
         video_rendered = [e for e in events if e.event == "video.rendered"]
@@ -1089,12 +1258,13 @@ class TestAgenticWorkflowWiringIntegration:
         aspects = {o["aspect"] for o in payload["outputs"]}
         assert aspects == {"9:16", "16:9"}
 
-    def test_drive_download_failure_emits_render_failed(self, isolation, monkeypatch):
+        assert len(fake_storage.downloads) == 1
+        assert len(fake_storage.uploads) == 2
+
+    def test_drive_download_failure_emits_render_failed(self, isolation, tmp_path):
         """Drive download failure in box render emits render.failed with stage=download.
 
-        Note: This tests box render's download failure path, NOT publish_round's
-        upload failure. For publish_round upload failures, see
-        test_publish_upload_failure_emits_round_publish_failed below.
+        Uses injected FakeBoxRenderStorage configured to fail downloads.
         """
         from ai_video_editor.grokbot.box_render import (
             RenderInput,
@@ -1102,32 +1272,33 @@ class TestAgenticWorkflowWiringIntegration:
             run_box_render,
         )
         from ai_video_editor.notify.models import Event
-        from ai_video_editor.storage import StorageError
 
         events: list[Event] = []
 
-        lock = RenderLock(str(isolation / "test.lock"))
+        scratch = tmp_path / "scratch"
+        scratch.mkdir()
 
-        with patch("ai_video_editor.grokbot.box_render.DriveStorage") as mock_drive_storage:
-            mock_storage = MagicMock()
-            mock_storage.download_clip.side_effect = StorageError("Drive download failed")
-            mock_drive_storage.return_value = mock_storage
+        lock = RenderLock(str(tmp_path / "test.lock"))
 
-            render_input = RenderInput(
-                edit_plan_id="plan-fail",
-                edit_plan_version="1",
-                asset_id="asset-fail",
-                clips=[{"drive_id": "d1", "clip_ref": "1"}],
-                trims=[{"clip_id": "1", "start_s": 0, "end_s": 1}],
-                concat_order=["1"],
-            )
+        fake_storage = FakeBoxRenderStorage(scratch)
+        fake_storage.set_fail_download(True)
 
-            result = run_box_render(
-                MagicMock(),
-                render_input,
-                emit_fn=lambda e: events.append(e),
-                lock=lock,
-            )
+        render_input = RenderInput(
+            edit_plan_id="plan-fail",
+            edit_plan_version="1",
+            asset_id="asset-fail",
+            clips=[{"drive_id": "d1", "clip_ref": "1"}],
+            trims=[{"clip_id": "1", "start_s": 0, "end_s": 1}],
+            concat_order=["1"],
+        )
+
+        result = run_box_render(
+            MagicMock(),
+            render_input,
+            emit_fn=lambda e: events.append(e),
+            lock=lock,
+            storage=fake_storage,
+        )
 
         assert not result.ok
         failed = [e for e in events if e.event == "render.failed"]
@@ -1203,8 +1374,11 @@ class TestAgenticWorkflowWiringIntegration:
             len(failed_event.payload["failed_clips"]) > 0 or failed_event.payload["digest_failed"]
         )
 
-    def test_render_error_produces_render_failed(self, isolation, monkeypatch, tmp_path):
-        """A render error produces render.failed event."""
+    def test_render_error_produces_render_failed(self, isolation, tmp_path):
+        """A render error produces render.failed event.
+
+        Uses injected FakeBoxRenderStorage with an invalid video file.
+        """
         from ai_video_editor.grokbot.box_render import (
             RenderInput,
             RenderLock,
@@ -1216,34 +1390,31 @@ class TestAgenticWorkflowWiringIntegration:
 
         scratch = tmp_path / "scratch"
         scratch.mkdir()
-        empty_clip = scratch / "empty.mp4"
-        empty_clip.write_bytes(b"not a valid video")
+
+        invalid_clip = scratch / "invalid.mp4"
+        invalid_clip.write_bytes(b"not a valid video")
 
         lock = RenderLock(str(tmp_path / "test.lock"))
 
-        with patch("ai_video_editor.grokbot.box_render.DriveStorage") as mock_drive_storage:
-            mock_storage = MagicMock()
-            mock_storage.scratch_dir = scratch
-            mock_storage.download_clip.return_value = empty_clip
-            mock_drive_storage.return_value = mock_storage
+        fake_storage = FakeBoxRenderStorage(scratch, clip_source=invalid_clip)
 
-            render_input = RenderInput(
-                edit_plan_id="plan-render-fail",
-                edit_plan_version="1",
-                asset_id="asset-render-fail",
-                clips=[{"drive_id": "d1", "clip_ref": "1"}],
-                trims=[{"clip_id": "1", "start_s": 0, "end_s": 1}],
-                concat_order=["1"],
-                game="league",
-            )
+        render_input = RenderInput(
+            edit_plan_id="plan-render-fail",
+            edit_plan_version="1",
+            asset_id="asset-render-fail",
+            clips=[{"drive_id": "d1", "clip_ref": "1"}],
+            trims=[{"clip_id": "1", "start_s": 0, "end_s": 1}],
+            concat_order=["1"],
+            game="league",
+        )
 
-            with patch("tempfile.mkdtemp", return_value=str(scratch)):
-                result = run_box_render(
-                    MagicMock(),
-                    render_input,
-                    emit_fn=lambda e: events.append(e),
-                    lock=lock,
-                )
+        result = run_box_render(
+            MagicMock(),
+            render_input,
+            emit_fn=lambda e: events.append(e),
+            lock=lock,
+            storage=fake_storage,
+        )
 
         assert not result.ok
         failed = [e for e in events if e.event == "render.failed"]
@@ -1283,8 +1454,11 @@ class TestAgenticWorkflowWiringIntegration:
         assert item.kind == "edit_plan"
         assert item.base_version == "1"
 
-    def test_event_emission_order(self, isolation, test_clip, monkeypatch, tmp_path):
-        """Events are emitted in the expected order."""
+    def test_event_emission_order(self, isolation, test_clip, tmp_path):
+        """Events are emitted in the expected order.
+
+        Uses injected FakeBoxRenderStorage.
+        """
         from ai_video_editor.grokbot.box_render import (
             RenderInput,
             RenderLock,
@@ -1296,35 +1470,28 @@ class TestAgenticWorkflowWiringIntegration:
 
         scratch = tmp_path / "scratch"
         scratch.mkdir()
-        local_clip = scratch / "clip_000.mp4"
-        shutil.copy(test_clip, local_clip)
 
         lock = RenderLock(str(tmp_path / "test.lock"))
 
-        with patch("ai_video_editor.grokbot.box_render.DriveStorage") as mock_drive_storage:
-            mock_storage = MagicMock()
-            mock_storage.scratch_dir = scratch
-            mock_storage.download_clip.return_value = local_clip
-            mock_storage.upload_file.side_effect = ["drive-9x16-id", "drive-16x9-id"]
-            mock_drive_storage.return_value = mock_storage
+        fake_storage = FakeBoxRenderStorage(scratch, clip_source=test_clip)
 
-            render_input = RenderInput(
-                edit_plan_id="plan-order",
-                edit_plan_version="1",
-                asset_id="asset-order",
-                clips=[{"drive_id": "d1", "clip_ref": "1"}],
-                trims=[{"clip_id": "1", "start_s": 0, "end_s": 2}],
-                concat_order=["1"],
-                game="league",
-            )
+        render_input = RenderInput(
+            edit_plan_id="plan-order",
+            edit_plan_version="1",
+            asset_id="asset-order",
+            clips=[{"drive_id": "d1", "clip_ref": "1"}],
+            trims=[{"clip_id": "1", "start_s": 0, "end_s": 2}],
+            concat_order=["1"],
+            game="league",
+        )
 
-            with patch("tempfile.mkdtemp", return_value=str(scratch)):
-                result = run_box_render(
-                    MagicMock(),
-                    render_input,
-                    emit_fn=lambda e: events.append(e),
-                    lock=lock,
-                )
+        result = run_box_render(
+            MagicMock(),
+            render_input,
+            emit_fn=lambda e: events.append(e),
+            lock=lock,
+            storage=fake_storage,
+        )
 
         assert result.ok
 
@@ -1465,8 +1632,6 @@ class TestAgenticWorkflowWiringIntegration:
 
         scratch = tmp_path / "scratch"
         scratch.mkdir()
-        local_clip = scratch / "clip_000.mp4"
-        shutil.copy(test_clip, local_clip)
 
         lock = RenderLock(str(tmp_path / "e2e.lock"))
 
@@ -1485,49 +1650,44 @@ class TestAgenticWorkflowWiringIntegration:
             def describe_video(self, frames, *, system_prompt, user_prompt):
                 return "Test video shows a kill with clear audio", {"model": "fake-vlm"}
 
-        with patch("ai_video_editor.grokbot.box_render.DriveStorage") as mock_drive_storage:
-            mock_storage = MagicMock()
-            mock_storage.scratch_dir = scratch
-            mock_storage.download_clip.return_value = local_clip
-            mock_storage.upload_file.side_effect = ["drive-e2e-9x16", "drive-e2e-16x9"]
-            mock_drive_storage.return_value = mock_storage
+        fake_storage = FakeBoxRenderStorage(scratch, clip_source=test_clip)
 
-            workflow_log.record("render_started", plan_id=parsed_plan.id)
+        workflow_log.record("render_started", plan_id=parsed_plan.id)
 
-            render_input = RenderInput(
-                edit_plan_id=parsed_plan.id,
-                edit_plan_version=parsed_plan.base_version,
-                asset_id=digest.asset_id,
-                clips=[{"drive_id": "d1", "clip_ref": "1"}],
-                trims=[{"clip_id": "1", "start_s": 0, "end_s": 2}],
-                concat_order=["1"],
-                game="league",
-                quality_criteria=[
-                    {"id": "crit-1", "text": "Shows a kill clearly"},
-                    {"id": "crit-2", "text": "Audio is clear"},
-                ],
+        render_input = RenderInput(
+            edit_plan_id=parsed_plan.id,
+            edit_plan_version=parsed_plan.base_version,
+            asset_id=digest.asset_id,
+            clips=[{"drive_id": "d1", "clip_ref": "1"}],
+            trims=[{"clip_id": "1", "start_s": 0, "end_s": 2}],
+            concat_order=["1"],
+            game="league",
+            quality_criteria=[
+                {"id": "crit-1", "text": "Shows a kill clearly"},
+                {"id": "crit-2", "text": "Audio is clear"},
+            ],
+        )
+
+        (scratch / "frame_001.jpg").write_bytes(b"\x00")
+        workflow_log.record("quality_gate_run", criteria_count=2)
+
+        with (
+            patch(
+                "ai_video_editor.grokbot.quality_gate.DefaultVisionClient",
+                return_value=FakeVisionClient(),
+            ),
+            patch(
+                "ai_video_editor.grokbot.quality_gate._sample_frames",
+                return_value=[scratch / "frame_001.jpg"],
+            ),
+        ):
+            result = run_box_render(
+                MagicMock(),
+                render_input,
+                emit_fn=capture_event,
+                lock=lock,
+                storage=fake_storage,
             )
-
-            (scratch / "frame_001.jpg").write_bytes(b"\x00")
-            workflow_log.record("quality_gate_run", criteria_count=2)
-
-            with (
-                patch("tempfile.mkdtemp", return_value=str(scratch)),
-                patch(
-                    "ai_video_editor.grokbot.quality_gate.DefaultVisionClient",
-                    return_value=FakeVisionClient(),
-                ),
-                patch(
-                    "ai_video_editor.grokbot.quality_gate._sample_frames",
-                    return_value=[scratch / "frame_001.jpg"],
-                ),
-            ):
-                result = run_box_render(
-                    MagicMock(),
-                    render_input,
-                    emit_fn=capture_event,
-                    lock=lock,
-                )
 
         assert result.ok, f"Render failed: {result.error}"
 
