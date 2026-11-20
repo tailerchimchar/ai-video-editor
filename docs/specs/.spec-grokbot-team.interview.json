@@ -1,0 +1,435 @@
+{
+  "specName": "spec-grokbot-team",
+  "timestamp": "2026-11-20T00:00:00-06:00",
+  "status": "spec-written-pending-approval",
+  "input": "How we can use Grok Bot (xAI always-on agents) with the ai-video-editor pipeline: an editor bot and a viewer bot that message Noodlz on his phone; set it up before tomorrow",
+  "capturedAtCommit": "1337c39",
+  "baseline": {
+    "derivedFrom": "Explore agent scan 2026-11-20 + docs.x.ai/grok-bot pages (overview, faq, skills-routines-and-automations, computer-and-apps, chat-and-collaboration)",
+    "capturedAtCommit": "1337c39",
+    "repo": "ai-video-editor (api/ FastAPI backend; mcp/ sibling FastMCP stdio server)",
+    "branch": "master",
+    "headCommit": "1337c39",
+    "nature": "local-first video pipeline; footage never leaves the PC",
+    "claims": [
+      {
+        "id": "C1",
+        "area": "pipeline-bridge",
+        "claim": "No outbound notifier/webhook code exists in api/src; only outbound httpx.post is Groq transcription (candidates/transcribe_backends.py:231)"
+      },
+      {
+        "id": "C2",
+        "area": "pipeline-bridge",
+        "claim": "Job completion is written in three copied helpers (routers/analyze.py:50 _finish, routers/assets.py:439 _finish_job, routers/shorts.py:57 _finish_job) plus inline SQL in edits.py:111, league.py:43, sfx.py:45, clips.py:34-39, projects.py:88-140"
+      },
+      {
+        "id": "C3",
+        "area": "pipeline-bridge",
+        "claim": "highlights.build_highlights (highlights.py:317-328) and shorts.build_shorts (shorts.py:1191) return structured dicts that jobs flatten to a 'written/total -> folder' string"
+      },
+      {
+        "id": "C4",
+        "area": "editor-bot",
+        "claim": "Panel round artifacts (brief.md, clips.json, transcript.json, *-expert.json, panel-decision.md, watch_*.json) are written by the chair session by hand into WORKSPACE/panel/<round>/; no backend code writes them"
+      },
+      {
+        "id": "C5",
+        "area": "verdicts",
+        "claim": "POST /api/v1/mentor/record_correction (routers/mentor.py:66) takes game, feedback, rule, clip_ref?, source_context?, tags?, concept?, verdict? (payoff|false_positive|style), example?; MCP tool lacks the typed fields"
+      },
+      {
+        "id": "C6",
+        "area": "config",
+        "claim": "config.py is one flat pydantic-settings class; optional integrations are prefixed field blocks inert when empty (riot_* :62-80, typesafe_* :43-52, langfuse_* :113-116)"
+      },
+      {
+        "id": "C7",
+        "area": "pipeline-bridge",
+        "claim": "MCP server runs stdio only (mcp.run() server.py:2227); mcp[cli]>=1.27.1 supports streamable-http but no auth layer exists"
+      },
+      {
+        "id": "C8",
+        "area": "viewer-bot",
+        "claim": "viewer-expert log entry format: '- YYYY-MM-DD analytics: <platform> <video> <summary>. Lesson: ...'; analytics entries outrank web rules (SKILL.md:62-63)"
+      },
+      {
+        "id": "C9",
+        "area": "privacy",
+        "claim": "Spec D22: teammate audio allowed in cuts; summoner names cropped/blurred in 9:16; logs never quote teammate speech; transcripts never committed (spec-expert-panel.md:176-182, :241)"
+      },
+      {
+        "id": "C10",
+        "area": "grokbot",
+        "claim": "Grok Bot: always-on cloud agents; channels = desktop/phone app, X Chat, Slack, voice; no SMS/iMessage/email-to-user; routines on schedule or events (Slack, email to bot address, inbound webhook POST URL + bearer); remote MCP by URL with headers/OAuth; skills from written instructions; bots can message each other; approvals expire ~30 min"
+      },
+      {
+        "id": "C11",
+        "area": "grokbot",
+        "claim": "Grok Bot connectors: no Jira/Atlassian, no GitHub connector (git via cloud computer CLI, credentials shared across bots); Google Drive read-only (search/read); all bots on an account share one cloud computer"
+      },
+      {
+        "id": "C12",
+        "area": "accounts",
+        "claim": "Grok Bot included on X Subscription Premium/Super/Ultra and paid Cursor plans; usage from a weekly shared pool; free trial = 7-day credit, never auto-converts; user currently has no plan"
+      }
+    ]
+  },
+  "coverageMap": {
+    "problem": "done",
+    "team-shape": "done",
+    "cost-model": "done",
+    "video-handoff": "done",
+    "lead-bot": "done",
+    "editor-bot": "done",
+    "review-loop": "done",
+    "devops-bot": "done",
+    "viewer-bot": "done",
+    "repo-access": "done",
+    "privacy": "done",
+    "accounts-controls": "done"
+  },
+  "qaLog": [
+    {
+      "area": "problem",
+      "q": "What should the texts do for you?",
+      "a": "All four: ask me for verdicts, tell me what got made, nudge me to act, quiz me to teach it. Plus: the bot should act like an engineer: tell me about blockers and learn with me."
+    },
+    {
+      "area": "team-shape",
+      "q": "Where should the engineer bot learn project state?",
+      "a": "All sources (Jira AVE, session reports, GitHub repo, pipeline events). Reframed: Grok Bot should be a TEAM always working on the project while I'm at work without racking up tokens: a lead (senior/principal, organizes, reports to me), a pure editor, a devops engineer (hygiene, scalable, extendable, COST is huge), and a viewer-retention researcher who studies zekken, jawgemo, ryuk lol, MrBeast. My content: philosophical, funny, wide variety, montage-y, heartfelt with story."
+    },
+    {
+      "area": "cost-model",
+      "q": "Shifts, event-driven, or continuous?",
+      "a": "Continuous, but worried about cost. I want a lot of work done. When the lead shows me a video I'm happy with I tell it 'go to sleep with the team' and everything stops. Jev should help with classifying so Grok Bot can always be working."
+    },
+    {
+      "area": "video-handoff",
+      "q": "How do bots get a video rendered when they can't touch the PC?",
+      "a": "Confused about edit vs render at first; after explanation chose: local runner + Drive. Also: I want to watch parts of the video; the agent should text 'watch this part, is this ok?'"
+    },
+    {
+      "area": "lead-bot",
+      "q": "How often should the lead text you?",
+      "a": "All the time. I don't want to be the blocker. I reply whenever I can. I want to be the human in the loop as much as possible."
+    },
+    {
+      "area": "editor-bot",
+      "q": "What may the editor bot see (privacy of voice comms)?",
+      "a": "Expected it to see the whole footage; after explanation chose: paraphrased digest + clips on Drive opened on demand."
+    },
+    {
+      "area": "review-loop",
+      "q": "(user) How will the editor bot see if its work is good? A reviewer bot?",
+      "a": "Proposed and accepted implicitly: local VLM critic after every render + viewer bot second opinion on hook; lead shows user on ship_it or disagreement. User later said: 'I want the reviewer + video editor to be masters of their craft'."
+    },
+    {
+      "area": "devops-bot",
+      "q": "What should devops's first week be about?",
+      "a": "Cost audit, code hygiene review, Zeri pipeline findings, the deferred list, AND an audit of our tools. It should work closely with the others. Lead = master of all parts; devops writes the best code; reviewer + editor masters of their craft; a full-fledged team."
+    },
+    {
+      "area": "viewer-bot",
+      "q": "What should the viewer bot hand the team?",
+      "a": "Creator studies into the viewer log, hook/title/caption for every short, my analytics weekly. Trend watch OK but it should ask me frequently for permission first."
+    },
+    {
+      "area": "repo-access",
+      "q": "What may devops do to the repo on its own?",
+      "a": "Branches + PRs, you or I merge. Ping me when you need me to review code, and I want summaries."
+    },
+    {
+      "area": "privacy",
+      "q": "Clips to the bots' Drive folder carry teammate voices and on-screen names; transcripts and .env never leave. Right line?",
+      "a": "Yes, clips as-is to a private folder."
+    },
+    {
+      "area": "accounts-controls",
+      "q": "Which Grok Bot plan?",
+      "a": "I don't have any. Should I do the free trial? -> Free trial first."
+    }
+  ],
+  "decisionsLog": [
+    {
+      "id": "D1",
+      "topic": "Role of the Grok team",
+      "decision": "Off-hours cloud crew (code, research, planning, edit decisions, reporting); the in-repo Claude panel stays the footage-time crew on the PC",
+      "rationale": "Footage never leaves the PC; avoids duplicating the panel",
+      "source": "Interview",
+      "date": "2026-11-20"
+    },
+    {
+      "id": "D2",
+      "topic": "Team roster",
+      "decision": "Four bots: Lead (generalist, reports to Noodlz), Editor, DevOps, Viewer (retention researcher + reviewer seat)",
+      "rationale": "User's stated team",
+      "source": "Interview",
+      "date": "2026-11-20"
+    },
+    {
+      "id": "D3",
+      "topic": "Cost model",
+      "decision": "Continuous loop that idles when the queue is empty; 'sleep'/'wake' commands to the lead stop/resume everything; lead pauses itself below a usage floor; evening usage report",
+      "rationale": "User wants continuous work but fears cost; no public per-bot-hour price exists",
+      "source": "Interview",
+      "date": "2026-11-20"
+    },
+    {
+      "id": "D4",
+      "topic": "Video handoff",
+      "decision": "Local runner on the PC renders edit plans and uploads mp4s (and on-request ~10 s previews) to a private Google Drive folder; bots only read Drive; nothing inbound to the PC",
+      "rationale": "Rendering needs footage + GPU on the PC and costs no tokens; bots cannot write Drive",
+      "source": "Interview",
+      "date": "2026-11-20"
+    },
+    {
+      "id": "D5",
+      "topic": "Interrupt rules",
+      "decision": "Lead texts freely (milestones, PR pings with summaries, previews, blockers); the team NEVER blocks on a reply: every question carries the default it will proceed with; late replies are applied as corrections",
+      "rationale": "User wants maximum human-in-the-loop without being the blocker",
+      "source": "Interview",
+      "date": "2026-11-20"
+    },
+    {
+      "id": "D6",
+      "topic": "Editor inputs",
+      "decision": "Per game: paraphrased digest (event, timestamps, panel scores, one-line paraphrase of voice moments, no names) + the individual clips on Drive, opened on demand only",
+      "rationale": "Privacy rule D22; watching costs usage",
+      "source": "Interview",
+      "date": "2026-11-20"
+    },
+    {
+      "id": "D7",
+      "topic": "Review loop",
+      "decision": "Runner runs the local VLM critic after every render and returns critique + mp4; viewer bot gives a hook second opinion; lead shows the user on ship_it or on editor/critic disagreement; no separate reviewer bot",
+      "rationale": "Critic exists and costs ~$0.02/min; a reviewer bot would burn usage",
+      "source": "Interview",
+      "date": "2026-11-20"
+    },
+    {
+      "id": "D8",
+      "topic": "DevOps mandate",
+      "decision": "Cost audit, code hygiene review, Zeri pipeline findings (window drift, voice-only rejection, funny threshold), the deferred list, and an audit of our MCP/API tools; coordinates with the other bots",
+      "rationale": "User's list",
+      "source": "Interview",
+      "date": "2026-11-20"
+    },
+    {
+      "id": "D9",
+      "topic": "Viewer deliverables",
+      "decision": "Creator studies (zekken, jawgemo, ryuk, MrBeast) as PRs to viewer-expert/log.md; hook/title/caption/hashtags/thumbnail timestamp for every edit plan; weekly analytics entries (user grants creator logins in the bot's Vault); trend watch only after asking the user each time",
+      "rationale": "User's list; analytics entries outrank rules per existing skill",
+      "source": "Interview",
+      "date": "2026-11-20"
+    },
+    {
+      "id": "D10",
+      "topic": "Repo access",
+      "decision": "Bots push branches and open PRs with passing tests; Noodlz or the Claude session merges; every PR triggers a text with a plain-language summary",
+      "rationale": "Master stays safe; the runner renders from master",
+      "source": "Interview",
+      "date": "2026-11-20"
+    },
+    {
+      "id": "D11",
+      "topic": "Privacy line",
+      "decision": "Digests strip names; raw clips (teammate audio, on-screen names) go to a private Drive folder; transcripts, the full VOD and api/.env never leave the PC",
+      "rationale": "Clips are the content that gets published anyway",
+      "source": "Interview",
+      "date": "2026-11-20"
+    },
+    {
+      "id": "D12",
+      "topic": "Accounts",
+      "decision": "Free trial first; plan chosen after two days from the lead's usage reports",
+      "rationale": "User has no plan; trial never auto-converts",
+      "source": "Interview",
+      "date": "2026-11-20"
+    },
+    {
+      "id": "D13",
+      "topic": "Connectors",
+      "decision": "Jira via Atlassian's remote MCP server added to the lead by URL; GitHub via git + fine-grained token on the shared cloud computer; Drive read-only from the bot side",
+      "rationale": "No Jira/GitHub connector exists; Drive write undocumented",
+      "source": "Interview",
+      "date": "2026-11-20"
+    },
+    {
+      "id": "D14",
+      "topic": "Bot -> PC transport (my call)",
+      "decision": "A git-based queue the runner polls: bots commit edit plans, preview requests and verdict files to a dedicated queue repo/branch; PC -> bot direction is the inbound webhook (JSON) plus Drive uploads",
+      "rationale": "Nothing inbound to the PC; git is the one write channel bots verifiably have",
+      "source": "Interview",
+      "date": "2026-11-20"
+    },
+    {
+      "id": "D15",
+      "topic": "Queue lockdown + wake model",
+      "decision": "Strict: separate tokens, allowlist validator, Viewer has no queue write; Lead always on, others on assignment; re-decide after one day",
+      "rationale": "Shared injectable cloud computer; trial pool",
+      "source": "Red Team",
+      "date": "2026-11-20"
+    },
+    {
+      "id": "D16",
+      "topic": "Verdict provenance",
+      "decision": "Only verdicts quoting Noodlz's text reach mentor; bot defaults to a deduped decisions.log",
+      "rationale": "Mentor is human ground truth",
+      "source": "Red Team",
+      "date": "2026-11-20"
+    },
+    {
+      "id": "D17",
+      "topic": "Sleep semantics",
+      "decision": "SLEEP flag in the queue pauses the runner and buffers events; one summary on wake",
+      "rationale": "'sleep' must stop the PC side too",
+      "source": "Red Team",
+      "date": "2026-11-20"
+    },
+    {
+      "id": "D18",
+      "topic": "Plan envelope",
+      "decision": "id, compilation_id, base_version, schema_version, author; extra=forbid; stale plans rejected with current state; timed effects refused until applied",
+      "rationale": "Silent drops and races",
+      "source": "Red Team",
+      "date": "2026-11-20"
+    },
+    {
+      "id": "D19",
+      "topic": "Heartbeat",
+      "decision": "5-min heartbeat; on loss the lead texts once, Editor sleeps, DevOps/Viewer continue",
+      "rationale": "Runner can die while user is away",
+      "source": "Red Team",
+      "date": "2026-11-20"
+    },
+    {
+      "id": "D20",
+      "topic": "Day-one failure budget",
+      "decision": "Rough edges accepted in the trial week as long as D15-D19 exist",
+      "rationale": "User chose all four bots day one",
+      "source": "Red Team",
+      "date": "2026-11-20"
+    },
+    {
+      "id": "D21",
+      "topic": "Merge policy",
+      "decision": "Claude session merges low-risk PRs; big or sensitive ones pinged to Noodlz; runner moves on deploy only",
+      "rationale": "User must not be the blocker",
+      "source": "Red Team",
+      "date": "2026-11-20"
+    },
+    {
+      "id": "D22",
+      "topic": "Drive account",
+      "decision": "Dedicated Google account holding only the bot folder; retention 7 days previews, renders until shipped",
+      "rationale": "Connector likely reads the whole Drive",
+      "source": "Red Team",
+      "date": "2026-11-20"
+    },
+    {
+      "id": "D23",
+      "topic": "Jira access",
+      "decision": "Full write via a separate bot Atlassian user",
+      "rationale": "User's choice over read-only",
+      "source": "Red Team",
+      "date": "2026-11-20"
+    },
+    {
+      "id": "D24",
+      "topic": "Day-one cut",
+      "decision": "All four bots, previews only; edit_plan execution and mentor verdicts follow once D15-D18 are built",
+      "rationale": "User's choice",
+      "source": "Red Team",
+      "date": "2026-11-20"
+    }
+  ],
+  "driftLedger": [],
+  "previewUrl": "https://claude.ai/artifact/NUK1HBtf5pAXzZN8ZdvZkx",
+  "sourceIssue": null,
+  "feedbackRounds": [],
+  "redTeamStatus": "completed",
+  "redTeamFindings": [
+    {
+      "n": 1,
+      "severity": "critical",
+      "dimension": "Security Gaps",
+      "title": "Git queue is an inbound command channel; shared token on shared injectable cloud computer",
+      "resolution": "Strict lockdown (D15)",
+      "status": "resolved"
+    },
+    {
+      "n": 2,
+      "severity": "critical",
+      "dimension": "Data Integrity",
+      "title": "Verdict files have no provenance; bot defaults could become Noodlz's rulings",
+      "resolution": "Only quoted verdicts reach mentor (D16)",
+      "status": "resolved"
+    },
+    {
+      "n": 3,
+      "severity": "critical",
+      "dimension": "Scaling Cliffs",
+      "title": "Four always-on bots drain the 7-day trial pool",
+      "resolution": "Lead always on, others on assignment, caps, re-decide after one day (D15)",
+      "status": "resolved"
+    },
+    {
+      "n": 4,
+      "severity": "major",
+      "dimension": "Contradictory Decisions",
+      "title": "'sleep' stops bots but not the PC",
+      "resolution": "Sleep flag pauses runner and buffers events (D17)",
+      "status": "resolved"
+    },
+    {
+      "n": 5,
+      "severity": "major",
+      "dimension": "Data Integrity",
+      "title": "Edit plans lack envelope/version; silent drops; races with daytime panel",
+      "resolution": "Envelope + base_version; stale rejected; timed effects refused (D18)",
+      "status": "resolved"
+    },
+    {
+      "n": 6,
+      "severity": "major",
+      "dimension": "Operational Concerns",
+      "title": "No heartbeat; runner death unseen",
+      "resolution": "5-min heartbeat; lead texts once; Editor sleeps (D19)",
+      "status": "resolved"
+    },
+    {
+      "n": 7,
+      "severity": "major",
+      "dimension": "Contradictory Decisions",
+      "title": "Every PR needs a human merge; user is the blocker",
+      "resolution": "Claude merges low-risk PRs; big ones ping user; explicit deploy (D21)",
+      "status": "resolved"
+    },
+    {
+      "n": 8,
+      "severity": "major",
+      "dimension": "Security Gaps",
+      "title": "Drive connector reads whole Drive; no upload creds/quota/retention",
+      "resolution": "Dedicated Google account + retention (D22)",
+      "status": "resolved"
+    },
+    {
+      "n": 9,
+      "severity": "major",
+      "dimension": "Dependency Risks",
+      "title": "Atlassian OAuth from a bot; trial expiry mid-run",
+      "resolution": "Separate bot Atlassian user; trial-end runbook (D23)",
+      "status": "resolved"
+    },
+    {
+      "n": 10,
+      "severity": "minor",
+      "dimension": "Wildcard",
+      "title": "'Before tomorrow' needs ~6 new components",
+      "resolution": "All four bots, previews only on day one (D24)",
+      "status": "resolved"
+    }
+  ],
+  "specPath": "docs/specs/spec-grokbot-team.md"
+}
