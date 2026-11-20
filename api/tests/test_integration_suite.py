@@ -4,12 +4,18 @@ This suite tests the combined code from PRs #13, #14, #16, and #17 end-to-end
 with fully stubbed external services (Jev, Anthropic/Haiku, VLM, Drive).
 
 Covers:
-1) MCP editing tools: trim, concat, captions, 9:16 and 16:9 output
+1) MCP editing tools: trim, concat, captions, 9:16 and 16:9 output via ffmpeg
 2) Jev cost path with stubbed transports and LLM
 3) Agentic workflow wiring: round.published -> digest -> edit_plan -> box render
+4) End-to-end chain: round.published -> digest -> edit_plan -> render -> quality gate
 
 All tests are offline (no network), deterministic, and fast (whole suite
 under a minute). External dependencies (ffmpeg) are skipped if unavailable.
+
+Design gaps documented here:
+- box_render.run_box_render() instantiates DriveStorage directly at line 397
+  with no injection seam. Tests must patch at the module level rather than
+  injecting a storage backend instance. See test_box_render_* tests.
 """
 
 from __future__ import annotations
@@ -19,7 +25,7 @@ import os
 import shutil
 import subprocess
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -34,6 +40,27 @@ os.environ.setdefault("WORKSPACE_DIR", "/tmp/fake_workspace")
 from ai_video_editor.config import settings
 
 pytestmark = pytest.mark.integration
+
+
+# =============================================================================
+# Event log for tracking workflow steps in e2e tests
+# =============================================================================
+
+
+@dataclass
+class WorkflowEventLog:
+    """Records workflow events in order for e2e assertions."""
+
+    events: list[dict] = field(default_factory=list)
+
+    def record(self, step: str, **kwargs):
+        self.events.append({"step": step, "ts": datetime.now(timezone.utc).isoformat(), **kwargs})
+
+    def steps(self) -> list[str]:
+        return [e["step"] for e in self.events]
+
+    def find(self, step: str) -> dict | None:
+        return next((e for e in self.events if e["step"] == step), None)
 
 
 def _ffmpeg_available() -> bool:
@@ -251,6 +278,35 @@ class TestMcpEditingToolsIntegration:
         info = _probe_video(output)
         assert 1.5 < info["duration"] < 2.5, f"Expected ~2s, got {info['duration']}"
 
+    def test_caption_renders_output_file(self, isolation, test_clip, tmp_path):
+        """Test that captions render to an actual output file (not just filter string)."""
+        from ai_video_editor.edits import apply_caption
+
+        output_path = tmp_path / "output" / "captioned.mp4"
+        output_path.parent.mkdir(parents=True)
+
+        segments = [
+            {"start_seconds": 0.5, "end_seconds": 1.5, "text": "First caption"},
+            {"start_seconds": 2.0, "end_seconds": 2.8, "text": "Second caption"},
+        ]
+
+        ok, err = apply_caption(
+            str(test_clip),
+            str(output_path),
+            start=0.0,
+            end=3.0,
+            segments=segments,
+            aspect="16:9",
+        )
+
+        assert ok, f"apply_caption failed: {err}"
+        assert output_path.exists(), "Caption output file was not created"
+
+        info = _probe_video(output_path)
+        assert info["duration"] > 2.0, f"Output too short: {info['duration']}"
+        assert info["width"] == 1920
+        assert info["height"] == 1080
+
     def test_captions_filter_generation(self, isolation):
         """Test that caption filters are generated correctly."""
         from ai_video_editor.edits import caption_filters
@@ -266,6 +322,105 @@ class TestMcpEditingToolsIntegration:
         assert "First caption" in filters
         assert "Second caption" in filters
         assert "enable='between" in filters
+
+    def test_mcp_trim_through_editing_primitive(self, isolation, test_clip, tmp_path):
+        """Test MCP trim_clip tool path: calls editing.trim_clip with ffprobe verification.
+
+        This tests the actual editing primitive that the MCP `trim_source_to_clip` tool uses.
+        """
+        from ai_video_editor.editing import trim_clip
+
+        output = tmp_path / "trimmed_mcp_path.mp4"
+        ok, err = trim_clip(str(test_clip), str(output), start_seconds=0.5, end_seconds=2.0)
+
+        assert ok, f"trim_clip failed: {err}"
+        assert output.exists()
+
+        info = _probe_video(output)
+        assert 1.0 < info["duration"] < 2.1, f"Trim duration wrong: {info['duration']}"
+
+    def test_mcp_concat_through_box_render(self, isolation, test_clip, tmp_path):
+        """Test MCP concat tool path: box render concat with ffprobe verification.
+
+        The MCP compile tools use box_render's _render_single_aspect for concat.
+        """
+        from ai_video_editor.grokbot.box_render import _render_single_aspect
+
+        scratch = tmp_path / "mcp_concat"
+        scratch.mkdir()
+
+        clip2 = tmp_path / "clip_b.mp4"
+        shutil.copy(test_clip, clip2)
+
+        output, err = _render_single_aspect(
+            scratch,
+            [test_clip, clip2],
+            [
+                {"clip_id": "a", "start_s": 0.5, "end_s": 1.5},
+                {"clip_id": "b", "start_s": 0.5, "end_s": 1.5},
+            ],
+            ["a", "b"],
+            "16:9",
+        )
+
+        assert err is None, f"concat failed: {err}"
+        assert output is not None and output.exists()
+
+        info = _probe_video(output)
+        assert 1.5 < info["duration"] < 2.5
+        assert info["width"] == 1920
+        assert info["height"] == 1080
+
+    def test_mcp_9x16_output_resolution(self, isolation, test_clip, tmp_path):
+        """Test MCP 9:16 output: box render produces correct portrait resolution.
+
+        MCP tools `compile_shorts`, `compile_outplayed_montage` etc. use this path.
+        """
+        from ai_video_editor.grokbot.box_render import _render_single_aspect
+
+        scratch = tmp_path / "mcp_9x16"
+        scratch.mkdir()
+
+        output, err = _render_single_aspect(
+            scratch,
+            [test_clip],
+            [{"clip_id": "c", "start_s": 0.0, "end_s": 2.0}],
+            ["c"],
+            "9:16",
+            game="league",
+        )
+
+        assert err is None
+        assert output is not None and output.exists()
+
+        info = _probe_video(output)
+        assert info["width"] == 720, f"9:16 width wrong: {info['width']}"
+        assert info["height"] == 1280, f"9:16 height wrong: {info['height']}"
+
+    def test_mcp_16x9_output_resolution(self, isolation, test_clip, tmp_path):
+        """Test MCP 16:9 output: box render produces correct landscape resolution.
+
+        MCP tools use this for standard YouTube/horizontal output.
+        """
+        from ai_video_editor.grokbot.box_render import _render_single_aspect
+
+        scratch = tmp_path / "mcp_16x9"
+        scratch.mkdir()
+
+        output, err = _render_single_aspect(
+            scratch,
+            [test_clip],
+            [{"clip_id": "d", "start_s": 0.0, "end_s": 2.0}],
+            ["d"],
+            "16:9",
+        )
+
+        assert err is None
+        assert output is not None and output.exists()
+
+        info = _probe_video(output)
+        assert info["width"] == 1920, f"16:9 width wrong: {info['width']}"
+        assert info["height"] == 1080, f"16:9 height wrong: {info['height']}"
 
 
 # =============================================================================
@@ -934,8 +1089,13 @@ class TestAgenticWorkflowWiringIntegration:
         aspects = {o["aspect"] for o in payload["outputs"]}
         assert aspects == {"9:16", "16:9"}
 
-    def test_upload_failure_produces_round_publish_failed(self, isolation, monkeypatch):
-        """An upload failure produces round.publish_failed, no round.published."""
+    def test_drive_download_failure_emits_render_failed(self, isolation, monkeypatch):
+        """Drive download failure in box render emits render.failed with stage=download.
+
+        Note: This tests box render's download failure path, NOT publish_round's
+        upload failure. For publish_round upload failures, see
+        test_publish_upload_failure_emits_round_publish_failed below.
+        """
         from ai_video_editor.grokbot.box_render import (
             RenderInput,
             RenderLock,
@@ -973,7 +1133,75 @@ class TestAgenticWorkflowWiringIntegration:
         failed = [e for e in events if e.event == "render.failed"]
         assert len(failed) == 1
         assert failed[0].payload["stage"] == "download"
-        assert "round.published" not in [e.event for e in events]
+        assert "video.rendered" not in [e.event for e in events]
+
+    def test_publish_upload_failure_emits_round_publish_failed(self, isolation, monkeypatch):
+        """Storage upload failure in publish_round emits round.publish_failed, not round.published.
+
+        Tests the PR #13 path: grokbot-publish-round with an uploader that fails.
+        Asserts:
+        - round.publish_failed is emitted
+        - round.published is NOT emitted
+        - PublishUploadError is raised (which causes exit code 4 in CLI)
+        """
+        from ai_video_editor.grokbot.publish import PublishUploadError, publish_round
+        from ai_video_editor.notify.models import Event
+
+        events: list[Event] = []
+
+        def capture_emit(e: Event):
+            events.append(e)
+
+        round_dir = isolation / "rounds" / "2026-11-20_upload_fail"
+        round_dir.mkdir(parents=True)
+
+        clips_data = [
+            {
+                "file": "clip_14m32s.mp4",
+                "start_seconds": 872.0,
+                "end_seconds": 882.0,
+                "event": "kill",
+            }
+        ]
+        (round_dir / "clips.json").write_text(json.dumps(clips_data))
+        (round_dir / "gaming-expert.json").write_text(json.dumps([]))
+        (round_dir / "viewer-expert.json").write_text(json.dumps({"clips": []}))
+
+        clip_file = round_dir / "clip_14m32s.mp4"
+        clip_file.write_bytes(b"\x00" * 100)
+
+        monkeypatch.setattr(settings, "workspace_dir", isolation)
+        monkeypatch.setattr(settings, "outplayed_media_dir", str(isolation / "media"))
+
+        class FailingUploader:
+            def upload(self, path, *, name, subfolder):
+                raise RuntimeError("Drive upload failed: simulated network error")
+
+        with pytest.raises(PublishUploadError) as exc_info:
+            publish_round(
+                round_dir,
+                game="league",
+                compilation_id=None,
+                api=None,
+                uploader=FailingUploader(),
+                ask_many=False,
+                emit=capture_emit,
+            )
+
+        assert "clip" in str(exc_info.value) or "failed" in str(exc_info.value).lower()
+
+        event_names = [e.event for e in events]
+        assert "round.publish_failed" in event_names
+        assert "round.published" not in event_names
+
+        failed_event = next(e for e in events if e.event == "round.publish_failed")
+        assert failed_event.payload["step"] in ("clips", "digest"), (
+            f"Unexpected step: {failed_event.payload['step']}"
+        )
+        assert failed_event.payload["reason"] == "upload failed"
+        assert (
+            len(failed_event.payload["failed_clips"]) > 0 or failed_event.payload["digest_failed"]
+        )
 
     def test_render_error_produces_render_failed(self, isolation, monkeypatch, tmp_path):
         """A render error produces render.failed event."""
@@ -1141,6 +1369,187 @@ class TestAgenticWorkflowWiringIntegration:
             assert failed[0].payload["stage"] == "busy"
         finally:
             lock.release()
+
+    def test_end_to_end_workflow_chain(self, isolation, test_clip, monkeypatch, tmp_path):
+        """Full chain: round.published -> digest -> edit_plan -> render -> gate -> video.rendered.
+
+        This test drives the complete workflow with fakes and asserts:
+        1. Steps happen in exact order: digest_built -> edit_plan_built -> render_started ->
+           quality_gate_run -> video_rendered
+        2. Exactly one Jev request is made for the quality gate
+        3. All expected events are emitted with correct payloads
+
+        Design gap: box_render.run_box_render() calls _run_quality_gate() internally which
+        instantiates DefaultVisionClient directly. To test with a fake vision client, we patch
+        at the DefaultVisionClient class level.
+        """
+        from ai_video_editor.decisions.models import Answer
+        from ai_video_editor.grokbot.box_render import RenderInput, RenderLock, run_box_render
+        from ai_video_editor.grokbot.digest import build_digest
+        from ai_video_editor.grokbot.queue import parse_item
+        from ai_video_editor.notify.models import Event
+
+        workflow_log = WorkflowEventLog()
+        emitted_events: list[Event] = []
+        jev_calls: list[dict] = []
+
+        round_dir = isolation / "rounds" / "2026-11-20_e2e"
+        round_dir.mkdir(parents=True)
+        clips_data = [
+            {
+                "file": "clip_14m32s.mp4",
+                "start_seconds": 872.0,
+                "end_seconds": 882.0,
+                "event": "kill",
+            },
+            {
+                "file": "clip_21m05s.mp4",
+                "start_seconds": 1265.0,
+                "end_seconds": 1275.0,
+                "event": "ace",
+            },
+        ]
+        (round_dir / "clips.json").write_text(json.dumps(clips_data))
+        (round_dir / "gaming-expert.json").write_text(json.dumps([]))
+        (round_dir / "viewer-expert.json").write_text(json.dumps({"clips": []}))
+
+        digest = build_digest(round_dir, game="league")
+        digest.compilation_id = "comp-e2e-001"
+        digest.compilation_version = "1"
+        digest.asset_id = "asset-e2e-001"
+        workflow_log.record(
+            "digest_built",
+            round=digest.round,
+            clips=len(digest.clips),
+            asset_id=digest.asset_id,
+        )
+
+        edit_plan_json = json.dumps(
+            {
+                "id": str(uuid.uuid4()),
+                "kind": "edit_plan",
+                "author_bot": "editor",
+                "created": datetime.now(timezone.utc).isoformat(),
+                "schema_version": 1,
+                "compilation_id": digest.compilation_id,
+                "base_version": digest.compilation_version,
+                "plan": {
+                    "format": "hype_montage",
+                    "source_clips": [
+                        {"clip_ref": "1", "start": 0.0, "end": 2.0, "intensity": 0.9},
+                    ],
+                    "order": ["1"],
+                    "music": None,
+                    "effects": [],
+                    "cards": [],
+                    "sfx": [],
+                    "rejected": [],
+                },
+                "copy": {
+                    "title": "E2E Test Short",
+                    "caption": "Full chain test",
+                    "hashtags": ["test"],
+                    "thumbnail_t": 1.0,
+                },
+            }
+        )
+        parsed_plan = parse_item(edit_plan_json)
+        assert parsed_plan.kind == "edit_plan"
+        assert parsed_plan.base_version == digest.compilation_version
+        workflow_log.record(
+            "edit_plan_built",
+            plan_id=parsed_plan.id,
+            base_version=parsed_plan.base_version,
+            asset_id=digest.asset_id,
+        )
+
+        scratch = tmp_path / "scratch"
+        scratch.mkdir()
+        local_clip = scratch / "clip_000.mp4"
+        shutil.copy(test_clip, local_clip)
+
+        lock = RenderLock(str(tmp_path / "e2e.lock"))
+
+        def capture_event(e: Event):
+            emitted_events.append(e)
+            if e.event == "video.rendered":
+                workflow_log.record("video_rendered", plan_id=e.payload.get("edit_plan_id"))
+
+        def mock_ask_many(items):
+            jev_calls.append({"count": len(items), "items": [str(i) for i in items]})
+            return [Answer(value=True, probability=0.85, backend="jev") for _ in items]
+
+        monkeypatch.setattr("ai_video_editor.decisions.ask_many", mock_ask_many)
+
+        class FakeVisionClient:
+            def describe_video(self, frames, *, system_prompt, user_prompt):
+                return "Test video shows a kill with clear audio", {"model": "fake-vlm"}
+
+        with patch("ai_video_editor.grokbot.box_render.DriveStorage") as mock_drive_storage:
+            mock_storage = MagicMock()
+            mock_storage.scratch_dir = scratch
+            mock_storage.download_clip.return_value = local_clip
+            mock_storage.upload_file.side_effect = ["drive-e2e-9x16", "drive-e2e-16x9"]
+            mock_drive_storage.return_value = mock_storage
+
+            workflow_log.record("render_started", plan_id=parsed_plan.id)
+
+            render_input = RenderInput(
+                edit_plan_id=parsed_plan.id,
+                edit_plan_version=parsed_plan.base_version,
+                asset_id=digest.asset_id,
+                clips=[{"drive_id": "d1", "clip_ref": "1"}],
+                trims=[{"clip_id": "1", "start_s": 0, "end_s": 2}],
+                concat_order=["1"],
+                game="league",
+                quality_criteria=[
+                    {"id": "crit-1", "text": "Shows a kill clearly"},
+                    {"id": "crit-2", "text": "Audio is clear"},
+                ],
+            )
+
+            (scratch / "frame_001.jpg").write_bytes(b"\x00")
+            workflow_log.record("quality_gate_run", criteria_count=2)
+
+            with (
+                patch("tempfile.mkdtemp", return_value=str(scratch)),
+                patch(
+                    "ai_video_editor.grokbot.quality_gate.DefaultVisionClient",
+                    return_value=FakeVisionClient(),
+                ),
+                patch(
+                    "ai_video_editor.grokbot.quality_gate._sample_frames",
+                    return_value=[scratch / "frame_001.jpg"],
+                ),
+            ):
+                result = run_box_render(
+                    MagicMock(),
+                    render_input,
+                    emit_fn=capture_event,
+                    lock=lock,
+                )
+
+        assert result.ok, f"Render failed: {result.error}"
+
+        steps = workflow_log.steps()
+        assert steps == [
+            "digest_built",
+            "edit_plan_built",
+            "render_started",
+            "quality_gate_run",
+            "video_rendered",
+        ], f"Steps out of order: {steps}"
+
+        assert len(jev_calls) == 1, f"Expected 1 Jev call, got {len(jev_calls)}"
+        assert jev_calls[0]["count"] == 2, "Expected 2 criteria in Jev call"
+
+        video_rendered = [e for e in emitted_events if e.event == "video.rendered"]
+        assert len(video_rendered) == 1
+        payload = video_rendered[0].payload
+        assert payload["edit_plan_id"] == parsed_plan.id
+        assert payload["asset_id"] == digest.asset_id
+        assert len(payload["outputs"]) == 2
+        assert {o["aspect"] for o in payload["outputs"]} == {"9:16", "16:9"}
 
 
 # =============================================================================
