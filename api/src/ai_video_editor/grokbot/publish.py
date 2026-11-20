@@ -8,7 +8,8 @@ round when the Grok team is on:
     uv run grokbot-publish-round <round_dir> --game league [--compilation-id X]
 
 Privacy gate: when the round has a `transcript.json`, a digest that leaks
-any transcript fragment is refused before anything is uploaded.
+any transcript fragment is refused before anything is uploaded. A clip file
+outside WORKSPACE_DIR / OUTPLAYED_MEDIA_DIR is never uploaded.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ from ..notify import Event
 from ..taxonomy import Game
 from .digest import Digest, _ref_from_file, annotate_with_jev, build_digest, digest_leaks
 from .drive import Uploader
+from .paths import inside
 
 logger = logging.getLogger(__name__)
 
@@ -114,9 +116,16 @@ def publish_round(
             raise DigestLeakError(f"digest leaks {len(leaks)} transcript fragment(s)")
 
     files = _clip_files(round_dir)
+    roots = (settings.workspace_dir, settings.outplayed_media_dir)
     clip_ids: dict[str, str | None] = {}
+    skipped = 0
     for clip in digest.clips:
         path = files.get(clip.ref)
+        if path is not None and not inside(path, *roots):
+            # clips.json is not trusted to name only footage: never ship other files.
+            logger.warning("publish: %s is outside the allowed roots, not uploaded", path)
+            skipped += 1
+            path = None
         clip.drive = _upload(uploader, path, path.name, "clips") if path else None
         clip_ids[clip.ref] = clip.drive
 
@@ -132,6 +141,7 @@ def publish_round(
         "compilation_version": digest.compilation_version,
         "drive": {"digest": digest_id, "clips": clip_ids},
         "clips": len(digest.clips),
+        "skipped_outside_roots": skipped,
     }
     emit(Event(event="round.published", payload=payload))
     return payload

@@ -28,6 +28,7 @@ from ..notify import Event
 from ..vlm.watch_montage import watch_montage
 from .drive import Uploader, uploader_from_settings
 from .git_queue import GitQueueRepo, QueueRepo
+from .paths import inside as _inside
 from .queue import (
     AppliedLedger,
     DeployItem,
@@ -176,14 +177,6 @@ def _is_uuid_name(name: str) -> bool:
         return str(uuid.UUID(name)) == name
     except ValueError:
         return False
-
-
-def _inside(path: str, *roots: Path) -> bool:
-    try:
-        p = Path(path).resolve()
-    except (OSError, ValueError):
-        return False
-    return any(p.is_relative_to(Path(r).resolve()) for r in roots)
 
 
 _PATH_RE = re.compile(r"[A-Za-z]:[\\/][^\"'\r\n]+|/[^\"'\r\n]+")

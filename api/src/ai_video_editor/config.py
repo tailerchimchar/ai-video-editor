@@ -71,7 +71,7 @@ class Settings(BaseSettings):
     grokbot_drive_client_secret: str = ""
     grokbot_drive_refresh_token: str = ""
     grokbot_drive_folder_id: str = ""
-    grokbot_drive_preview_retention_days: int = 7
+    grokbot_drive_preview_retention_days: int = Field(default=7, ge=1)
     grokbot_queue_repo_dir: Path | None = None
     grokbot_api_base_url: str = "http://127.0.0.1:8000"
     grokbot_runner_poll_seconds: int = 60

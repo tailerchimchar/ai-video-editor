@@ -16,7 +16,9 @@ FIXTURE = Path(__file__).parent / "fixtures" / "panel_round"
 
 
 @pytest.fixture
-def round_dir(tmp_path):
+def round_dir(tmp_path, monkeypatch):
+    # Clips must live under an allowed root to be uploaded.
+    monkeypatch.setattr(settings, "workspace_dir", tmp_path)
     dest = tmp_path / "2026-11-20_zeri"
     shutil.copytree(FIXTURE, dest)
     for c in json.loads((dest / "clips.json").read_text()):
@@ -76,6 +78,7 @@ def test_publish_uploads_digest_and_clips_and_emits(round_dir):
             },
         },
         "clips": 3,
+        "skipped_outside_roots": 0,
     }
 
 
@@ -176,3 +179,45 @@ def test_cli_publishes_with_no_jev(round_dir, monkeypatch, capsys):
     assert seen["ask_many"] is False and seen["api"] is None
     assert seen["compilation_id"] is None
     assert json.loads(capsys.readouterr().out) == {"ok": True}
+
+
+def _point_first_clip_at(round_dir, file):
+    clips = json.loads((round_dir / "clips.json").read_text())
+    clips[0]["file"] = file
+    (round_dir / "clips.json").write_text(json.dumps(clips))
+
+
+def test_absolute_clip_outside_roots_is_skipped(round_dir, tmp_path_factory, monkeypatch):
+    monkeypatch.setattr(settings, "outplayed_media_dir", round_dir / "media")
+    outside = tmp_path_factory.mktemp("outside") / "09_kill_05m00s.mp4"
+    outside.write_bytes(b"private")
+    _point_first_clip_at(round_dir, str(outside))
+    payload, _, up = run(round_dir)
+    assert ("09_kill_05m00s.mp4", "clips") not in up.uploads
+    assert payload["drive"]["clips"]["05m00s"] is None
+    assert payload["skipped_outside_roots"] == 1
+
+
+def test_dotdot_relative_clip_escaping_roots_is_skipped(round_dir, monkeypatch):
+    # The workspace is the round folder itself: "../x" climbs out of it.
+    monkeypatch.setattr(settings, "workspace_dir", round_dir)
+    monkeypatch.setattr(settings, "outplayed_media_dir", round_dir / "media")
+    escaped = round_dir.parent / "09_kill_05m00s.mp4"
+    escaped.write_bytes(b"private")
+    _point_first_clip_at(round_dir, "../09_kill_05m00s.mp4")
+    payload, _, up = run(round_dir)
+    assert ("09_kill_05m00s.mp4", "clips") not in up.uploads
+    assert payload["skipped_outside_roots"] == 1
+    assert ("02_kill_21m05s.mp4", "clips") in up.uploads
+
+
+def test_retention_days_must_be_at_least_one():
+    from pydantic import ValidationError
+
+    from ai_video_editor.config import Settings
+
+    with pytest.raises(ValidationError):
+        Settings(grokbot_drive_preview_retention_days=0)
+    assert (
+        Settings(grokbot_drive_preview_retention_days=1).grokbot_drive_preview_retention_days == 1
+    )
