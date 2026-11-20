@@ -207,20 +207,10 @@ Emitted by the box after a successful render. Both aspect ratios are always pres
 | `timings` | object | `download_seconds`, `render_seconds`, `upload_seconds`, `total_seconds` |
 
 ```json
-{
-  "event": "video.rendered",
-  "payload": {
-    "edit_plan_id": "plan-0001",
-    "edit_plan_version": "1",
-    "asset_id": "asset-dryrun-0001",
-    "outputs": [
-      {"aspect": "9:16", "drive_id": "FAKE-drive-out-9x16", "duration_seconds": 18.5, "file_size_bytes": 4200000},
-      {"aspect": "16:9", "drive_id": "FAKE-drive-out-16x9", "duration_seconds": 18.5, "file_size_bytes": 5100000}
-    ],
-    "timings": {"download_seconds": 12.3, "render_seconds": 45.6, "upload_seconds": 8.9, "total_seconds": 67.8}
-  },
-  "ts": "2026-11-21T02:35:00+00:00"
-}
+{"event": "video.rendered", "payload": {"edit_plan_id": "plan-0001", "edit_plan_version": "1", "asset_id": "asset-dryrun-0001",
+  "outputs": [{"aspect": "9:16", "drive_id": "FAKE-drive-out-9x16", "duration_seconds": 18.5, "file_size_bytes": 4200000},
+    {"aspect": "16:9", "drive_id": "FAKE-drive-out-16x9", "duration_seconds": 18.5, "file_size_bytes": 5100000}],
+  "timings": {"download_seconds": 12.3, "render_seconds": 45.6, "upload_seconds": 8.9, "total_seconds": 67.8}}, "ts": "2026-11-21T02:35:00+00:00"}
 ```
 
 ### render.failed
@@ -236,17 +226,7 @@ Emitted when a box render fails at any stage.
 | `error` | string | human-readable error message |
 
 ```json
-{
-  "event": "render.failed",
-  "payload": {
-    "edit_plan_id": "plan-0001",
-    "edit_plan_version": "1",
-    "asset_id": "asset-dryrun-0001",
-    "stage": "download",
-    "error": "Drive download failed: clip 0: HTTP 404"
-  },
-  "ts": "2026-11-21T02:31:00+00:00"
-}
+{"event": "render.failed", "payload": {"edit_plan_id": "plan-0001", "edit_plan_version": "1", "asset_id": "asset-dryrun-0001", "stage": "download", "error": "Drive download failed: clip 0: HTTP 404"}, "ts": "2026-11-21T02:31:00+00:00"}
 ```
 
 ### Approve/reject flow
@@ -291,30 +271,11 @@ Sent when a panel round's digest and clips have been successfully uploaded to Dr
 
 **A null `drive.digest` or null values in `drive.clips`** when an uploader is configured indicates an upload failure. In that case `round.publish_failed` is sent instead and `round.published` is never emitted.
 
-Example:
-
 ```json
-{
-  "event": "round.published",
-  "payload": {
-    "round": "2026-11-20_dryrun",
-    "game": "league",
-    "asset_id": "asset-dryrun-0001",
-    "compilation_id": "comp-dryrun-0001",
-    "compilation_version": "1",
-    "drive": {
-      "digest": "FAKE-drive-digest-0001",
-      "clips": {
-        "14m32s": "FAKE-drive-clip-0001",
-        "21m05s": "FAKE-drive-clip-0002",
-        "30m10s": "FAKE-drive-clip-0003"
-      }
-    },
-    "clips": 3,
-    "skipped_outside_roots": 0
-  },
-  "ts": "2026-11-21T01:00:00+00:00"
-}
+{"event": "round.published", "payload": {"round": "2026-11-20_dryrun", "game": "league", "asset_id": "asset-dryrun-0001",
+  "compilation_id": "comp-dryrun-0001", "compilation_version": "1",
+  "drive": {"digest": "FAKE-drive-digest-0001", "clips": {"14m32s": "FAKE-drive-clip-0001", "21m05s": "FAKE-drive-clip-0002", "30m10s": "FAKE-drive-clip-0003"}},
+  "clips": 3, "skipped_outside_roots": 0}, "ts": "2026-11-21T01:00:00+00:00"}
 ```
 
 ### round.publish_failed
@@ -339,36 +300,8 @@ Sent when publishing fails for any reason. When this event is sent, `round.publi
 
 **Note:** The `names_file_missing` and `names_file_unreadable` reasons only occur when `GROKBOT_PLAYER_NAME_CHECK=block`. In `off` (default) or `warn` modes, a missing or unreadable file does not block publishing.
 
-Example (upload failure):
-
 ```json
-{
-  "event": "round.publish_failed",
-  "payload": {
-    "round": "2026-11-20_dryrun",
-    "step": "clips",
-    "reason": "upload failed",
-    "failed_clips": ["21m05s"],
-    "digest_failed": false
-  },
-  "ts": "2026-11-21T01:00:05+00:00"
-}
-```
-
-Example (names file missing):
-
-```json
-{
-  "event": "round.publish_failed",
-  "payload": {
-    "round": "2026-11-20_dryrun",
-    "step": "names_file",
-    "reason": "names_file_missing",
-    "failed_clips": [],
-    "digest_failed": false
-  },
-  "ts": "2026-11-21T01:00:01+00:00"
-}
+{"event": "round.publish_failed", "payload": {"round": "2026-11-20_dryrun", "step": "clips", "reason": "upload failed", "failed_clips": ["21m05s"], "digest_failed": false}, "ts": "2026-11-21T01:00:05+00:00"}
 ```
 
 ### preview.ready

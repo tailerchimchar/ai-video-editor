@@ -114,6 +114,7 @@ uv sync                  # install deps
 cp .env.example .env     # then edit OUTPLAYED_MEDIA_DIR / WORKSPACE_DIR / keys
 uv run dev               # serve :8000
 uv run pytest -q         # ~50 tests, no real ffmpeg/Anthropic
+uv run pytest -m integration -q  # integration tests (fully offline, stubbed)
 uv run ruff check src/   # lint
 ```
 

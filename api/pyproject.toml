@@ -47,6 +47,9 @@ filterwarnings = [
   "ignore::DeprecationWarning",
   "ignore:Field name \"copy\" in \"DigestClip\" shadows:UserWarning",
 ]
+markers = [
+  "integration: Integration tests that run end-to-end with stubbed external services",
+]
 
 [tool.ruff]
 target-version = "py310"
