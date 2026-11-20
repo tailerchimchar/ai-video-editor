@@ -28,7 +28,8 @@ dependencies = [
 dev = "ai_video_editor.cli:dev"
 dev-reload = "ai_video_editor.cli:dev_reload"
 drive-auth = "ai_video_editor.grokbot.drive_auth:main"
-grokbot-runner = "ai_video_editor.grokbot.runner:main"
+grokbot-runner = "ai_video_editor.grokbot.startup:runner"
+grokbot-publish-round = "ai_video_editor.grokbot.publish:main"
 
 [dependency-groups]
 dev = [

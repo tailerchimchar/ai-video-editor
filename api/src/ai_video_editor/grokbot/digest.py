@@ -9,6 +9,7 @@ through.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -21,6 +22,7 @@ from ..bucketing import _FORMAT_QUESTION, _INCLUDE_QUESTION
 from ..decisions import Answer, ask_many
 
 _REF_RE = re.compile(r"(\d+m\d+s)")
+logger = logging.getLogger(__name__)
 
 
 class DigestClip(BaseModel):
@@ -43,27 +45,57 @@ class Digest(BaseModel):
     built_at: str
     compilation_id: str | None = None
     compilation_version: str | None = None
+    asset_id: str | None = None
 
 
 def _load(path: Path) -> Any:
+    """Parsed JSON, or None when missing or malformed (one bad expert file
+    must not stop the digest)."""
     if not path.exists():
         return None
-    return json.loads(path.read_text(encoding="utf-8"))
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        logger.warning("digest: ignoring unreadable %s: %s", path.name, e)
+        return None
+
+
+def _by_ref(entries: Any) -> dict[str, dict]:
+    if not isinstance(entries, list):
+        return {}
+    return {
+        e["clip_ref"]: e
+        for e in entries
+        if isinstance(e, dict) and isinstance(e.get("clip_ref"), str)
+    }
 
 
 def _ref_from_file(file: str) -> str:
     match = _REF_RE.search(Path(file).stem)
-    return match.group(1) if match else Path(file).stem
+    if match:
+        return match.group(1)
+    logger.warning("digest: %s has no NmNNs time; using the file stem as its ref", file)
+    return Path(file).stem
 
 
 def build_digest(round_dir: Path, *, game: str) -> Digest:
-    clips = _load(round_dir / "clips.json") or []
-    gaming = {e["clip_ref"]: e for e in (_load(round_dir / "gaming-expert.json") or [])}
-    viewer_raw = _load(round_dir / "viewer-expert.json") or {}
-    viewer = {e["clip_ref"]: e for e in viewer_raw.get("clips", [])}
+    clips = _load(round_dir / "clips.json")
+    clips = clips if isinstance(clips, list) else []
+    gaming = _by_ref(_load(round_dir / "gaming-expert.json"))
+    viewer_raw = _load(round_dir / "viewer-expert.json")
+    viewer = _by_ref(viewer_raw.get("clips") if isinstance(viewer_raw, dict) else None)
 
     out: list[DigestClip] = []
     for clip in clips:
+        if (
+            not isinstance(clip, dict)
+            or not isinstance(clip.get("file"), str)
+            or not all(
+                isinstance(clip.get(k), int | float) for k in ("start_seconds", "end_seconds")
+            )
+        ):
+            logger.warning("digest: skipping a clips.json entry without file/start/end")
+            continue
         ref = _ref_from_file(clip["file"])
         g = gaming.get(ref) or {}
         v = viewer.get(ref) or {}
