@@ -59,6 +59,13 @@ CREATE TABLE IF NOT EXISTS timeline_items (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS queue_applied (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    applied_at TEXT NOT NULL,
+    outcome TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS jobs (
     id TEXT PRIMARY KEY,
     project_id TEXT REFERENCES projects(id),
