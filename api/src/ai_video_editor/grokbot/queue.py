@@ -235,7 +235,8 @@ class AppliedLedger:
     def seen(self, id: str) -> bool:
         return (
             self._run(
-                lambda c: c.execute("SELECT 1 FROM queue_applied WHERE id=? AND outcome != 'applying'", (id,)
+                lambda c: c.execute(
+                    "SELECT 1 FROM queue_applied WHERE id=? AND outcome != 'applying'", (id,)
                 ).fetchone()
             )
             is not None
