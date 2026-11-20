@@ -82,8 +82,8 @@ def test_annotate_with_jev_uses_ask_many(fixture_round):
     assert out.clips[0].panel["include_p"] == 0.9
 
 
-def test_annotate_with_jev_one_request_per_clip(fixture_round):
-    """Format and include questions for each clip should be batched into one request."""
+def test_annotate_with_jev_one_request_for_all_clips(fixture_round):
+    """All format and include questions should be batched into one single request."""
     d = dg.build_digest(fixture_round, game="lol")
 
     ask_many_calls = []
