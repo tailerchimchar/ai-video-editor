@@ -11,11 +11,13 @@ Design constraints:
   success
 - Scratch cleanup only after ALL outputs upload successfully (HIGH RISK)
 - CPU-only ffmpeg settings (libx264 veryfast, capped resolution)
-- No LLM or vision calls: pure ffmpeg render, deterministic
+- Quality gate (optional, off by default): VLM vision + Jev scoring
+  after render; never blocks delivery on errors/timeouts
 
 Events emitted:
-- video.rendered: success, includes both aspect ratio outputs
+- video.rendered: success, includes both aspect ratio outputs + gate results
 - render.failed: any failure (busy, download, render, upload)
+- quality.revision_needed: when the gate requests a revision (max 2/criterion)
 
 Entry point: ``box-render`` CLI (``main``) consumes a render_request JSON
 file written by the Editor into the queue repo. The PC API does not
@@ -69,6 +71,9 @@ class RenderInput:
     music_path: str | None = None
     music_volume: float = 0.25
     captions_enabled: bool = True
+    quality_criteria: list[dict] = field(default_factory=list)
+    digest_moment_labels: list[str] = field(default_factory=list)
+    captions: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -94,6 +99,7 @@ class RenderResult:
     error: str | None = None
     scratch_cleaned: bool = False
     timings: dict = field(default_factory=dict)
+    quality_gate: dict = field(default_factory=dict)
 
 
 def _safe_error(detail: str | None, limit: int = 500) -> str | None:
@@ -594,10 +600,18 @@ def run_box_render(
         up_secs = result.timings["upload_seconds"]
         _log.info("uploaded %d outputs in %.1fs", len(result.outputs), up_secs)
 
+        # Quality gate: optional post-render check
+        gate_result, revision_requests = _run_quality_gate(render_input, result, scratch_dir)
+        result.quality_gate = gate_result.model_dump() if gate_result else {}
+
         result.ok = True
         result.timings["total_seconds"] = round(time.monotonic() - start_time, 2)
 
-        _emit_success(emit_fn, result)
+        # Emit revision requests if the gate failed
+        for req in revision_requests:
+            _emit_revision_request(emit_fn, result, req)
+
+        _emit_success(emit_fn, result, gate_result)
 
         # HIGH RISK: Scratch cleanup only after ALL uploads succeeded.
         result.scratch_cleaned = _cleanup_scratch(scratch_dir, created=created_scratch)
@@ -632,7 +646,76 @@ def run_render_request(
     )
 
 
-def _emit_success(emit_fn, result: RenderResult) -> None:
+def _run_quality_gate(
+    render_input: RenderInput,
+    result: RenderResult,
+    scratch_dir: Path,
+):
+    """Run the quality gate if criteria are present. Returns (GateResult, revisions)."""
+    from ..edit_plan import QualityCriterion
+    from .quality_gate import GateResult, RenderMetadata, run_quality_gate
+
+    if not render_input.quality_criteria:
+        return GateResult(passed=True, skipped=True, skip_reason="no criteria"), []
+
+    criteria = [
+        QualityCriterion(**c) if isinstance(c, dict) else c for c in render_input.quality_criteria
+    ]
+
+    primary_output = next(
+        (o for o in result.outputs if o.aspect == "9:16"),
+        result.outputs[0] if result.outputs else None,
+    )
+    if not primary_output or not primary_output.local_path.exists():
+        _log.warning("quality_gate: no primary output to check")
+        return GateResult(passed=True, skipped=True, skip_reason="no output"), []
+
+    metadata = RenderMetadata(
+        duration_seconds=primary_output.duration_seconds,
+        aspect_ratio=primary_output.aspect,
+        clip_windows=[
+            {"clip_id": t.get("clip_id"), "start_s": t.get("start_s"), "end_s": t.get("end_s")}
+            for t in render_input.trims
+        ],
+        captions=render_input.captions,
+        digest_moment_labels=render_input.digest_moment_labels,
+        game=render_input.game,
+    )
+
+    gate_frames_dir = scratch_dir / "gate_frames"
+    gate_frames_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        return run_quality_gate(
+            primary_output.local_path,
+            criteria,
+            metadata,
+            gate_frames_dir,
+        )
+    except Exception as exc:
+        _log.exception("quality_gate error: %s", exc)
+        return GateResult(passed=True, skipped=True, skip_reason=f"error: {exc}"), []
+
+
+def _emit_revision_request(emit_fn, result: RenderResult, request) -> None:
+    """Emit quality.revision_needed event for a failed criterion."""
+    emit_fn(
+        Event(
+            event="quality.revision_needed",
+            payload={
+                "edit_plan_id": result.edit_plan_id,
+                "edit_plan_version": result.edit_plan_version,
+                "asset_id": result.asset_id,
+                "criterion_id": request.criterion_id,
+                "criterion_text": request.criterion_text,
+                "reason": request.reason,
+                "retry_number": request.retry_number,
+            },
+        )
+    )
+
+
+def _emit_success(emit_fn, result: RenderResult, gate_result=None) -> None:
     """Emit video.rendered event on success."""
     outputs_payload = []
     for out in result.outputs:
@@ -645,18 +728,17 @@ def _emit_success(emit_fn, result: RenderResult) -> None:
             }
         )
 
-    emit_fn(
-        Event(
-            event="video.rendered",
-            payload={
-                "edit_plan_id": result.edit_plan_id,
-                "edit_plan_version": result.edit_plan_version,
-                "asset_id": result.asset_id,
-                "outputs": outputs_payload,
-                "timings": result.timings,
-            },
-        )
-    )
+    payload = {
+        "edit_plan_id": result.edit_plan_id,
+        "edit_plan_version": result.edit_plan_version,
+        "asset_id": result.asset_id,
+        "outputs": outputs_payload,
+        "timings": result.timings,
+    }
+    if gate_result:
+        payload["quality_gate"] = gate_result.model_dump()
+
+    emit_fn(Event(event="video.rendered", payload=payload))
 
 
 def _emit_failure(emit_fn, result: RenderResult, stage: str) -> None:
