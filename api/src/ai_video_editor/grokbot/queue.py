@@ -29,11 +29,12 @@ from ..edit_plan import (
     SourceClip,
 )
 
-# Strict on purpose: false positives are acceptable. A "/" is only allowed
-# directly after an alphanumeric, "-", "_" or "." (so "and/or" passes, but
-# " /etc", ",/etc", "[/etc", ":/etc" and a leading "/" do not).
+# Strict on purpose: false positives are acceptable. Any backslash is
+# rejected; a "/" is only allowed directly after an alphanumeric, "-" or "_"
+# (so "and/or" passes, but " /etc", ",/etc", "[/etc", "./etc" and a leading
+# "/" do not). Shell characters ; | & > < ` and $( are rejected.
 _HOSTILE = re.compile(
-    r"https?://|[A-Za-z]:\\|(?<![A-Za-z0-9\-_.])/|//|\\\\|\.\.[/\\]|`|\$\(|;|\|",
+    r"https?://|\\|(?<![A-Za-z0-9\-_])/|//|`|\$\(|[;|&<>]",
 )
 MAX_ITEM_BYTES = 64 * 1024
 

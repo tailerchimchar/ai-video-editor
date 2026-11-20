@@ -186,6 +186,12 @@ def test_too_large_rejected():
         "a/../x",
         "..\\x",
         "x /etc",
+        "\\windows\\x",
+        "a\\b",
+        "./etc/x",
+        "a && b",
+        "x > y",
+        "x < y",
     ],
 )
 def test_path_forms_rejected(bad):
@@ -193,7 +199,7 @@ def test_path_forms_rejected(bad):
         parse_item(preview(question=bad))
 
 
-@pytest.mark.parametrize("good", ["and/or", "x/etc/x", "1/2 hp"])
+@pytest.mark.parametrize("good", ["and/or", "x/etc/x", "1/2 hp", "v1.2.3"])
 def test_benign_slashes_allowed(good):
     parse_item(preview(question=good))
 
