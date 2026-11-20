@@ -45,15 +45,15 @@ def player_names_file(tmp_path):
 
 
 @pytest.fixture
-def round_dir(tmp_path, monkeypatch, player_names_file):
+def round_dir(tmp_path, monkeypatch):
     # Clips must live under an allowed root to be uploaded.
     monkeypatch.setattr(settings, "workspace_dir", tmp_path)
+    # Default mode is "off", so no names file needed for most tests
+    monkeypatch.setattr(settings, "grokbot_player_name_check", "off")
     dest = tmp_path / "2026-11-20_zeri"
     shutil.copytree(FIXTURE, dest)
     for c in json.loads((dest / "clips.json").read_text()):
         (dest / c["file"]).write_bytes(b"mp4")
-    # Monkeypatch the default player names path to our fixture file
-    monkeypatch.setattr(pub, "_default_player_names_path", lambda: player_names_file)
     return dest
 
 
@@ -335,8 +335,57 @@ def test_multiple_clip_failures_all_reported(round_dir):
 # --- Player name check tests ---
 
 
-def test_player_name_in_digest_blocks_publishing(round_dir, tmp_path):
-    """When a player name appears in digest, publishing is blocked before upload."""
+def test_name_check_off_skips_check_entirely(round_dir, monkeypatch, tmp_path):
+    """When name_check is off, the check is skipped even if file is missing."""
+    monkeypatch.setattr(settings, "grokbot_player_name_check", "off")
+    # Point to a missing file - should not matter in off mode
+    missing_file = tmp_path / "does_not_exist.txt"
+    monkeypatch.setattr(pub, "_default_player_names_path", lambda: missing_file)
+
+    payload, events, _ = run(round_dir)
+
+    assert [e.event for e in events] == ["round.published"]
+    assert payload["clips"] == 3
+
+
+def test_name_check_warn_logs_and_continues_on_match(round_dir, monkeypatch, tmp_path, caplog):
+    """When name_check is warn, matches are logged but publishing continues."""
+    monkeypatch.setattr(settings, "grokbot_player_name_check", "warn")
+    names_file = tmp_path / "names.txt"
+    names_file.write_text("Quillfeather\nMumblewick\n")
+
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        payload, events, _ = run(round_dir, player_names_path=names_file)
+
+    # Should succeed despite name matches
+    assert [e.event for e in events] == ["round.published"]
+    assert payload["clips"] == 3
+    # Should have logged a warning with count (not names)
+    assert any("player name match" in record.message for record in caplog.records)
+    assert any("2" in record.message for record in caplog.records)  # 2 matches
+
+
+def test_name_check_warn_continues_if_file_missing(round_dir, monkeypatch, tmp_path, caplog):
+    """When name_check is warn and file is missing, log warning and continue."""
+    monkeypatch.setattr(settings, "grokbot_player_name_check", "warn")
+    missing_file = tmp_path / "does_not_exist.txt"
+
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        _payload, events, _ = run(round_dir, player_names_path=missing_file)
+
+    # Should succeed
+    assert [e.event for e in events] == ["round.published"]
+    # Should have logged a warning about missing file
+    assert any("names_file_missing" in record.message for record in caplog.records)
+
+
+def test_name_check_block_blocks_on_match(round_dir, monkeypatch, tmp_path):
+    """When name_check is block, publishing is blocked on name match."""
+    monkeypatch.setattr(settings, "grokbot_player_name_check", "block")
     names_file = tmp_path / "names.txt"
     names_file.write_text("Quillfeather\nMumblewick\n")
 
@@ -359,8 +408,9 @@ def test_player_name_in_digest_blocks_publishing(round_dir, tmp_path):
     assert not (round_dir / "digest.json").exists()
 
 
-def test_missing_player_names_file_blocks_publishing(round_dir, tmp_path):
-    """When player names file is missing, publishing is blocked (fail closed)."""
+def test_name_check_block_blocks_on_missing_file(round_dir, monkeypatch, tmp_path):
+    """When name_check is block and file is missing, publishing is blocked."""
+    monkeypatch.setattr(settings, "grokbot_player_name_check", "block")
     missing_file = tmp_path / "does_not_exist.txt"
 
     events = []
@@ -376,21 +426,15 @@ def test_missing_player_names_file_blocks_publishing(round_dir, tmp_path):
             emit=events.append,
         )
 
-    # Should fail with names_file_missing reason
     assert exc_info.value.reason == "names_file_missing"
-
-    # round.publish_failed should be emitted, not round.published
     event_names = [e.event for e in events]
     assert "round.publish_failed" in event_names
     assert "round.published" not in event_names
 
-    fail_event = next(e for e in events if e.event == "round.publish_failed")
-    assert fail_event.payload["step"] == "names_file"
-    assert fail_event.payload["reason"] == "names_file_missing"
 
-
-def test_empty_player_names_file_allows_publishing(round_dir, tmp_path):
-    """An empty player names file allows all digests through."""
+def test_empty_player_names_file_allows_publishing(round_dir, monkeypatch, tmp_path):
+    """An empty player names file allows all digests through (no matches possible)."""
+    monkeypatch.setattr(settings, "grokbot_player_name_check", "block")
     names_file = tmp_path / "names.txt"
     names_file.write_text("")
 
@@ -399,8 +443,9 @@ def test_empty_player_names_file_allows_publishing(round_dir, tmp_path):
     assert [e.event for e in events] == ["round.published"]
 
 
-def test_player_name_check_is_case_insensitive(round_dir, tmp_path):
-    """Player name matching ignores case."""
+def test_player_name_check_is_case_insensitive(round_dir, monkeypatch, tmp_path):
+    """Player name matching ignores case (in block mode)."""
+    monkeypatch.setattr(settings, "grokbot_player_name_check", "block")
     names_file = tmp_path / "names.txt"
     names_file.write_text("QUILLFEATHER\n")  # uppercase
 
@@ -483,9 +528,10 @@ def test_cli_accepts_player_names_arg(round_dir, monkeypatch, tmp_path, capsys):
 
 
 def test_cli_exits_3_on_player_name_leak(round_dir, monkeypatch, capsys, tmp_path):
-    """CLI exits with code 3 when a player name is found."""
+    """CLI exits with code 3 when a player name is found (block mode)."""
     from ai_video_editor.grokbot import drive
 
+    monkeypatch.setattr(settings, "grokbot_player_name_check", "block")
     names_file = tmp_path / "names.txt"
     names_file.write_text("Quillfeather\n")
 
@@ -508,9 +554,10 @@ def test_cli_exits_4_on_upload_failure(round_dir, monkeypatch, capsys):
 
 
 def test_cli_exits_5_on_missing_names_file(round_dir, monkeypatch, capsys, tmp_path):
-    """CLI exits with code 5 when player names file is missing."""
+    """CLI exits with code 5 when player names file is missing (block mode)."""
     from ai_video_editor.grokbot import drive
 
+    monkeypatch.setattr(settings, "grokbot_player_name_check", "block")
     missing_file = tmp_path / "does_not_exist.txt"
 
     monkeypatch.setattr(drive, "uploader_from_settings", lambda: FakeUploader(ids=ids))
@@ -521,9 +568,10 @@ def test_cli_exits_5_on_missing_names_file(round_dir, monkeypatch, capsys, tmp_p
 
 
 def test_unreadable_names_file_blocks_publishing(round_dir, tmp_path, monkeypatch):
-    """When player names file exists but is unreadable, publishing is blocked."""
+    """When player names file exists but is unreadable, publishing is blocked (block mode)."""
     import os
 
+    monkeypatch.setattr(settings, "grokbot_player_name_check", "block")
     names_file = tmp_path / "names.txt"
     names_file.write_text("Quillfeather\n")
 
@@ -556,10 +604,11 @@ def test_unreadable_names_file_blocks_publishing(round_dir, tmp_path, monkeypatc
             names_file.chmod(0o644)
 
 
-def test_unset_names_path_uses_default_and_blocks_if_missing(tmp_path, monkeypatch):
-    """When player_names_path is None, the default path is used and must exist."""
-    # Set up a round dir without monkeypatching the default path
+def test_unset_names_path_uses_default_in_block_mode(tmp_path, monkeypatch):
+    """When player_names_path is None and mode is block, the default path is used."""
+    # Set up a round dir
     monkeypatch.setattr(settings, "workspace_dir", tmp_path)
+    monkeypatch.setattr(settings, "grokbot_player_name_check", "block")
     dest = tmp_path / "2026-11-20_zeri"
     shutil.copytree(FIXTURE, dest)
     for c in json.loads((dest / "clips.json").read_text()):

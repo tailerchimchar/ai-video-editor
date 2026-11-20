@@ -198,41 +198,55 @@ def publish_round(
     compilation's current plan version when `compilation_id` is given.
 
     `player_names_path`: path to a local file with player names (one per line).
-    If the digest contains any name, publishing is blocked like the transcript
-    leak check. If the file is missing or unreadable, publishing is blocked
-    (fail closed) and round.publish_failed is emitted. When None, defaults to
-    the conventional repo-relative path (api/player-names.txt).
+    Behavior depends on `name_check_mode`:
+    - "off": skip the check entirely, file not required
+    - "warn": check if file exists, log warning on match, publish anyway
+    - "block": block on match (exit 3) or missing/unreadable file (exit 5)
+    When None, defaults to the conventional repo-relative path (api/player-names.txt).
+
+    `name_check_mode`: "off", "warn", or "block". Defaults to settings value.
 
     Raises:
         DigestLeakError: If transcript text appears in the digest.
-        PlayerNameLeakError: If a player name appears in the digest.
-        PlayerNamesFileError: If the player names file is missing or unreadable.
+        PlayerNameLeakError: If a player name appears in the digest (block mode only).
+        PlayerNamesFileError: If the file is missing/unreadable (block mode only).
         PublishUploadError: If an upload fails when an uploader is configured.
     """
     round_dir = Path(round_dir)
 
-    # Privacy gate 2 (early): player names file must be readable
-    # Default to the conventional repo-relative path if not explicitly set
-    names_path = player_names_path
-    if names_path is None:
-        names_path = _default_player_names_path()
+    # Determine name check mode from settings if not explicitly passed
+    check_mode = settings.grokbot_player_name_check
 
-    player_names, file_error = _load_player_names(names_path)
-    if file_error is not None:
-        failure_payload = {
-            "round": round_dir.name,
-            "step": "names_file",
-            "reason": file_error,
-            "failed_clips": [],
-            "digest_failed": False,
-        }
-        logger.error(
-            "publish: round %s blocked - player names file error: %s",
-            round_dir.name,
-            file_error,
-        )
-        emit(Event(event="round.publish_failed", payload=failure_payload))
-        raise PlayerNamesFileError(names_path, file_error)
+    # Privacy gate 2 (early): player names check based on mode
+    player_names: set[str] = set()
+    if check_mode != "off":
+        names_path = player_names_path
+        if names_path is None:
+            names_path = _default_player_names_path()
+
+        player_names, file_error = _load_player_names(names_path)
+        if file_error is not None:
+            if check_mode == "block":
+                failure_payload = {
+                    "round": round_dir.name,
+                    "step": "names_file",
+                    "reason": file_error,
+                    "failed_clips": [],
+                    "digest_failed": False,
+                }
+                logger.error(
+                    "publish: round %s blocked - player names file error: %s",
+                    round_dir.name,
+                    file_error,
+                )
+                emit(Event(event="round.publish_failed", payload=failure_payload))
+                raise PlayerNamesFileError(names_path, file_error)
+            else:  # warn mode: log and continue without names
+                logger.warning(
+                    "publish: player names file %s: %s (continuing without name check)",
+                    names_path,
+                    file_error,
+                )
 
     digest: Digest = build_digest(round_dir, game=game)
     digest.compilation_id = compilation_id
@@ -255,11 +269,19 @@ def publish_round(
             raise DigestLeakError(f"digest leaks {len(leaks)} transcript fragment(s)")
 
     # Privacy gate 2 (content): check digest against loaded names
-    name_matches = _digest_contains_player_name(digest, player_names)
-    if name_matches:
-        raise PlayerNameLeakError(
-            f"digest contains {len(name_matches)} player name(s): blocked before upload"
-        )
+    if check_mode != "off" and player_names:
+        name_matches = _digest_contains_player_name(digest, player_names)
+        if name_matches:
+            if check_mode == "block":
+                raise PlayerNameLeakError(
+                    f"digest contains {len(name_matches)} player name(s): blocked before upload"
+                )
+            else:  # warn mode
+                logger.warning(
+                    "publish: round %s contains %d player name match(es) (warn mode, continuing)",
+                    round_dir.name,
+                    len(name_matches),
+                )
 
     files = _clip_files(round_dir)
     roots = (settings.workspace_dir, settings.outplayed_media_dir)
