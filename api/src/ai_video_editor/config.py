@@ -72,6 +72,10 @@ class Settings(BaseSettings):
     grokbot_drive_refresh_token: str = ""
     grokbot_drive_folder_id: str = ""
     grokbot_drive_preview_retention_days: int = 7
+    grokbot_queue_repo_dir: Path | None = None
+    grokbot_runner_poll_seconds: int = 60
+    grokbot_heartbeat_seconds: int = 300
+    grokbot_queue_depth_cap: int = 10
 
     # Riot API candidate source (League). Free dev key from
     # developer.riotgames.com. Source stays inert until all three are set.
