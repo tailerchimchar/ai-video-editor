@@ -1,6 +1,6 @@
 # Queue format
 
-Reference for Lead and Editor. Every item is one JSON file in the `queue/` folder of the queue repo, named after its `id` (for example the id followed by `.json`). The PC runner validates each file as hostile input and moves rejects to `rejected/` with the reason. Every example below is parsed by a test, so copy the shape exactly.
+Reference for Lead and Editor. Every item is one JSON file in the `queue/` folder of the queue repo, named after its `id` (for example the id followed by `.json`). The PC runner validates each file as hostile input. A refused item gets a note with the reason in `rejected/` (the original file stays in `queue/`) and a `queue.rejected` event. Every example below is parsed by a test, so copy the shape exactly.
 
 ## Envelope (every kind)
 
@@ -31,7 +31,13 @@ So: no links, no file paths, no shell-looking text. Refer to things by id, by cl
 
 ## edit_plan
 
-The Editor writes it. `compilation_id` and `base_version` come from the latest digest or a `queue.rejected` event; if `base_version` is stale the runner rejects the plan and sends the current state back. Every effect must have `at` equal to 0.0 (timed effects are not applied yet), and `cards` and `sfx` must stay empty. Use only formats and effect kinds listed in the editing-expert arsenal. `copy` is the Viewer's block, handed over by the Lead.
+The Editor writes it. `compilation_id` and `base_version` come from the digest's `compilation_id` and `compilation_version` (or the `round.published` event), or from the `current` field of a `queue.rejected` event; if `base_version` is stale the runner rejects the plan and sends the current state back.
+
+- `clip_ref` is the clip's 1-based number in the compilation as it was at `base_version`, written as a string: `"1"`, `"2"`. Never a digest ref, never a made-up name.
+- Effect kinds the runner renders today: `zoom` (params `factor`, `roi`), `focus` (params `x`, `y`, `radius`, `dim`) and `caption` (param `text`, a paraphrase in your own words, never a quoted line). Any other kind is refused; put it under `rejected` instead.
+- Every effect must have `at` equal to 0.0 (timed effects are not applied yet), and `cards` and `sfx` must stay empty.
+- `music` is null or `{"song_id": "<library id>"}`: letters, digits, hyphen and underscore only, never a file name.
+- `copy` is the Viewer's block, handed over by the Lead.
 
 ```json
 {
@@ -45,13 +51,14 @@ The Editor writes it. `compilation_id` and `base_version` come from the latest d
   "plan": {
     "format": "hype_montage",
     "source_clips": [
-      {"clip_ref": "clip-1", "start": 3.0, "end": 14.5, "intensity": 0.8},
-      {"clip_ref": "clip-2", "start": 0.0, "end": 9.0, "intensity": 0.6}
+      {"clip_ref": "1", "start": 3.0, "end": 9.5, "intensity": 0.8},
+      {"clip_ref": "2", "start": 0.0, "end": 9.0, "intensity": 0.6}
     ],
-    "order": ["clip-1", "clip-2"],
+    "order": ["1", "2"],
     "music": null,
     "effects": [
-      {"clip_ref": "clip-1", "kind": "zoom", "at": 0.0, "params": {"factor": 1.3, "roi": "center"}}
+      {"clip_ref": "1", "kind": "zoom", "at": 0.0, "params": {"factor": 1.3, "roi": "center"}},
+      {"clip_ref": "2", "kind": "caption", "at": 0.0, "params": {"text": "one flash, two kills"}}
     ],
     "cards": [],
     "sfx": [],
@@ -70,7 +77,7 @@ The Editor writes it. `compilation_id` and `base_version` come from the latest d
 
 ## preview_request
 
-Lead or Editor. Exactly one of `asset_id` or `compilation_id` (the other is null or left out). The window must satisfy 0 <= `start_s` < `end_s` and be at most 20 seconds. `question` is what you want the preview to answer.
+Lead or Editor. Use `asset_id`: it comes from the digest's `asset_id` field (or the `round.published` event); never guess one. Previews of a `compilation_id` window are held, not rendered, for now. The window must satisfy 0 <= `start_s` < `end_s` and be at most 20 seconds, in seconds of the recording (a digest clip's `start_s`/`end_s` are in the same seconds). `question` is what you want the preview to answer.
 
 ```json
 {
@@ -88,7 +95,7 @@ Lead or Editor. Exactly one of `asset_id` or `compilation_id` (the other is null
 
 ## verdict
 
-Lead only, and only to record what Noodlz himself said. `quote` is his text verbatim and `quote_ts` is when he sent it. A verdict with an empty quote goes to the decisions log only and never reaches the mentor. `verdict` is `payoff`, `false_positive` or `style`. Never put a bot default or a bot opinion in `quote`.
+Lead only, and only to record what Noodlz himself said. `game` is `league` or `valorant` exactly. `clip_ref` is the digest ref of the clip (for example `21m05s`). `quote` is his text verbatim and `quote_ts` is when he sent it. Once verdict recording is on, a verdict with an empty quote goes to the decisions log only and never reaches the mentor. `verdict` is `payoff`, `false_positive` or `style`. Never put a bot default or a bot opinion in `quote`.
 
 ```json
 {
@@ -98,7 +105,7 @@ Lead only, and only to record what Noodlz himself said. `quote` is his text verb
   "created": "2026-11-21T02:00:00Z",
   "schema_version": 1,
   "game": "league",
-  "clip_ref": "clip-3",
+  "clip_ref": "21m05s",
   "verdict": "false_positive",
   "rule": "A lone kill on a minion wave is not a highlight",
   "quote": "nah that one is nothing",
@@ -114,7 +121,7 @@ Written by the Lead on DevOps's request (DevOps has no queue token). `tag` is a 
 {
   "id": "c8e2b5f1-7a46-4d03-b9e8-2f5a01d6c3b4",
   "kind": "deploy",
-  "author_bot": "devops",
+  "author_bot": "lead",
   "created": "2026-11-21T03:00:00Z",
   "schema_version": 1,
   "tag": "v0.3.2"
@@ -147,4 +154,4 @@ Lead only. No payload. Commit `sleep` when Noodlz texts sleep or the usage pool 
 
 ## Day-one note
 
-On day one the runner only acts on `preview_request`, `sleep` and `wake`. Other kinds are accepted into the decisions log so you can practice the format. A `queue.rejected` event tells you why a file was refused; fix the cause and write a new item with a new id.
+On day one the runner only acts on `preview_request`, `sleep` and `wake`. `edit_plan`, `verdict` and `deploy` are validated and held: the runner records them as deferred and sends `queue.deferred`, and nothing is written to the decisions log or the mentor. When Noodlz later turns on plans or verdicts, held items younger than 24 hours run then; older ones are marked expired (one `queue.expired` event with the count) and never run, so resubmit anything still wanted with a new id. A `queue.rejected` event tells you why a file was refused; fix the cause and write a new item with a new id.
