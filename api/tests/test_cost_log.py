@@ -154,3 +154,68 @@ class TestCostLog:
 
         assert parsed["video_id"] == "v1"
         assert parsed["summary"]["total_cost_dollars"] is None
+
+    def test_set_cascade_metrics(self):
+        log = CostLog(video_id="v1")
+        log.set_cascade_metrics(
+            total_candidates=10,
+            jev_decided=4,
+            jev_kept=2,
+            jev_rejected=2,
+            escalated_unsure=6,
+            timing_refine=2,
+            escalation_rate=0.6,
+            haiku_candidates_saved=2,
+            haiku_call_skipped=0,
+        )
+
+        assert log.cascade_metrics is not None
+        assert log.cascade_metrics.total_candidates == 10
+        assert log.cascade_metrics.escalation_rate == 0.6
+
+    def test_cascade_metrics_in_to_dict(self):
+        log = CostLog(video_id="v1")
+        log.set_cascade_metrics(
+            total_candidates=10,
+            jev_decided=4,
+            jev_kept=2,
+            jev_rejected=2,
+            escalated_unsure=6,
+            timing_refine=2,
+            escalation_rate=0.6,
+            haiku_candidates_saved=2,
+            haiku_call_skipped=0,
+        )
+
+        d = log.to_dict()
+        assert "cascade" in d
+        assert d["cascade"]["total_candidates"] == 10
+        assert d["cascade"]["escalated_unsure"] == 6
+        assert d["cascade"]["timing_refine"] == 2
+        assert d["cascade"]["haiku_candidates_saved"] == 2
+        assert d["cascade"]["escalation_rate"] == 0.6
+
+    def test_to_dict_without_cascade_metrics(self):
+        log = CostLog(video_id="v1")
+        d = log.to_dict()
+        assert "cascade" not in d
+
+    def test_cascade_metrics_json_serializable(self):
+        log = CostLog(video_id="v1")
+        log.set_cascade_metrics(
+            total_candidates=10,
+            jev_decided=4,
+            jev_kept=2,
+            jev_rejected=2,
+            escalated_unsure=6,
+            timing_refine=2,
+            escalation_rate=0.6,
+            haiku_candidates_saved=2,
+            haiku_call_skipped=0,
+        )
+
+        d = log.to_dict()
+        json_str = json.dumps(d)
+        parsed = json.loads(json_str)
+
+        assert parsed["cascade"]["escalation_rate"] == 0.6
