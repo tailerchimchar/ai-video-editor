@@ -348,15 +348,34 @@ def test_player_name_in_digest_blocks_publishing(round_dir, tmp_path):
     assert not (round_dir / "digest.json").exists()
 
 
-def test_missing_player_names_file_is_warning_not_error(round_dir, tmp_path):
-    """When player names file is missing, publishing continues with a warning."""
+def test_missing_player_names_file_blocks_publishing(round_dir, tmp_path):
+    """When player names file is missing, publishing is blocked (fail closed)."""
     missing_file = tmp_path / "does_not_exist.txt"
 
-    payload, events, _ = run(round_dir, player_names_path=missing_file)
+    events = []
+    with pytest.raises(pub.PlayerNamesFileError) as exc_info:
+        pub.publish_round(
+            round_dir,
+            game="league",
+            compilation_id="comp-1",
+            api=FakeApi(),
+            uploader=FakeUploader(ids=ids),
+            ask_many=False,
+            player_names_path=missing_file,
+            emit=events.append,
+        )
 
-    # Should succeed
-    assert [e.event for e in events] == ["round.published"]
-    assert payload["clips"] == 3
+    # Should fail with names_file_missing reason
+    assert exc_info.value.reason == "names_file_missing"
+
+    # round.publish_failed should be emitted, not round.published
+    event_names = [e.event for e in events]
+    assert "round.publish_failed" in event_names
+    assert "round.published" not in event_names
+
+    fail_event = next(e for e in events if e.event == "round.publish_failed")
+    assert fail_event.payload["step"] == "names_file"
+    assert fail_event.payload["reason"] == "names_file_missing"
 
 
 def test_empty_player_names_file_allows_publishing(round_dir, tmp_path):
@@ -475,3 +494,60 @@ def test_cli_exits_4_on_upload_failure(round_dir, monkeypatch, capsys):
     with pytest.raises(SystemExit) as e:
         pub.main([str(round_dir), "--game", "league"])
     assert e.value.code == 4
+
+
+def test_cli_exits_5_on_missing_names_file(round_dir, monkeypatch, capsys, tmp_path):
+    """CLI exits with code 5 when player names file is missing."""
+    from ai_video_editor.grokbot import drive
+
+    missing_file = tmp_path / "does_not_exist.txt"
+
+    monkeypatch.setattr(drive, "uploader_from_settings", lambda: FakeUploader(ids=ids))
+
+    with pytest.raises(SystemExit) as e:
+        pub.main([str(round_dir), "--game", "league", "--player-names", str(missing_file)])
+    assert e.value.code == 5
+
+
+def test_unreadable_names_file_blocks_publishing(round_dir, tmp_path, monkeypatch):
+    """When player names file exists but is unreadable, publishing is blocked."""
+    import os
+
+    names_file = tmp_path / "names.txt"
+    names_file.write_text("Quillfeather\n")
+
+    # Make file unreadable (Unix only)
+    if os.name != "nt":
+        names_file.chmod(0o000)
+        try:
+            events = []
+            with pytest.raises(pub.PlayerNamesFileError) as exc_info:
+                pub.publish_round(
+                    round_dir,
+                    game="league",
+                    compilation_id="comp-1",
+                    api=FakeApi(),
+                    uploader=FakeUploader(ids=ids),
+                    ask_many=False,
+                    player_names_path=names_file,
+                    emit=events.append,
+                )
+
+            assert exc_info.value.reason == "names_file_unreadable"
+
+            event_names = [e.event for e in events]
+            assert "round.publish_failed" in event_names
+            assert "round.published" not in event_names
+
+            fail_event = next(e for e in events if e.event == "round.publish_failed")
+            assert fail_event.payload["reason"] == "names_file_unreadable"
+        finally:
+            names_file.chmod(0o644)
+
+
+def test_no_names_path_configured_allows_publishing(round_dir):
+    """When player_names_path is None (not configured), publishing proceeds."""
+    payload, events, _ = run(round_dir, player_names_path=None)
+
+    assert [e.event for e in events] == ["round.published"]
+    assert payload["clips"] == 3

@@ -210,17 +210,25 @@ Example:
 
 ### round.publish_failed
 
-Sent when an upload fails while publishing a round. When this event is sent, `round.published` is NOT sent. The round is incomplete and should not be processed.
+Sent when publishing fails for any reason. When this event is sent, `round.published` is NOT sent. The round is incomplete and should not be processed.
 
 | field | type | meaning |
 |---|---|---|
 | `round` | string | round folder name |
-| `step` | `clips` or `digest` | which upload step failed first |
-| `reason` | string | short, non-sensitive error reason |
-| `failed_clips` | array of strings | list of clip refs that failed to upload |
+| `step` | `names_file`, `clips`, or `digest` | which step failed |
+| `reason` | string | short, non-sensitive error reason (see table below) |
+| `failed_clips` | array of strings | list of clip refs that failed to upload (empty for non-upload failures) |
 | `digest_failed` | boolean | whether the digest upload failed |
 
-Example:
+**Reason values:**
+
+| reason | meaning |
+|---|---|
+| `names_file_missing` | The configured player names file does not exist |
+| `names_file_unreadable` | The player names file exists but could not be read |
+| `upload failed` | A Drive upload failed |
+
+Example (upload failure):
 
 ```json
 {
@@ -233,6 +241,22 @@ Example:
     "digest_failed": false
   },
   "ts": "2026-11-21T01:00:05+00:00"
+}
+```
+
+Example (names file missing):
+
+```json
+{
+  "event": "round.publish_failed",
+  "payload": {
+    "round": "2026-11-20_dryrun",
+    "step": "names_file",
+    "reason": "names_file_missing",
+    "failed_clips": [],
+    "digest_failed": false
+  },
+  "ts": "2026-11-21T01:00:01+00:00"
 }
 ```
 
