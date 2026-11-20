@@ -1,0 +1,55 @@
+{
+  "game": "league",
+  "round": "2026-11-20_dryrun",
+  "clips": [
+    {
+      "ref": "14m32s",
+      "event": "double kill",
+      "start_s": 870.0,
+      "end_s": 892.5,
+      "padded_start_s": 860.0,
+      "padded_end_s": 902.5,
+      "moment_start_s": 870.0,
+      "moment_end_s": 892.5,
+      "panel": {"gaming_quality": 4, "hook_verdict": "pass", "format": "hype", "include_p": 0.82},
+      "critic": "ship_it",
+      "voice": "placeholder beat: the jungler opens with a bold dive",
+      "copy": {"title": "Placeholder title one", "caption": "placeholder caption", "hashtags": ["leagueoflegends"]},
+      "drive": "FAKE-drive-clip-0001"
+    },
+    {
+      "ref": "21m05s",
+      "event": "triple kill",
+      "start_s": 1255.0,
+      "end_s": 1280.0,
+      "padded_start_s": 1245.0,
+      "padded_end_s": 1290.0,
+      "moment_start_s": 1255.0,
+      "moment_end_s": 1280.0,
+      "panel": {"gaming_quality": 3, "hook_verdict": "weak", "format": "story", "include_p": 0.64},
+      "critic": "revise",
+      "voice": "placeholder beat: a teammate turns the fight around",
+      "copy": {"title": "Placeholder title two", "caption": "placeholder caption", "hashtags": ["leagueoflegends"]},
+      "drive": "FAKE-drive-clip-0002"
+    },
+    {
+      "ref": "30m10s",
+      "event": "single kill",
+      "start_s": 1800.0,
+      "end_s": 1815.0,
+      "padded_start_s": 1790.0,
+      "padded_end_s": 1825.0,
+      "moment_start_s": 1800.0,
+      "moment_end_s": 1815.0,
+      "panel": {"gaming_quality": null, "hook_verdict": null, "format": "hype", "include_p": 0.31},
+      "critic": "revise",
+      "voice": "",
+      "copy": null,
+      "drive": "FAKE-drive-clip-0003"
+    }
+  ],
+  "built_at": "2026-11-21T00:59:58+00:00",
+  "compilation_id": "comp-dryrun-0001",
+  "compilation_version": "1",
+  "asset_id": "asset-dryrun-0001"
+}

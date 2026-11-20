@@ -15,6 +15,26 @@ from ai_video_editor.grokbot import publish as pub
 FIXTURE = Path(__file__).parent / "fixtures" / "panel_round"
 
 
+class FailingUploader:
+    """Uploader that fails on specified files."""
+
+    def __init__(self, fail_on: set[str] | None = None, fail_digest: bool = False):
+        self.uploads: list[tuple[str, str]] = []
+        self.fail_on = fail_on or set()
+        self.fail_digest = fail_digest
+
+    def upload(self, path, *, name, subfolder):
+        if self.fail_digest and "digest" in name:
+            raise RuntimeError("simulated digest upload failure")
+        if any(fail_name in name for fail_name in self.fail_on):
+            raise RuntimeError(f"simulated upload failure for {name}")
+        self.uploads.append((name, subfolder))
+        return f"{subfolder}:{name}"
+
+    def prune(self, *, subfolder, older_than_days):
+        return 0
+
+
 @pytest.fixture
 def round_dir(tmp_path, monkeypatch):
     # Clips must live under an allowed root to be uploaded.
@@ -51,13 +71,30 @@ def run(round_dir, **kw):
     return payload, events, up
 
 
+def run_expecting_failure(round_dir, **kw):
+    """Like run() but expects PublishUploadError and returns events + exception."""
+    events = []
+    up = kw.pop("uploader", FailingUploader())
+    defaults = dict(
+        game="league", compilation_id="comp-1", api=FakeApi(), uploader=up, ask_many=False
+    )
+    defaults.update(kw)
+    exc = None
+    try:
+        pub.publish_round(round_dir, emit=events.append, **defaults)
+    except pub.PublishUploadError as e:
+        exc = e
+    return events, up, exc
+
+
 def test_publish_uploads_digest_and_clips_and_emits(round_dir):
     payload, events, up = run(round_dir)
+    # Clips are now named <round>-<ref>.mp4 for uniqueness in the flat Drive folder
     assert sorted(up.uploads) == sorted(
         [
-            ("01_kill_14m32s.mp4", "clips"),
-            ("02_kill_21m05s.mp4", "clips"),
-            ("03_kill_30m10s.mp4", "clips"),
+            ("2026-11-20_zeri-14m32s.mp4", "clips"),
+            ("2026-11-20_zeri-21m05s.mp4", "clips"),
+            ("2026-11-20_zeri-30m10s.mp4", "clips"),
             ("2026-11-20_zeri-digest.json", "digests"),
         ]
     )
@@ -72,9 +109,9 @@ def test_publish_uploads_digest_and_clips_and_emits(round_dir):
         "drive": {
             "digest": "digests:2026-11-20_zeri-digest.json",
             "clips": {
-                "14m32s": "clips:01_kill_14m32s.mp4",
-                "21m05s": "clips:02_kill_21m05s.mp4",
-                "30m10s": "clips:03_kill_30m10s.mp4",
+                "14m32s": "clips:2026-11-20_zeri-14m32s.mp4",
+                "21m05s": "clips:2026-11-20_zeri-21m05s.mp4",
+                "30m10s": "clips:2026-11-20_zeri-30m10s.mp4",
             },
         },
         "clips": 3,
@@ -88,9 +125,9 @@ def test_saved_digest_carries_ids_and_never_leaks(round_dir):
     assert saved.compilation_id == "comp-1" and saved.compilation_version == "7"
     assert saved.asset_id == "asset-9"
     assert [c.drive for c in saved.clips] == [
-        "clips:01_kill_14m32s.mp4",
-        "clips:02_kill_21m05s.mp4",
-        "clips:03_kill_30m10s.mp4",
+        "clips:2026-11-20_zeri-14m32s.mp4",
+        "clips:2026-11-20_zeri-21m05s.mp4",
+        "clips:2026-11-20_zeri-30m10s.mp4",
     ]
     assert dg.digest_leaks(saved, round_dir / "transcript.json") == []
 
@@ -115,8 +152,9 @@ def test_absolute_clip_paths_are_used_as_is(round_dir, tmp_path):
     clips[0]["file"] = str(elsewhere)
     (round_dir / "clips.json").write_text(json.dumps(clips))
     payload, _, up = run(round_dir)
-    assert ("09_kill_05m00s.mp4", "clips") in up.uploads
-    assert payload["drive"]["clips"]["05m00s"] == "clips:09_kill_05m00s.mp4"
+    # Uses the round-ref naming now
+    assert ("2026-11-20_zeri-05m00s.mp4", "clips") in up.uploads
+    assert payload["drive"]["clips"]["05m00s"] == "clips:2026-11-20_zeri-05m00s.mp4"
 
 
 def test_no_api_no_uploader_still_saves_and_emits(round_dir):
@@ -193,7 +231,7 @@ def test_absolute_clip_outside_roots_is_skipped(round_dir, tmp_path_factory, mon
     outside.write_bytes(b"private")
     _point_first_clip_at(round_dir, str(outside))
     payload, _, up = run(round_dir)
-    assert ("09_kill_05m00s.mp4", "clips") not in up.uploads
+    assert ("2026-11-20_zeri-05m00s.mp4", "clips") not in up.uploads
     assert payload["drive"]["clips"]["05m00s"] is None
     assert payload["skipped_outside_roots"] == 1
 
@@ -206,9 +244,9 @@ def test_dotdot_relative_clip_escaping_roots_is_skipped(round_dir, monkeypatch):
     escaped.write_bytes(b"private")
     _point_first_clip_at(round_dir, "../09_kill_05m00s.mp4")
     payload, _, up = run(round_dir)
-    assert ("09_kill_05m00s.mp4", "clips") not in up.uploads
+    assert ("2026-11-20_zeri-05m00s.mp4", "clips") not in up.uploads
     assert payload["skipped_outside_roots"] == 1
-    assert ("02_kill_21m05s.mp4", "clips") in up.uploads
+    assert ("2026-11-20_zeri-21m05s.mp4", "clips") in up.uploads
 
 
 def test_retention_days_must_be_at_least_one():
@@ -221,3 +259,219 @@ def test_retention_days_must_be_at_least_one():
     assert (
         Settings(grokbot_drive_preview_retention_days=1).grokbot_drive_preview_retention_days == 1
     )
+
+
+# --- Upload failure tests ---
+
+
+def test_failed_clip_upload_emits_publish_failed_not_published(round_dir):
+    """When a clip upload fails, round.publish_failed is emitted and round.published is NOT."""
+    up = FailingUploader(fail_on={"21m05s"})
+    events, _, exc = run_expecting_failure(round_dir, uploader=up)
+
+    assert exc is not None
+    assert exc.round_name == "2026-11-20_zeri"
+    assert "21m05s" in exc.failed_clips
+    assert not exc.digest_failed
+
+    event_names = [e.event for e in events]
+    assert "round.publish_failed" in event_names
+    assert "round.published" not in event_names
+
+    fail_event = next(e for e in events if e.event == "round.publish_failed")
+    assert fail_event.payload["round"] == "2026-11-20_zeri"
+    assert fail_event.payload["step"] == "clips"
+    assert "21m05s" in fail_event.payload["failed_clips"]
+
+
+def test_failed_digest_upload_emits_publish_failed(round_dir):
+    """When the digest upload fails, round.publish_failed is emitted."""
+    up = FailingUploader(fail_digest=True)
+    events, _, exc = run_expecting_failure(round_dir, uploader=up)
+
+    assert exc is not None
+    assert exc.digest_failed
+
+    event_names = [e.event for e in events]
+    assert "round.publish_failed" in event_names
+    assert "round.published" not in event_names
+
+    fail_event = next(e for e in events if e.event == "round.publish_failed")
+    assert fail_event.payload["step"] == "digest"
+    assert fail_event.payload["digest_failed"] is True
+
+
+def test_no_uploader_configured_allows_null_ids(round_dir):
+    """When uploader is None, null ids are OK and round.published is emitted."""
+    payload, events, _ = run(round_dir, uploader=None)
+
+    assert [e.event for e in events] == ["round.published"]
+    assert payload["drive"]["digest"] is None
+    assert all(v is None for v in payload["drive"]["clips"].values())
+
+
+def test_multiple_clip_failures_all_reported(round_dir):
+    """Multiple clip upload failures are all reported in the failure event."""
+    up = FailingUploader(fail_on={"14m32s", "30m10s"})
+    _events, _, exc = run_expecting_failure(round_dir, uploader=up)
+
+    assert exc is not None
+    assert len(exc.failed_clips) == 2
+    assert "14m32s" in exc.failed_clips
+    assert "30m10s" in exc.failed_clips
+
+
+# --- Player name check tests ---
+
+
+def test_player_name_in_digest_blocks_publishing(round_dir, tmp_path):
+    """When a player name appears in digest, publishing is blocked before upload."""
+    names_file = tmp_path / "names.txt"
+    names_file.write_text("Quillfeather\nMumblewick\n")
+
+    up = FakeUploader(ids=ids)
+    with pytest.raises(pub.PlayerNameLeakError):
+        pub.publish_round(
+            round_dir,
+            game="league",
+            compilation_id="comp-1",
+            api=FakeApi(),
+            uploader=up,
+            ask_many=False,
+            player_names_path=names_file,
+            emit=lambda e: None,
+        )
+
+    # No uploads should have happened
+    assert up.uploads == []
+    # digest.json should not exist
+    assert not (round_dir / "digest.json").exists()
+
+
+def test_missing_player_names_file_is_warning_not_error(round_dir, tmp_path):
+    """When player names file is missing, publishing continues with a warning."""
+    missing_file = tmp_path / "does_not_exist.txt"
+
+    payload, events, _ = run(round_dir, player_names_path=missing_file)
+
+    # Should succeed
+    assert [e.event for e in events] == ["round.published"]
+    assert payload["clips"] == 3
+
+
+def test_empty_player_names_file_allows_publishing(round_dir, tmp_path):
+    """An empty player names file allows all digests through."""
+    names_file = tmp_path / "names.txt"
+    names_file.write_text("")
+
+    _payload, events, _ = run(round_dir, player_names_path=names_file)
+
+    assert [e.event for e in events] == ["round.published"]
+
+
+def test_player_name_check_is_case_insensitive(round_dir, tmp_path):
+    """Player name matching ignores case."""
+    names_file = tmp_path / "names.txt"
+    names_file.write_text("QUILLFEATHER\n")  # uppercase
+
+    # Digest has "Quillfeather" in gaming-expert.json story_beats
+    with pytest.raises(pub.PlayerNameLeakError):
+        pub.publish_round(
+            round_dir,
+            game="league",
+            compilation_id="comp-1",
+            api=FakeApi(),
+            uploader=FakeUploader(ids=ids),
+            ask_many=False,
+            player_names_path=names_file,
+            emit=lambda e: None,
+        )
+
+
+# --- Digest padding tests ---
+
+
+def test_digest_clips_have_padded_windows(round_dir):
+    """Digest clips include both padded and moment windows."""
+    run(round_dir)
+    saved = dg.Digest.model_validate_json((round_dir / "digest.json").read_text())
+
+    for clip in saved.clips:
+        # Padded windows should be set
+        assert clip.padded_start_s is not None
+        assert clip.padded_end_s is not None
+        # Moment windows should equal the original start/end
+        assert clip.moment_start_s == clip.start_s
+        assert clip.moment_end_s == clip.end_s
+        # Padded start should be <= moment start (padding goes backwards)
+        assert clip.padded_start_s <= clip.moment_start_s
+        # Padded end should be >= moment end (padding goes forwards)
+        assert clip.padded_end_s >= clip.moment_end_s
+
+
+def test_digest_padding_is_about_10_seconds(round_dir):
+    """Padding is approximately 10 seconds on each side."""
+    run(round_dir)
+    saved = dg.Digest.model_validate_json((round_dir / "digest.json").read_text())
+
+    clip = saved.clips[0]
+    # First clip at 870.0 should pad to 860.0 (870 - 10)
+    assert clip.padded_start_s == 860.0
+    # End at 892.5 should pad to 902.5 (892.5 + 10)
+    assert clip.padded_end_s == 902.5
+
+
+def test_digest_padding_clamps_to_zero(round_dir):
+    """Padding does not go below 0."""
+    # Modify clips to have a very early start
+    clips = json.loads((round_dir / "clips.json").read_text())
+    clips[0]["start_seconds"] = 5.0  # Will pad to max(0, 5-10) = 0
+    clips[0]["end_seconds"] = 20.0
+    (round_dir / "clips.json").write_text(json.dumps(clips))
+
+    run(round_dir)
+    saved = dg.Digest.model_validate_json((round_dir / "digest.json").read_text())
+
+    clip = saved.clips[0]
+    assert clip.padded_start_s == 0.0  # Clamped to 0
+
+
+def test_cli_accepts_player_names_arg(round_dir, monkeypatch, tmp_path, capsys):
+    """CLI accepts --player-names argument."""
+    names_file = tmp_path / "names.txt"
+    names_file.write_text("Nonexistent\n")
+
+    seen = {}
+
+    def fake(rd, **kw):
+        seen.update(kw, round_dir=rd)
+        return {"ok": True}
+
+    monkeypatch.setattr(pub, "publish_round", fake)
+    pub.main([str(round_dir), "--game", "league", "--player-names", str(names_file)])
+    assert seen["player_names_path"] == names_file
+
+
+def test_cli_exits_3_on_player_name_leak(round_dir, monkeypatch, capsys, tmp_path):
+    """CLI exits with code 3 when a player name is found."""
+    from ai_video_editor.grokbot import drive
+
+    names_file = tmp_path / "names.txt"
+    names_file.write_text("Quillfeather\n")
+
+    monkeypatch.setattr(drive, "uploader_from_settings", lambda: FakeUploader(ids=ids))
+
+    with pytest.raises(SystemExit) as e:
+        pub.main([str(round_dir), "--game", "league", "--player-names", str(names_file)])
+    assert e.value.code == 3
+
+
+def test_cli_exits_4_on_upload_failure(round_dir, monkeypatch, capsys):
+    """CLI exits with code 4 when an upload fails."""
+    from ai_video_editor.grokbot import drive
+
+    monkeypatch.setattr(drive, "uploader_from_settings", lambda: FailingUploader(fail_digest=True))
+
+    with pytest.raises(SystemExit) as e:
+        pub.main([str(round_dir), "--game", "league"])
+    assert e.value.code == 4
