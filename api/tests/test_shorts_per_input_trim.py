@@ -72,7 +72,7 @@ def test_kill_times_multi_clip_montage_time_accounting() -> None:
     """Second clip's anchor is offset by first clip's duration."""
     plan = _plan(
         [
-            _clip("a.mp4", 0.0, 8.0, anchor_offset=5.0),   # kill at t=5
+            _clip("a.mp4", 0.0, 8.0, anchor_offset=5.0),  # kill at t=5
             _clip("b.mp4", 0.0, 10.0, anchor_offset=6.0),  # kill at t=8+6=14
         ]
     )
@@ -111,9 +111,7 @@ def test_no_trim_for_highlight_folder_clip() -> None:
 
 def test_trim_applied_when_anchor_offset_set() -> None:
     """Clip with anchor_offset gets -ss / -t in file timebase."""
-    args = _assemble_input_args(
-        [_clip("a.mp4", 5.0, 15.0, anchor_offset=6.0)]
-    )
+    args = _assemble_input_args([_clip("a.mp4", 5.0, 15.0, anchor_offset=6.0)])
     # -ss 5.000 -t 10.000 -i /tmp/a.mp4
     assert args[0] == "-ss"
     assert args[1] == "5.000"
@@ -126,9 +124,7 @@ def test_no_ss_when_start_is_zero_but_still_get_no_flags() -> None:
     """When start=0 (no seek needed) AND anchor is set, we don't emit -ss
     but the analyzer's window should still be respected via natural EOF.
     Currently we skip -t too when start is 0 — verify."""
-    args = _assemble_input_args(
-        [_clip("a.mp4", 0.0, 8.0, anchor_offset=4.0)]
-    )
+    args = _assemble_input_args([_clip("a.mp4", 0.0, 8.0, anchor_offset=4.0)])
     # We emit -t 8.000 because window > 0 (per current code we do
     # emit even when start=0, since anchor_offset is set).
     # The test doubles as documentation of the actual behavior.

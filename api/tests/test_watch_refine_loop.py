@@ -89,8 +89,11 @@ def test_all_five_negative_categories_drop() -> None:
     """Each negative category should trigger a drop when alone in
     its clip's window."""
     for cat in (
-        "dead_air", "scoreboard", "own_death",
-        "teammate_kill_only", "boring_pacing",
+        "dead_air",
+        "scoreboard",
+        "own_death",
+        "teammate_kill_only",
+        "boring_pacing",
     ):
         timeline = [(0.0, 4.0)]
         assert _clip_indices_to_drop([_flag(cat, 0.0, 4.0)], timeline) == [0]
@@ -174,9 +177,7 @@ def test_start_over_bails_immediately() -> None:
 def test_needs_edits_drops_flagged_clip_and_re_renders() -> None:
     # Panel spans t=4-8s which is clip index 1 ("b.mp4"). Second pass
     # ships.
-    scoreboard_flag = MomentFlag(
-        start_s=4.0, end_s=8.0, category="scoreboard", why="post-round"
-    )
+    scoreboard_flag = MomentFlag(start_s=4.0, end_s=8.0, category="scoreboard", why="post-round")
     result, renders, watches = _run_loop(
         [
             _watch_result("needs_edits", [scoreboard_flag]),
@@ -231,15 +232,16 @@ def test_would_empty_plan_guards_against_dropping_to_below_2_clips() -> None:
 def test_cap_reached_when_loop_never_reaches_ship_it() -> None:
     """5 passes, each dropping one clip; if the montage never gets
     a ship_it verdict, the cap fires."""
+
     def _drop_flag(clip_time_start: float) -> MomentFlag:
         return _flag("scoreboard", clip_time_start, clip_time_start + 4.0)
 
     # Enough clips + drops to survive 3 iterations without emptying.
     result, renders, _ = _run_loop(
         [
-            _watch_result("needs_edits", [_drop_flag(4.0)]),   # drops b -> a,c,d
-            _watch_result("needs_edits", [_drop_flag(4.0)]),   # drops c -> a,d
-            _watch_result("needs_edits", [_drop_flag(4.0)]),   # would empty -> a alone
+            _watch_result("needs_edits", [_drop_flag(4.0)]),  # drops b -> a,c,d
+            _watch_result("needs_edits", [_drop_flag(4.0)]),  # drops c -> a,d
+            _watch_result("needs_edits", [_drop_flag(4.0)]),  # would empty -> a alone
         ],
         clip_durations=[4.0, 4.0, 4.0, 4.0],
         max_passes=5,
@@ -265,7 +267,8 @@ def test_vlm_unavailable_returns_gracefully() -> None:
 def test_render_failure_short_circuits_the_loop() -> None:
     result, renders, watches = _run_loop(
         [_watch_result("ship_it")],
-        render_ok=False, render_err="ffmpeg exited 1",
+        render_ok=False,
+        render_err="ffmpeg exited 1",
     )
     assert result.ok is False
     assert result.stopped_reason == "render_failed"

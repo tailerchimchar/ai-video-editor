@@ -81,9 +81,7 @@ def extract_frames(
             str(out_path),
         ]
         try:
-            result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=15
-            )
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
         except (FileNotFoundError, subprocess.TimeoutExpired):
             continue
         if result.returncode == 0 and out_path.is_file():

@@ -168,12 +168,20 @@ def _extract_audio(video_path: str, out_wav: Path) -> bool:
     (~24MB/hour) -- fits under Groq's file-size limit even for full
     VODs. Returns True on success."""
     cmd = [
-        settings.ffmpeg_path, "-y", "-hide_banner", "-loglevel", "error",
-        "-i", video_path,
-        "-vn",           # drop video stream
-        "-ac", "1",      # mono
-        "-ar", "16000",  # whisper's native rate
-        "-c:a", "pcm_s16le",
+        settings.ffmpeg_path,
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        video_path,
+        "-vn",  # drop video stream
+        "-ac",
+        "1",  # mono
+        "-ar",
+        "16000",  # whisper's native rate
+        "-c:a",
+        "pcm_s16le",
         str(out_wav),
     ]
     try:
@@ -229,17 +237,16 @@ class GroqBackend:
                 files = {"file": ("audio.wav", f, "audio/wav")}
                 try:
                     resp = httpx.post(
-                        url, headers=headers, data=data, files=files,
+                        url,
+                        headers=headers,
+                        data=data,
+                        files=files,
                         timeout=600.0,
                     )
                 except httpx.HTTPError as exc:
-                    raise TranscribeUnavailableError(
-                        f"groq http error: {exc!s}"
-                    ) from exc
+                    raise TranscribeUnavailableError(f"groq http error: {exc!s}") from exc
             if resp.status_code != 200:
-                raise TranscribeUnavailableError(
-                    f"groq {resp.status_code}: {resp.text[:300]}"
-                )
+                raise TranscribeUnavailableError(f"groq {resp.status_code}: {resp.text[:300]}")
             payload = resp.json()
 
         return _groq_payload_to_segments(payload)
@@ -278,20 +285,22 @@ def _groq_payload_to_segments(payload: dict) -> list[dict]:
             e = float(w.get("end") or 0.0)
             if e > end:
                 end = e
-        return [{
-            "start_seconds": 0.0,
-            "end_seconds": round(end, 2),
-            "text": full_text,
-            "words": [
-                {
-                    "word": (w.get("word") or "").strip(),
-                    "start": round(float(w.get("start") or 0.0), 3),
-                    "end": round(float(w.get("end") or 0.0), 3),
-                }
-                for w in words_in
-                if (w.get("word") or "").strip()
-            ],
-        }]
+        return [
+            {
+                "start_seconds": 0.0,
+                "end_seconds": round(end, 2),
+                "text": full_text,
+                "words": [
+                    {
+                        "word": (w.get("word") or "").strip(),
+                        "start": round(float(w.get("start") or 0.0), 3),
+                        "end": round(float(w.get("end") or 0.0), 3),
+                    }
+                    for w in words_in
+                    if (w.get("word") or "").strip()
+                ],
+            }
+        ]
 
     # Distribute top-level words into segments by overlap.
     out: list[dict] = []
@@ -316,11 +325,13 @@ def _groq_payload_to_segments(payload: dict) -> list[dict]:
                 break
             token = (w.get("word") or "").strip()
             if token:
-                seg_words.append({
-                    "word": token,
-                    "start": round(ws, 3),
-                    "end": round(we, 3),
-                })
+                seg_words.append(
+                    {
+                        "word": token,
+                        "start": round(ws, 3),
+                        "end": round(we, 3),
+                    }
+                )
             word_idx += 1
         out.append(
             {
@@ -352,8 +363,7 @@ def select_backend(name: str | None = None) -> TranscribeBackend:
     cls = _BACKENDS.get(resolved)
     if cls is None:
         _log.warning(
-            "transcribe: unknown backend %r, falling back to local_whisper "
-            "(known: %s)",
+            "transcribe: unknown backend %r, falling back to local_whisper (known: %s)",
             resolved,
             sorted(_BACKENDS),
         )

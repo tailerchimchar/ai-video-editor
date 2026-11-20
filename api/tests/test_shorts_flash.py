@@ -113,17 +113,13 @@ def _stub_audio(monkeypatch, beats: list[float]) -> None:
     )
 
 
-def test_flash_times_downbeats_takes_every_fourth(
-    monkeypatch, tmp_path, sandbox
-) -> None:
+def test_flash_times_downbeats_takes_every_fourth(monkeypatch, tmp_path, sandbox) -> None:
     """downbeats source thins the beat list to every 4th onset."""
     mp3 = tmp_path / "song.mp3"
     mp3.write_bytes(b"fake")
     _stub_audio(monkeypatch, [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5])
     plan = _plan([_clip("a.mp4", 0.0, 10.0)])
-    times = _flash_times(
-        plan, music_path=str(mp3), source="downbeats", max_t=60.0
-    )
+    times = _flash_times(plan, music_path=str(mp3), source="downbeats", max_t=60.0)
     assert times == (0.0, 2.0)  # every 4th of 8 quarter-notes
 
 

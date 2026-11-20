@@ -29,10 +29,7 @@ def _flash_expr(beats: tuple[float, ...], duration_seconds: float) -> str:
     ffmpeg accepts arbitrary expressions here — we OR together
     `between(t,B,B+D)` for each beat.
     """
-    parts = [
-        f"between(t\\,{beat:.4f}\\,{beat + duration_seconds:.4f})"
-        for beat in beats
-    ]
+    parts = [f"between(t\\,{beat:.4f}\\,{beat + duration_seconds:.4f})" for beat in beats]
     if not parts:
         # `enable=0` — never on
         return "0"
@@ -63,10 +60,7 @@ def _build_flash(
     # Split so we can overlay a whitened copy over the original when
     # `enable` is truthy. eq=brightness pushes toward white; use the
     # timeline enable to switch it on only at beat frames.
-    return (
-        f"[{in_label}]eq=brightness={intensity:.3f}:"
-        f"enable='{enable}'[{out_label}]"
-    )
+    return f"[{in_label}]eq=brightness={intensity:.3f}:enable='{enable}'[{out_label}]"
 
 
 def _build_pulse_zoom(
@@ -114,7 +108,6 @@ def build_beat_effect_filter(
     """
     if effect not in _EFFECT_BUILDERS:
         raise ValueError(
-            f"unknown beat effect {effect!r}; "
-            f"expected one of {sorted(_EFFECT_BUILDERS)}"
+            f"unknown beat effect {effect!r}; expected one of {sorted(_EFFECT_BUILDERS)}"
         )
     return _EFFECT_BUILDERS[effect](in_label, out_label, beats, **kwargs)

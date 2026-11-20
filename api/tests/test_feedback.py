@@ -75,13 +75,31 @@ async def test_log_event_swallows_db_errors(db):
 
 @pytest.mark.asyncio
 async def test_summary_aggregates_actions_and_event_types(db):
-    await log_event(db, compilation_id="c1", action="extend", event_type="funny_audio",
-                    delta_before=2.0, delta_after=3.0)
-    await log_event(db, compilation_id="c1", action="extend", event_type="funny_audio",
-                    delta_before=4.0, delta_after=2.0)
+    await log_event(
+        db,
+        compilation_id="c1",
+        action="extend",
+        event_type="funny_audio",
+        delta_before=2.0,
+        delta_after=3.0,
+    )
+    await log_event(
+        db,
+        compilation_id="c1",
+        action="extend",
+        event_type="funny_audio",
+        delta_before=4.0,
+        delta_after=2.0,
+    )
     await log_event(db, compilation_id="c1", action="remove_clip", event_type="kill")
-    await log_event(db, compilation_id="c2", action="extend", event_type="kill",
-                    delta_before=0.0, delta_after=5.0)
+    await log_event(
+        db,
+        compilation_id="c2",
+        action="extend",
+        event_type="kill",
+        delta_before=0.0,
+        delta_after=5.0,
+    )
     out = await summarise(db)
     assert out["total_events"] == 4
     assert out["by_action"] == {"extend": 3, "remove_clip": 1}
@@ -92,9 +110,14 @@ async def test_summary_aggregates_actions_and_event_types(db):
 async def test_summary_computes_extend_medians_per_event_type(db):
     # 3 funny_audio extends → median should be the middle value
     for before, after in [(1.0, 5.0), (3.0, 7.0), (5.0, 9.0)]:
-        await log_event(db, compilation_id="c1", action="extend",
-                        event_type="funny_audio",
-                        delta_before=before, delta_after=after)
+        await log_event(
+            db,
+            compilation_id="c1",
+            action="extend",
+            event_type="funny_audio",
+            delta_before=before,
+            delta_after=after,
+        )
     out = await summarise(db)
     medians = out["extend_medians_per_event_type"]
     assert medians["funny_audio"] == {"before": 3.0, "after": 7.0, "n_samples": 3}
@@ -105,8 +128,14 @@ async def test_summary_computes_extend_medians_per_event_type(db):
 @pytest.mark.asyncio
 async def test_summary_skips_proposed_overrides_below_3_samples(db):
     """One-shot edits shouldn't reshape the global defaults — require ≥3."""
-    await log_event(db, compilation_id="c1", action="extend", event_type="kill",
-                    delta_before=99.0, delta_after=99.0)
+    await log_event(
+        db,
+        compilation_id="c1",
+        action="extend",
+        event_type="kill",
+        delta_before=99.0,
+        delta_after=99.0,
+    )
     out = await summarise(db)
     # Still appears in medians for inspection...
     assert out["extend_medians_per_event_type"]["kill"]["n_samples"] == 1
@@ -116,10 +145,22 @@ async def test_summary_skips_proposed_overrides_below_3_samples(db):
 
 @pytest.mark.asyncio
 async def test_summary_scopes_to_compilation_when_passed(db):
-    await log_event(db, compilation_id="c1", action="extend", event_type="kill",
-                    delta_before=1.0, delta_after=2.0)
-    await log_event(db, compilation_id="c2", action="extend", event_type="kill",
-                    delta_before=10.0, delta_after=20.0)
+    await log_event(
+        db,
+        compilation_id="c1",
+        action="extend",
+        event_type="kill",
+        delta_before=1.0,
+        delta_after=2.0,
+    )
+    await log_event(
+        db,
+        compilation_id="c2",
+        action="extend",
+        event_type="kill",
+        delta_before=10.0,
+        delta_after=20.0,
+    )
     only_c1 = await summarise(db, compilation_id="c1")
     assert only_c1["total_events"] == 1
     assert only_c1["extend_medians_per_event_type"]["kill"]["before"] == 1.0

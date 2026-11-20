@@ -100,9 +100,9 @@ def test_first_blood_uses_full_clip_list_when_provided() -> None:
     kill, we must NOT re-label a later kill as first_blood. Passing
     `first_blood_source` fixes this."""
     all_clips = [
-        _clip("first.mp4", anchor=100, event="kill", hype=0.4),   # dropped by threshold
+        _clip("first.mp4", anchor=100, event="kill", hype=0.4),  # dropped by threshold
         _clip("second.mp4", anchor=300, event="kill", hype=0.9),  # keeps
-        _clip("third.mp4", anchor=500, event="kill", hype=0.9),   # keeps
+        _clip("third.mp4", anchor=500, event="kill", hype=0.9),  # keeps
     ]
     kept = [c for c in all_clips if c.hype_score >= 0.6]
     # Naive call (no source) → misidentifies second as first blood
@@ -267,9 +267,7 @@ def test_categorize_stable_under_input_reorder() -> None:
     forward = categorize_clips([a, b])
     reversed_ = categorize_clips([b, a])
     for bucket in forward:
-        assert [c.file for c in forward[bucket]] == [
-            c.file for c in reversed_.get(bucket, [])
-        ]
+        assert [c.file for c in forward[bucket]] == [c.file for c in reversed_.get(bucket, [])]
 
 
 # ---------------------------------------------------------------------
@@ -305,12 +303,8 @@ def test_montage_mode_groups_adjacent_clips() -> None:
 
 
 def test_montage_respects_max_clips_per_short() -> None:
-    clips = [
-        _clip(f"k{i}.mp4", anchor=1500 + i * 5, event="kill") for i in range(7)
-    ]
-    plans = plan_shorts(
-        clips, mode="montage", max_clips_per_short=3, hype_threshold=0.0
-    )
+    clips = [_clip(f"k{i}.mp4", anchor=1500 + i * 5, event="kill") for i in range(7)]
+    plans = plan_shorts(clips, mode="montage", max_clips_per_short=3, hype_threshold=0.0)
     lg_plans = [p for p in plans if p.bucket == "late_game"]
     # 7 clips in one adjacency group, chunked into ceil(7/3) = 3 shorts
     assert len(lg_plans) == 3
@@ -481,8 +475,8 @@ def test_voiceover_ranks_laning_kill_first() -> None:
     """A laning-phase kill should sort before a mid-game kill in VO
     output, even if the laning kill is later chronologically."""
     clips = [
-        _clip("mid_kill.mp4", anchor=1000, event="kill"),   # mid game, earlier bucket-wise
-        _clip("laning_kill.mp4", anchor=500, event="kill"), # laning phase
+        _clip("mid_kill.mp4", anchor=1000, event="kill"),  # mid game, earlier bucket-wise
+        _clip("laning_kill.mp4", anchor=500, event="kill"),  # laning phase
     ]
     plans = plan_shorts(clips, mode="voiceover")
     # Only expect plans for the two clips (single-bucket per clip).

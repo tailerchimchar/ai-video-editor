@@ -78,9 +78,7 @@ def test_list_outplayed_clips_respects_limit(tmp_path, monkeypatch) -> None:
 # ---------------------------------------------------------------------
 
 
-def test_list_highlights_sessions_no_workspace(
-    tmp_path, monkeypatch
-) -> None:
+def test_list_highlights_sessions_no_workspace(tmp_path, monkeypatch) -> None:
     from ai_video_editor.config import settings
 
     monkeypatch.setattr(settings, "workspace_dir", tmp_path)
@@ -107,9 +105,7 @@ def test_list_highlights_sessions_multi_game(tmp_path, monkeypatch) -> None:
         assert g["session_count"] >= 1
 
 
-def test_list_highlights_sessions_filters_by_game(
-    tmp_path, monkeypatch
-) -> None:
+def test_list_highlights_sessions_filters_by_game(tmp_path, monkeypatch) -> None:
     from ai_video_editor.config import settings
 
     monkeypatch.setattr(settings, "workspace_dir", tmp_path)
@@ -129,16 +125,12 @@ def test_list_highlights_sessions_filters_by_game(
 
 def _write_highlights_index(folder: Path, clips: list[dict]) -> None:
     folder.mkdir(parents=True, exist_ok=True)
-    (folder / "index.json").write_text(
-        json.dumps({"clips": clips}), encoding="utf-8"
-    )
+    (folder / "index.json").write_text(json.dumps({"clips": clips}), encoding="utf-8")
     for c in clips:
         (folder / c["file"]).write_bytes(b"")
 
 
-def test_list_highlights_clips_returns_index_json(
-    tmp_path, monkeypatch
-) -> None:
+def test_list_highlights_clips_returns_index_json(tmp_path, monkeypatch) -> None:
     from ai_video_editor.config import settings
 
     monkeypatch.setattr(settings, "workspace_dir", tmp_path)
@@ -164,9 +156,7 @@ def test_list_highlights_clips_returns_index_json(
     assert result["clips"][0]["hype_score"] == 0.9
 
 
-def test_list_highlights_clips_missing_returns_error(
-    tmp_path, monkeypatch
-) -> None:
+def test_list_highlights_clips_missing_returns_error(tmp_path, monkeypatch) -> None:
     from ai_video_editor.config import settings
 
     monkeypatch.setattr(settings, "workspace_dir", tmp_path)
@@ -191,9 +181,7 @@ def test_build_custom_montage_rejects_empty_list(tmp_path, monkeypatch) -> None:
     assert "empty" in result["error"]
 
 
-def test_build_custom_montage_skips_missing_paths(
-    tmp_path, monkeypatch
-) -> None:
+def test_build_custom_montage_skips_missing_paths(tmp_path, monkeypatch) -> None:
     from ai_video_editor.config import settings
     from ai_video_editor.shorts import build_custom_montage
 
@@ -212,9 +200,7 @@ def test_build_custom_montage_skips_missing_paths(
     }
 
 
-def test_build_custom_montage_calls_render_with_resolved_paths(
-    tmp_path, monkeypatch
-) -> None:
+def test_build_custom_montage_calls_render_with_resolved_paths(tmp_path, monkeypatch) -> None:
     """One good path, one bad — only the good one reaches render."""
     from ai_video_editor.config import settings
     from ai_video_editor.shorts import build_custom_montage
@@ -236,12 +222,8 @@ def test_build_custom_montage_calls_render_with_resolved_paths(
 
         return RenderResult(plan=plan, out_path=out_path, ok=True)
 
-    monkeypatch.setattr(
-        "ai_video_editor.shorts._render_and_refine", _fake_render
-    )
-    result = build_custom_montage(
-        clip_paths=[str(good), "/missing.mp4"], name="unit_test"
-    )
+    monkeypatch.setattr("ai_video_editor.shorts._render_and_refine", _fake_render)
+    result = build_custom_montage(clip_paths=[str(good), "/missing.mp4"], name="unit_test")
     assert result["ok"] is True
     assert result["clips_resolved"] == 1
     assert result["clips_skipped"] == 1

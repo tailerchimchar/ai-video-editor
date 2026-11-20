@@ -89,8 +89,12 @@ def test_window_fallback_no_padding_when_event_unknown():
 def test_window_anchor_uses_per_event_pre_post_for_kills():
     """A kill candidate gets shorter pre + longer post (milk the celebration).
     Default override: kill = (3.0, 8.0)."""
-    cand = {"start_seconds": 100, "end_seconds": 120,
-            "event_type": "kill", "metadata": {"anchor_seconds": 110}}
+    cand = {
+        "start_seconds": 100,
+        "end_seconds": 120,
+        "event_type": "kill",
+        "metadata": {"anchor_seconds": 110},
+    }
     s, e = _window_anchor(cand, {}, 200)
     # 110 - 3 = 107, 110 + 8 = 118
     assert s == 107.0 and e == 118.0
@@ -107,8 +111,12 @@ def test_window_anchor_extends_to_ranker_window_when_wider():
     """Rampage fix: when the ranker clustered multiple kills into one
     candidate, its suggested window is wider than the anchor rule alone.
     The anchor window should extend outward to the ranker's window."""
-    cand = {"start_seconds": 100, "end_seconds": 120,
-            "event_type": "kill", "metadata": {"anchor_seconds": 110}}
+    cand = {
+        "start_seconds": 100,
+        "end_seconds": 120,
+        "event_type": "kill",
+        "metadata": {"anchor_seconds": 110},
+    }
     # Ranker suggested a rampage 90 → 140s (spans several kills).
     rank = {"suggested_start_seconds": 90.0, "suggested_end_seconds": 140.0}
     s, e = _window_anchor(cand, rank, 200)
@@ -120,8 +128,12 @@ def test_window_anchor_extends_to_ranker_window_when_wider():
 
 def test_window_anchor_ignores_ranker_window_when_narrower():
     """A narrow ranker window doesn't shrink the anchor-rule minimum."""
-    cand = {"start_seconds": 100, "end_seconds": 120,
-            "event_type": "kill", "metadata": {"anchor_seconds": 110}}
+    cand = {
+        "start_seconds": 100,
+        "end_seconds": 120,
+        "event_type": "kill",
+        "metadata": {"anchor_seconds": 110},
+    }
     # Ranker's window is inside the anchor window; anchor's floor holds.
     rank = {"suggested_start_seconds": 109.0, "suggested_end_seconds": 112.0}
     s, e = _window_anchor(cand, rank, 200)
@@ -134,8 +146,12 @@ def test_window_anchor_caps_at_max_seconds():
     clamped down. Prevents multi-minute clips from a mis-cluster."""
     from ai_video_editor.config import settings
 
-    cand = {"start_seconds": 0, "end_seconds": 10,
-            "event_type": "kill", "metadata": {"anchor_seconds": 5}}
+    cand = {
+        "start_seconds": 0,
+        "end_seconds": 10,
+        "event_type": "kill",
+        "metadata": {"anchor_seconds": 5},
+    }
     # Ranker suggests a 3-minute window — clamped to `highlight_max_seconds`.
     rank = {"suggested_start_seconds": 0.0, "suggested_end_seconds": 200.0}
     s, e = _window_anchor(cand, rank, 1000)

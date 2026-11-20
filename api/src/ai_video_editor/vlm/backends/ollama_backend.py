@@ -92,9 +92,7 @@ class OllamaBackend(VLMBackend):
         """Route through the ladder + return the raw JSON string."""
         tags = self._list_tags()
         if tags is None:
-            raise VLMUnavailableError(
-                f"Ollama unreachable at {self.base_url}"
-            )
+            raise VLMUnavailableError(f"Ollama unreachable at {self.base_url}")
         pulled = {t.get("name") for t in tags}
         model = self._pick_model(pulled)
         if model is None:

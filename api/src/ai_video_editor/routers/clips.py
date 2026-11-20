@@ -170,12 +170,8 @@ async def trim_source_to_clip(body: TrimSourceBody):
     if body.anchor_to_kill:
         duration = get_duration_seconds(str(src))
         if duration > 0:
-            anchors = await asyncio.to_thread(
-                kill_anchors_for_video, str(src), duration
-            )
-            snap = snap_window_to_anchor(
-                start, end, anchors, duration_seconds=duration
-            )
+            anchors = await asyncio.to_thread(kill_anchors_for_video, str(src), duration)
+            snap = snap_window_to_anchor(start, end, anchors, duration_seconds=duration)
             start, end = snap.start_seconds, snap.end_seconds
             snapped = snap.snapped
             anchor_seconds = snap.anchor_seconds
@@ -184,10 +180,7 @@ async def trim_source_to_clip(body: TrimSourceBody):
     if body.name:
         stem = _sanitize_name(body.name)
     else:
-        stem = (
-            f"{_sanitize_name(src.stem)}_"
-            f"{int(start)}-{int(end)}s"
-        )
+        stem = f"{_sanitize_name(src.stem)}_{int(start)}-{int(end)}s"
     out_dir = settings.workspace_dir / "trims"
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{stem}.mp4"
@@ -404,11 +397,7 @@ async def caption_video_by_path(body: CaptionVideoBody):
         raise HTTPException(404, f"source not found: {src}")
 
     # Reuse the sanitizer from the trim endpoint.
-    stem = (
-        _sanitize_name(body.name)
-        if body.name
-        else f"{_sanitize_name(src.stem)}_captioned"
-    )
+    stem = _sanitize_name(body.name) if body.name else f"{_sanitize_name(src.stem)}_captioned"
     out_dir = settings.workspace_dir / "captions"
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{stem}.mp4"

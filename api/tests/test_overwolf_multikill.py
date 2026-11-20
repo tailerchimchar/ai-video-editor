@@ -23,18 +23,14 @@ def _kill(anchor: float, headshot: bool = False) -> dict:
 
 
 def test_two_kills_within_window_produce_multi_kill_2() -> None:
-    rows = _cluster_multikills(
-        [_kill(10.0), _kill(15.0)], duration_seconds=600.0
-    )
+    rows = _cluster_multikills([_kill(10.0), _kill(15.0)], duration_seconds=600.0)
     assert len(rows) == 1
     assert rows[0]["event_type"] == "multi_kill_2"
     assert rows[0]["metadata"]["cluster_size"] == 2
 
 
 def test_three_kills_within_window_produce_multi_kill_3() -> None:
-    rows = _cluster_multikills(
-        [_kill(10.0), _kill(15.0), _kill(20.0)], duration_seconds=600.0
-    )
+    rows = _cluster_multikills([_kill(10.0), _kill(15.0), _kill(20.0)], duration_seconds=600.0)
     assert len(rows) == 1
     assert rows[0]["event_type"] == "multi_kill_3"
 
@@ -89,16 +85,18 @@ def test_extending_cluster_uses_last_anchor_not_first() -> None:
 def test_start_end_wrap_the_cluster_with_lead_and_trail() -> None:
     """Cluster window extends beyond the first/last kill anchors."""
     rows = _cluster_multikills(
-        [_kill(20.0), _kill(28.0)], duration_seconds=600.0,
+        [_kill(20.0), _kill(28.0)],
+        duration_seconds=600.0,
     )
     # _MULTIKILL_LEAD_SECONDS = 6, _MULTIKILL_TRAIL_SECONDS = 4
     assert rows[0]["start_seconds"] == 14.0  # 20 - 6
-    assert rows[0]["end_seconds"] == 32.0    # 28 + 4
+    assert rows[0]["end_seconds"] == 32.0  # 28 + 4
 
 
 def test_cluster_start_never_goes_negative() -> None:
     rows = _cluster_multikills(
-        [_kill(2.0), _kill(4.0)], duration_seconds=600.0,
+        [_kill(2.0), _kill(4.0)],
+        duration_seconds=600.0,
     )
     assert rows[0]["start_seconds"] == 0.0
 
@@ -106,7 +104,8 @@ def test_cluster_start_never_goes_negative() -> None:
 def test_cluster_end_clamped_to_video_duration() -> None:
     """Last kill at t=599, trail=4s would push to 603 -- clamp to 600."""
     rows = _cluster_multikills(
-        [_kill(595.0), _kill(599.0)], duration_seconds=600.0,
+        [_kill(595.0), _kill(599.0)],
+        duration_seconds=600.0,
     )
     assert rows[0]["end_seconds"] == 600.0
 
@@ -126,7 +125,8 @@ def test_headshot_count_reported_in_metadata() -> None:
 
 def test_cluster_confidence_is_ground_truth() -> None:
     rows = _cluster_multikills(
-        [_kill(10.0), _kill(15.0)], duration_seconds=600.0,
+        [_kill(10.0), _kill(15.0)],
+        duration_seconds=600.0,
     )
     assert rows[0]["confidence"] == 1.0
 

@@ -128,10 +128,7 @@ def intervals_to_segments(
             continue
         segments.append(GameSegment(start=round(start, 2), end=round(end, 2), index=0))
     # Renumber after filtering so the indexes are contiguous.
-    return [
-        GameSegment(start=s.start, end=s.end, index=i + 1)
-        for i, s in enumerate(segments)
-    ]
+    return [GameSegment(start=s.start, end=s.end, index=i + 1) for i, s in enumerate(segments)]
 
 
 def detect_game_boundaries(
@@ -152,11 +149,14 @@ def detect_game_boundaries(
     cmd = [
         settings.ffmpeg_path,
         "-hide_banner",
-        "-i", video_path,
-        "-vf", f"blackdetect=d={min_black_seconds}:pix_th={pix_threshold}",
-        "-an",   # ignore audio for speed
-        "-sn",   # ignore subtitles
-        "-f", "null",
+        "-i",
+        video_path,
+        "-vf",
+        f"blackdetect=d={min_black_seconds}:pix_th={pix_threshold}",
+        "-an",  # ignore audio for speed
+        "-sn",  # ignore subtitles
+        "-f",
+        "null",
         "-",
     ]
     try:
@@ -193,11 +193,16 @@ def split_segment(
     cmd = [
         settings.ffmpeg_path,
         "-y",
-        "-ss", f"{start:.3f}",
-        "-i", source_path,
-        "-to", f"{end - start:.3f}",  # -to with -ss BEFORE -i means duration
-        "-c", "copy",
-        "-avoid_negative_ts", "make_zero",
+        "-ss",
+        f"{start:.3f}",
+        "-i",
+        source_path,
+        "-to",
+        f"{end - start:.3f}",  # -to with -ss BEFORE -i means duration
+        "-c",
+        "copy",
+        "-avoid_negative_ts",
+        "make_zero",
         out_path,
     ]
     try:

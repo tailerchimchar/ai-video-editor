@@ -67,9 +67,7 @@ def _make_session_folder(root: Path, name: str) -> Path:
     return d
 
 
-def test_scan_sessions_all_returns_every_parseable_folder(
-    tmp_path, monkeypatch
-) -> None:
+def test_scan_sessions_all_returns_every_parseable_folder(tmp_path, monkeypatch) -> None:
     from ai_video_editor.config import settings
 
     monkeypatch.setattr(settings, "workspace_dir", tmp_path)
@@ -79,9 +77,7 @@ def test_scan_sessions_all_returns_every_parseable_folder(
     _make_session_folder(root, "07-04-2026_15h15")
     _make_session_folder(root, "not-a-date")  # ignored
 
-    sessions = _scan_sessions(
-        "League of Legends", "all", today=date(2026, 7, 5)
-    )
+    sessions = _scan_sessions("League of Legends", "all", today=date(2026, 7, 5))
     assert len(sessions) == 3
     assert [s.date for s in sessions] == [
         date(2026, 7, 4),
@@ -99,16 +95,12 @@ def test_scan_sessions_week_filters_within_7_days(tmp_path, monkeypatch) -> None
     _make_session_folder(root, "06-29-2026_10h00")  # in (6 days out)
     _make_session_folder(root, "06-27-2026_10h00")  # out (8 days out)
 
-    sessions = _scan_sessions(
-        "League of Legends", "week", today=date(2026, 7, 5)
-    )
+    sessions = _scan_sessions("League of Legends", "week", today=date(2026, 7, 5))
     dates = {s.date for s in sessions}
     assert dates == {date(2026, 7, 4), date(2026, 6, 29)}
 
 
-def test_scan_sessions_day_includes_today_and_yesterday(
-    tmp_path, monkeypatch
-) -> None:
+def test_scan_sessions_day_includes_today_and_yesterday(tmp_path, monkeypatch) -> None:
     from ai_video_editor.config import settings
 
     monkeypatch.setattr(settings, "workspace_dir", tmp_path)
@@ -117,9 +109,7 @@ def test_scan_sessions_day_includes_today_and_yesterday(
     _make_session_folder(root, "07-04-2026_15h15")  # yesterday, in
     _make_session_folder(root, "07-03-2026_10h00")  # 2 days ago, out
 
-    sessions = _scan_sessions(
-        "League of Legends", "day", today=date(2026, 7, 5)
-    )
+    sessions = _scan_sessions("League of Legends", "day", today=date(2026, 7, 5))
     dates = {s.date for s in sessions}
     assert dates == {date(2026, 7, 5), date(2026, 7, 4)}
 
@@ -129,9 +119,7 @@ def test_scan_sessions_missing_root_returns_empty(tmp_path, monkeypatch) -> None
 
     monkeypatch.setattr(settings, "workspace_dir", tmp_path)
     # No highlights folder at all
-    sessions = _scan_sessions(
-        "League of Legends", "all", today=date(2026, 7, 5)
-    )
+    sessions = _scan_sessions("League of Legends", "all", today=date(2026, 7, 5))
     assert sessions == []
 
 
@@ -277,9 +265,7 @@ def _clip_entry(name: str, start: float, end: float, hype: float, event="kill"):
     }
 
 
-def test_preview_picks_3plus_from_recent_session(
-    tmp_path, monkeypatch
-) -> None:
+def test_preview_picks_3plus_from_recent_session(tmp_path, monkeypatch) -> None:
     """A 3-kill cluster in a recent session should be the top pick."""
     from ai_video_editor.config import settings
 
@@ -343,9 +329,7 @@ def test_preview_invalid_window_returns_error(tmp_path, monkeypatch) -> None:
     assert "unknown window" in result["error"]
 
 
-def test_gather_skips_sessions_without_multikills(
-    tmp_path, monkeypatch
-) -> None:
+def test_gather_skips_sessions_without_multikills(tmp_path, monkeypatch) -> None:
     """A session with only isolated single kills (no adjacency cluster)
     should contribute nothing to the montage."""
     from ai_video_editor.config import settings
@@ -360,8 +344,6 @@ def test_gather_skips_sessions_without_multikills(
             _clip_entry("k2.mp4", 500, 510, hype=0.9),
         ],
     )
-    sessions = _scan_sessions(
-        "League of Legends", "all", today=date(2026, 7, 5)
-    )
+    sessions = _scan_sessions("League of Legends", "all", today=date(2026, 7, 5))
     gathered = _gather_cross_asset_multikills(sessions)
     assert gathered == []

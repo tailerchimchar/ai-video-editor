@@ -20,10 +20,24 @@ def _make_dummy_mp4(path: Path, seconds: int = 5) -> None:
     """Generate a tiny synthetic mp4 via ffmpeg lavfi. Avoids checking
     a fixture into the repo."""
     cmd = [
-        settings.ffmpeg_path, "-y", "-hide_banner", "-loglevel", "error",
-        "-f", "lavfi", "-i", f"color=c=black:s=64x64:r=10:d={seconds}",
-        "-f", "lavfi", "-i", f"anullsrc=r=8000:cl=mono:d={seconds}",
-        "-shortest", "-c:v", "libx264", "-c:a", "aac",
+        settings.ffmpeg_path,
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        f"color=c=black:s=64x64:r=10:d={seconds}",
+        "-f",
+        "lavfi",
+        "-i",
+        f"anullsrc=r=8000:cl=mono:d={seconds}",
+        "-shortest",
+        "-c:v",
+        "libx264",
+        "-c:a",
+        "aac",
         str(path),
     ]
     subprocess.run(cmd, check=True, capture_output=True)

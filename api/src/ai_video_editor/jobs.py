@@ -9,8 +9,14 @@ from .notify import emit
 from .notify.models import Event
 
 _SCALAR_KEYS = (
-    "folder", "clips_written", "clips_total", "shorts_written", "shorts_total",
-    "dropped", "game", "champion",
+    "folder",
+    "clips_written",
+    "clips_total",
+    "shorts_written",
+    "shorts_total",
+    "dropped",
+    "game",
+    "champion",
 )
 _ITEM_KEYS = {
     "clips": ("file", "event", "start_seconds", "end_seconds", "vlm_verdict"),
@@ -48,8 +54,7 @@ async def finish_job(
     status = "failed" if error else "completed"
     with contextlib.suppress(Exception):
         await db.execute(
-            "UPDATE jobs SET status = ?, output_path = ?, error = ?, completed_at = ? "
-            "WHERE id = ?",
+            "UPDATE jobs SET status = ?, output_path = ?, error = ?, completed_at = ? WHERE id = ?",
             (status, output_path, error, datetime.now(timezone.utc).isoformat(), job_id),
         )
         await db.commit()

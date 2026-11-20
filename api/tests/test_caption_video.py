@@ -16,13 +16,28 @@ from ai_video_editor.main import app
 def _make_dummy_mp4(path: Path, seconds: int = 3) -> None:
     subprocess.run(
         [
-            settings.ffmpeg_path, "-y", "-hide_banner", "-loglevel", "error",
-            "-f", "lavfi", "-i", f"color=c=black:s=128x128:r=10:d={seconds}",
-            "-f", "lavfi", "-i", f"anullsrc=r=8000:cl=mono:d={seconds}",
-            "-shortest", "-c:v", "libx264", "-c:a", "aac",
+            settings.ffmpeg_path,
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            f"color=c=black:s=128x128:r=10:d={seconds}",
+            "-f",
+            "lavfi",
+            "-i",
+            f"anullsrc=r=8000:cl=mono:d={seconds}",
+            "-shortest",
+            "-c:v",
+            "libx264",
+            "-c:a",
+            "aac",
             str(path),
         ],
-        check=True, capture_output=True,
+        check=True,
+        capture_output=True,
     )
 
 

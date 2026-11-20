@@ -42,10 +42,10 @@ def test_groq_payload_parse_happy_path() -> None:
             {"start": 1.5, "end": 3.0, "text": "general kenobi"},
         ],
         "words": [
-            {"word": "hello",   "start": 0.0, "end": 0.7},
-            {"word": "there",   "start": 0.7, "end": 1.5},
+            {"word": "hello", "start": 0.0, "end": 0.7},
+            {"word": "there", "start": 0.7, "end": 1.5},
             {"word": "general", "start": 1.5, "end": 2.3},
-            {"word": "kenobi",  "start": 2.3, "end": 3.0},
+            {"word": "kenobi", "start": 2.3, "end": 3.0},
         ],
     }
     segments = _groq_payload_to_segments(payload)

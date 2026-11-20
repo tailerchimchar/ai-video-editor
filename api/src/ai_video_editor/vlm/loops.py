@@ -198,8 +198,7 @@ def validate_and_cut(
     return ClipLoopResult(
         ok=True,  # cap-reached still ships the clip; only false_positive drops it
         out_path=out_path,
-        final_verdict=last_verdict
-        or ClipVerdict(verdict="pass", why="cap_reached: no verdict"),
+        final_verdict=last_verdict or ClipVerdict(verdict="pass", why="cap_reached: no verdict"),
         iterations=max_iter,
         start_seconds=cur_start,
         end_seconds=cur_end,

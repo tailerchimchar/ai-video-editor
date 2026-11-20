@@ -66,9 +66,7 @@ def test_kill_on_beat_shifts_to_nearest_beat_within_tolerance() -> None:
         end_seconds=110.0,
         anchor_offset_seconds=0.9,
     )
-    snap = snap_clips_to_beats(
-        [clip], (0.0, 0.5, 1.0, 1.5), tolerance_seconds=0.5
-    )
+    snap = snap_clips_to_beats([clip], (0.0, 0.5, 1.0, 1.5), tolerance_seconds=0.5)
     assert snap.clips[0].beat_time_seconds == 1.0
     assert abs(snap.clips[0].shift_seconds - 0.1) < 1e-6
     # Shift is applied by moving start EARLIER (pre-roll before anchor)
@@ -84,9 +82,7 @@ def test_kill_on_beat_clamps_at_tolerance() -> None:
         end_seconds=110.0,
         anchor_offset_seconds=2.0,
     )
-    snap = snap_clips_to_beats(
-        [clip], (0.0, 5.0, 10.0), tolerance_seconds=0.5
-    )
+    snap = snap_clips_to_beats([clip], (0.0, 5.0, 10.0), tolerance_seconds=0.5)
     # Nearest beat to 2.0 is 0.0 (distance 2.0); tolerance clamps shift to 0.5
     assert abs(snap.clips[0].shift_seconds) == pytest.approx(0.5, abs=1e-6)
 

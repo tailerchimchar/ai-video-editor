@@ -62,24 +62,30 @@ _KDA_RE = re.compile(r"(\d{1,2})\s*[/|\\]+\s*(\d{1,2})\s*[/|\\]+\s*(\d{1,2})")
 
 def _ffmpeg_available() -> bool:
     try:
-        return subprocess.run(
-            [settings.ffmpeg_path, "-version"],
-            capture_output=True,
-            text=True,
-            timeout=3,
-        ).returncode == 0
+        return (
+            subprocess.run(
+                [settings.ffmpeg_path, "-version"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+            ).returncode
+            == 0
+        )
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         return False
 
 
 def _tesseract_available() -> bool:
     try:
-        return subprocess.run(
-            [settings.tesseract_path, "--version"],
-            capture_output=True,
-            text=True,
-            timeout=3,
-        ).returncode == 0
+        return (
+            subprocess.run(
+                [settings.tesseract_path, "--version"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+            ).returncode
+            == 0
+        )
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         return False
 
@@ -104,10 +110,14 @@ def _extract_frame(video_path: str, at_seconds: float, crop_expr: str, out_png: 
     cmd = [
         settings.ffmpeg_path,
         "-y",
-        "-ss", str(max(0.0, at_seconds)),
-        "-i", video_path,
-        "-vframes", "1",
-        "-vf", f"{crop_expr},scale=iw*4:ih*4",
+        "-ss",
+        str(max(0.0, at_seconds)),
+        "-i",
+        video_path,
+        "-vframes",
+        "1",
+        "-vf",
+        f"{crop_expr},scale=iw*4:ih*4",
         out_png,
     ]
     try:
@@ -122,8 +132,10 @@ def _ocr_kda(png_path: str) -> tuple[int, int, int] | None:
         settings.tesseract_path,
         png_path,
         "stdout",
-        "--psm", "7",  # single text line — matches the HUD strip
-        "-c", "tessedit_char_whitelist=0123456789/|\\ ",
+        "--psm",
+        "7",  # single text line — matches the HUD strip
+        "-c",
+        "tessedit_char_whitelist=0123456789/|\\ ",
     ]
     try:
         out = subprocess.run(cmd, capture_output=True, text=True, timeout=5)

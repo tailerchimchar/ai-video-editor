@@ -69,9 +69,7 @@ def test_render_markdown_success_shape() -> None:
 
 
 def test_render_markdown_error_shape() -> None:
-    result = WatchResult(
-        critique=None, panel_count=0, total_seconds=0, error="ffmpeg missing"
-    )
+    result = WatchResult(critique=None, panel_count=0, total_seconds=0, error="ffmpeg missing")
     md = render_critique_markdown(result)
     assert "ffmpeg missing" in md
 

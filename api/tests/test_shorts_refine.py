@@ -227,11 +227,18 @@ def test_refine_loop_exits_immediately_on_cohesive(tmp_path: Path) -> None:
         out.write_bytes(b"x")
         return True, None
 
-    with patch("ai_video_editor.shorts.render_short", side_effect=_mock_render), \
-         patch("ai_video_editor.shorts._run_vlm_review", return_value=_Review(is_cohesive=True)):
+    with (
+        patch("ai_video_editor.shorts.render_short", side_effect=_mock_render),
+        patch("ai_video_editor.shorts._run_vlm_review", return_value=_Review(is_cohesive=True)),
+    ):
         result = _render_and_refine(
-            plan, out, mode="montage", asset=asset,
-            music_path=None, run_vlm_check=True, max_iter=2,
+            plan,
+            out,
+            mode="montage",
+            asset=asset,
+            music_path=None,
+            run_vlm_check=True,
+            max_iter=2,
         )
 
     assert result.ok is True
@@ -262,12 +269,19 @@ def test_refine_loop_iterates_when_needs_review_with_window_fix(tmp_path: Path) 
             )
         return _Review(is_cohesive=True)
 
-    with patch("ai_video_editor.shorts.render_short", side_effect=_mock_render), \
-         patch("ai_video_editor.shorts._run_vlm_review", side_effect=_mock_review), \
-         patch("ai_video_editor.shorts.trim_clip", return_value=(True, None)):
+    with (
+        patch("ai_video_editor.shorts.render_short", side_effect=_mock_render),
+        patch("ai_video_editor.shorts._run_vlm_review", side_effect=_mock_review),
+        patch("ai_video_editor.shorts.trim_clip", return_value=(True, None)),
+    ):
         result = _render_and_refine(
-            plan, out, mode="montage", asset=asset,
-            music_path=None, run_vlm_check=True, max_iter=2,
+            plan,
+            out,
+            mode="montage",
+            asset=asset,
+            music_path=None,
+            run_vlm_check=True,
+            max_iter=2,
         )
 
     assert result.ok is True
@@ -293,12 +307,19 @@ def test_refine_loop_hits_iteration_cap(tmp_path: Path) -> None:
         out.write_bytes(b"x")
         return True, None
 
-    with patch("ai_video_editor.shorts.render_short", side_effect=_mock_render), \
-         patch("ai_video_editor.shorts._run_vlm_review", side_effect=_always_needs_review), \
-         patch("ai_video_editor.shorts.trim_clip", return_value=(True, None)):
+    with (
+        patch("ai_video_editor.shorts.render_short", side_effect=_mock_render),
+        patch("ai_video_editor.shorts._run_vlm_review", side_effect=_always_needs_review),
+        patch("ai_video_editor.shorts.trim_clip", return_value=(True, None)),
+    ):
         result = _render_and_refine(
-            plan, out, mode="montage", asset=asset,
-            music_path=None, run_vlm_check=True, max_iter=2,
+            plan,
+            out,
+            mode="montage",
+            asset=asset,
+            music_path=None,
+            run_vlm_check=True,
+            max_iter=2,
         )
 
     assert result.ok is True
@@ -316,17 +337,24 @@ def test_refine_loop_skips_when_only_non_window_fixes(tmp_path: Path) -> None:
         out.write_bytes(b"x")
         return True, None
 
-    with patch("ai_video_editor.shorts.render_short", side_effect=_mock_render), \
-         patch(
-             "ai_video_editor.shorts._run_vlm_review",
-             return_value=_Review(
-                 is_cohesive=False,
-                 fixes=[_Fix(fix="apply_zoom"), _Fix(fix="remove_clip")],
-             ),
-         ):
+    with (
+        patch("ai_video_editor.shorts.render_short", side_effect=_mock_render),
+        patch(
+            "ai_video_editor.shorts._run_vlm_review",
+            return_value=_Review(
+                is_cohesive=False,
+                fixes=[_Fix(fix="apply_zoom"), _Fix(fix="remove_clip")],
+            ),
+        ),
+    ):
         result = _render_and_refine(
-            plan, out, mode="montage", asset=asset,
-            music_path=None, run_vlm_check=True, max_iter=2,
+            plan,
+            out,
+            mode="montage",
+            asset=asset,
+            music_path=None,
+            run_vlm_check=True,
+            max_iter=2,
         )
 
     assert result.ok is True
@@ -350,17 +378,24 @@ def test_refine_loop_disabled_by_max_iter_zero(tmp_path: Path) -> None:
         out.write_bytes(b"x")
         return True, None
 
-    with patch("ai_video_editor.shorts.render_short", side_effect=_mock_render), \
-         patch(
-             "ai_video_editor.shorts._run_vlm_review",
-             return_value=_Review(
-                 is_cohesive=False,
-                 fixes=[_Fix(fix="extend_before", fix_seconds=2.0)],
-             ),
-         ):
+    with (
+        patch("ai_video_editor.shorts.render_short", side_effect=_mock_render),
+        patch(
+            "ai_video_editor.shorts._run_vlm_review",
+            return_value=_Review(
+                is_cohesive=False,
+                fixes=[_Fix(fix="extend_before", fix_seconds=2.0)],
+            ),
+        ),
+    ):
         result = _render_and_refine(
-            plan, out, mode="montage", asset=asset,
-            music_path=None, run_vlm_check=True, max_iter=0,
+            plan,
+            out,
+            mode="montage",
+            asset=asset,
+            music_path=None,
+            run_vlm_check=True,
+            max_iter=0,
         )
 
     assert render_calls["n"] == 1
@@ -376,11 +411,18 @@ def test_refine_loop_gracefully_degrades_when_vlm_unavailable(tmp_path: Path) ->
         out.write_bytes(b"x")
         return True, None
 
-    with patch("ai_video_editor.shorts.render_short", side_effect=_mock_render), \
-         patch("ai_video_editor.shorts._run_vlm_review", return_value=None):
+    with (
+        patch("ai_video_editor.shorts.render_short", side_effect=_mock_render),
+        patch("ai_video_editor.shorts._run_vlm_review", return_value=None),
+    ):
         result = _render_and_refine(
-            plan, out, mode="montage", asset=asset,
-            music_path=None, run_vlm_check=True, max_iter=2,
+            plan,
+            out,
+            mode="montage",
+            asset=asset,
+            music_path=None,
+            run_vlm_check=True,
+            max_iter=2,
         )
 
     assert result.ok is True
@@ -397,8 +439,13 @@ def test_refine_loop_render_failure_propagates(tmp_path: Path) -> None:
         return_value=(False, "ffmpeg fell over"),
     ):
         result = _render_and_refine(
-            plan, out, mode="montage", asset=asset,
-            music_path=None, run_vlm_check=True, max_iter=2,
+            plan,
+            out,
+            mode="montage",
+            asset=asset,
+            music_path=None,
+            run_vlm_check=True,
+            max_iter=2,
         )
 
     assert result.ok is False

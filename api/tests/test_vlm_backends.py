@@ -107,11 +107,7 @@ def test_strip_code_fence_removes_bare_fence() -> None:
 
 
 def test_run_with_retry_first_response_valid() -> None:
-    backend = _StubBackend(
-        [
-            '{"verdict": "pass", "why": "ok", "fix": null, "fix_seconds": null}'
-        ]
-    )
+    backend = _StubBackend(['{"verdict": "pass", "why": "ok", "fix": null, "fix_seconds": null}'])
     verdict = run_with_retry(
         backend,
         frames=[],
@@ -203,9 +199,7 @@ def test_run_with_retry_frames_and_prompts_forwarded() -> None:
         def call(self, *, frames, system_prompt: str, user_prompt: str) -> str:
             self.frames_seen = list(frames)
             self.system_seen = system_prompt
-            return super().call(
-                frames=frames, system_prompt=system_prompt, user_prompt=user_prompt
-            )
+            return super().call(frames=frames, system_prompt=system_prompt, user_prompt=user_prompt)
 
     cap = _Capture()
     run_with_retry(
