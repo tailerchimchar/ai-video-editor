@@ -455,14 +455,16 @@ def cascade_rank(
             rankings.append(result)
 
     _log.info(
-        "cascade_rank: %d candidates, %d jev-decided (%d kept, %d rejected), "
-        "%d escalated to Haiku, escalation_rate=%.2f, jev_latency=%.0fms, haiku_latency=%.0fms",
+        "cascade_rank: candidates=%d jev_decided=%d (kept=%d rejected=%d) "
+        "escalated_to_haiku=%d escalation_rate=%.2f haiku_calls_skipped=%d "
+        "jev_latency_ms=%.0f haiku_latency_ms=%.0f",
         stats.total_candidates,
         stats.jev_decided,
         stats.jev_kept,
         stats.jev_rejected,
         stats.escalated_to_haiku,
         stats.escalation_rate,
+        stats.haiku_calls_skipped,
         stats.jev_latency_ms,
         stats.haiku_latency_ms,
     )
