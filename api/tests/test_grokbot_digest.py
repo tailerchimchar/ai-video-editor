@@ -47,7 +47,7 @@ def test_digest_never_leaks_transcript(fixture_round):
     d = dg.build_digest(fixture_round, game="lol")
     line = "Zorblax kited the wave perfectly before the flip"
     d.clips[0].voice = line
-    assert line in dg.digest_leaks(d, transcript)
+    assert line.casefold() in dg.digest_leaks(d, transcript)
 
 
 def test_build_digest_never_opens_transcript(fixture_round, monkeypatch):
@@ -80,3 +80,19 @@ def test_annotate_with_jev_uses_ask_many(fixture_round):
     out = dg.annotate_with_jev(d, ask_many=fake)
     assert out.clips[0].panel["format"] == "funny"
     assert out.clips[0].panel["include_p"] == 0.9
+
+
+def test_digest_leaks_catches_fragment(fixture_round):
+    d = dg.build_digest(fixture_round, game="lol")
+    d.clips[0].voice = "he said: kited the wave perf, wow"  # 15-char fragment "kited the wave "
+    leaks = dg.digest_leaks(d, fixture_round / "transcript.json")
+    assert any("kited the wave perf" in x for x in leaks)
+
+
+def test_digest_leaks_catches_quoted_line(fixture_round):
+    line = 'she yelled "absolutely unreal" at the screen'
+    path = fixture_round / "transcript.json"
+    path.write_text(json.dumps([{"start_seconds": 1, "end_seconds": 2, "text": line}]))
+    d = dg.build_digest(fixture_round, game="lol")
+    d.clips[0].voice = line
+    assert line.casefold() in dg.digest_leaks(d, path)

@@ -31,6 +31,7 @@ class DigestClip(BaseModel):
     panel: dict[str, Any] = Field(default_factory=dict)
     critic: str | None = None
     voice: str = ""
+    # `copy` shadows BaseModel.copy deliberately: it is the bots' JSON contract.
     copy: dict | None = None
     drive: str | None = None
 
@@ -89,14 +90,43 @@ def build_digest(round_dir: Path, *, game: str) -> Digest:
     )
 
 
+def _norm(text: str) -> str:
+    return " ".join(text.casefold().split())
+
+
+def _strings(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [_norm(value)]
+    if isinstance(value, dict):
+        return [t for v in value.values() for t in _strings(v)]
+    if isinstance(value, list | tuple):
+        return [t for v in value for t in _strings(v)]
+    return []
+
+
 def digest_leaks(digest: Digest, transcript_path: Path, *, min_len: int = 12) -> list[str]:
-    """Transcript substrings (>= min_len chars) found verbatim in the digest."""
-    blob = digest.model_dump_json()
+    """Transcript fragments (>= min_len chars) found in any digest string.
+
+    Compares decoded, normalised (casefolded, whitespace-collapsed) text, so
+    quotes, backslashes and newlines cannot hide a match. Every
+    `min_len`-char window of each transcript line is checked; overlapping
+    matching windows are merged into one reported fragment.
+    """
+    haystacks = _strings(digest.model_dump())
     leaks: list[str] = []
     for line in json.loads(transcript_path.read_text(encoding="utf-8")):
-        text = line.get("text", "").strip()
-        if len(text) >= min_len and text in blob:
-            leaks.append(text)
+        text = _norm(line.get("text", ""))
+        span: list[int] | None = None
+        for i in range(len(text) - min_len + 1):
+            hit = any(text[i : i + min_len] in h for h in haystacks)
+            if hit and span and i <= span[1] - min_len + 1:
+                span[1] = i + min_len
+            elif hit:
+                if span:
+                    leaks.append(text[span[0] : span[1]])
+                span = [i, i + min_len]
+        if span:
+            leaks.append(text[span[0] : span[1]])
     return leaks
 
 
