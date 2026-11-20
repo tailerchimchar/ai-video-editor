@@ -77,6 +77,8 @@ class Settings(BaseSettings):
     grokbot_runner_poll_seconds: int = 60
     grokbot_heartbeat_seconds: int = 300
     grokbot_queue_depth_cap: int = 10
+    grokbot_execute_plans: bool = False
+    grokbot_record_verdicts: bool = False
 
     # Riot API candidate source (League). Free dev key from
     # developer.riotgames.com. Source stays inert until all three are set.

@@ -41,6 +41,8 @@ class Digest(BaseModel):
     round: str
     clips: list[DigestClip]
     built_at: str
+    compilation_id: str | None = None
+    compilation_version: str | None = None
 
 
 def _load(path: Path) -> Any:

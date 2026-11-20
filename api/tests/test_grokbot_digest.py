@@ -96,3 +96,14 @@ def test_digest_leaks_catches_quoted_line(fixture_round):
     d = dg.build_digest(fixture_round, game="lol")
     d.clips[0].voice = line
     assert line.casefold() in dg.digest_leaks(d, path)
+
+
+def test_digest_carries_optional_compilation_fields():
+    from ai_video_editor.grokbot.digest import Digest
+
+    d = Digest(game="g", round="r", clips=[], built_at="t")
+    assert d.compilation_id is None and d.compilation_version is None
+    d2 = Digest(
+        game="g", round="r", clips=[], built_at="t", compilation_id="c", compilation_version="2"
+    )
+    assert (d2.compilation_id, d2.compilation_version) == ("c", "2")

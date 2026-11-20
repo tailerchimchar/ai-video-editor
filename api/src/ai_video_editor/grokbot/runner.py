@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sys
 import time
 import urllib.parse
 from collections.abc import Callable
+from datetime import datetime, timezone
 from importlib import metadata
 from pathlib import Path
 from typing import Protocol
@@ -17,7 +19,9 @@ from pydantic import BaseModel
 
 from .. import editing, notify
 from ..config import settings
+from ..edit_plan import EditPlan, plan_hash
 from ..notify import Event
+from ..vlm.watch_montage import watch_montage
 from .drive import Uploader, uploader_from_settings
 from .git_queue import GitQueueRepo, QueueRepo
 from .queue import (
@@ -43,9 +47,24 @@ def _version() -> str:
         return "dev"
 
 
+class ApiError(Exception):
+    """A 4xx answer from the API; `detail` is its parsed body."""
+
+    def __init__(self, status: int, detail):
+        super().__init__(f"{status}: {detail}")
+        self.status = status
+        self.detail = detail
+
+
 class ApiClient(Protocol):
     def asset_path(self, asset_id: str) -> tuple[str, float]: ...
     def compilation_output(self, compilation_id: str) -> str | None: ...
+    def plan_version(self, compilation_id: str) -> str: ...
+    def plan_hash(self, compilation_id: str) -> str | None: ...
+    def plan_complete(self, compilation_id: str) -> bool: ...
+    def apply_plan(self, compilation_id: str, plan: dict) -> dict: ...
+    def record_correction(self, body: dict) -> None: ...
+    def recent_corrections(self, game: str) -> list[dict]: ...
 
 
 class HttpApiClient:
@@ -66,11 +85,58 @@ class HttpApiClient:
 
     def compilation_output(self, compilation_id: str) -> str | None:
         r = self._client.get(
-            f"{self._base}/api/v1/compilations/{urllib.parse.quote(compilation_id, safe='')}"
+            f"{self._base}/api/v1/edit/compile/{urllib.parse.quote(compilation_id, safe='')}"
         )
         if not r.is_success:
             return None
         return r.json().get("output_path")
+
+    def _comp_url(self, compilation_id: str) -> str:
+        return f"{self._base}/api/v1/compilations/{urllib.parse.quote(compilation_id, safe='')}"
+
+    def _plan_state(self, compilation_id: str) -> dict:
+        r = self._client.get(f"{self._comp_url(compilation_id)}/plan/version")
+        self._check(r)
+        return r.json()
+
+    def plan_version(self, compilation_id: str) -> str:
+        return str(self._plan_state(compilation_id)["version"])
+
+    def plan_hash(self, compilation_id: str) -> str | None:
+        return self._plan_state(compilation_id).get("plan_hash")
+
+    def plan_complete(self, compilation_id: str) -> bool:
+        return bool(self._plan_state(compilation_id).get("plan_complete"))
+
+    def apply_plan(self, compilation_id: str, plan: dict) -> dict:
+        # Rendering can take minutes; the default 30s timeout is far too short.
+        r = self._client.post(f"{self._comp_url(compilation_id)}/plan", json=plan, timeout=900.0)
+        self._check(r)
+        return r.json()
+
+    def record_correction(self, body: dict) -> None:
+        r = self._client.post(f"{self._base}/api/v1/mentor/record_correction", json=body)
+        self._check(r)
+
+    def recent_corrections(self, game: str) -> list[dict]:
+        r = self._client.get(
+            f"{self._base}/api/v1/mentor/recent_corrections",
+            params={"game": game, "limit": 100},
+        )
+        self._check(r)
+        return r.json().get("corrections", [])
+
+    @staticmethod
+    def _check(r: httpx.Response) -> None:
+        """4xx is permanent (ApiError); 5xx raises HTTPStatusError (transient)."""
+        if 400 <= r.status_code < 500:
+            try:
+                body = r.json()
+                detail = body.get("detail", body) if isinstance(body, dict) else body
+            except ValueError:
+                detail = r.text
+            raise ApiError(r.status_code, detail)
+        r.raise_for_status()
 
 
 class RunnerState(BaseModel):
@@ -89,6 +155,14 @@ def _inside(path: str, *roots: Path) -> bool:
     return any(p.is_relative_to(Path(r).resolve()) for r in roots)
 
 
+_PATH_RE = re.compile(r"[A-Za-z]:[\\/][^\"'\r\n]+|/[^\"'\r\n]+")
+
+
+def _safe_detail(detail, limit: int = 500) -> str:
+    """API detail for a rejection reason: no absolute paths, bounded length."""
+    return _PATH_RE.sub("<path>", str(detail))[:limit]
+
+
 _DEFERRED = (EditPlanItem, VerdictItem, DeployItem)
 
 
@@ -102,6 +176,7 @@ class Runner:
         ledger: AppliedLedger,
         emit: Callable[[Event], None] = notify.emit,
         trim=editing.trim_clip,
+        watch=watch_montage,
         previews_dir: Path,
         clock: Callable[[], float] = time.monotonic,
     ):
@@ -111,12 +186,14 @@ class Runner:
         self.ledger = ledger
         self._emit = emit
         self._trim = trim
+        self._watch = watch
         self.previews_dir = Path(previews_dir)
         self._clock = clock
         self.state = RunnerState()
         self._heartbeat_sent = False
         self._wrote = False
         self._outcomes: list[str] = []
+        self._prior: dict[str, str] = {}
 
     # -- emitting ------------------------------------------------------
     def _send(self, event: str, payload: dict) -> None:
@@ -134,10 +211,30 @@ class Runner:
         self.ledger.mark(id, kind, outcome)
         self._outcomes.append(outcome)
 
-    def _reject(self, filename: str, id: str, kind: str, reason: str) -> None:
-        self._write(f"rejected/{filename}", json.dumps({"id": id, "reason": reason}))
-        self._send("queue.rejected", {"id": id, "reason": reason})
+    def _reject(self, filename: str, id: str, kind: str, reason: str, **extra) -> None:
+        self._write(f"rejected/{filename}", json.dumps({"id": id, "reason": reason, **extra}))
+        self._send("queue.rejected", {"id": id, "reason": reason, **extra})
         self._mark(id, kind, "rejected")
+
+    def _flag_on(self, item) -> bool:
+        if isinstance(item, EditPlanItem):
+            return bool(settings.grokbot_execute_plans)
+        if isinstance(item, VerdictItem):
+            return bool(settings.grokbot_record_verdicts)
+        return False
+
+    def _done(self, id: str, outcomes: dict[str, str], item=None) -> bool:
+        """Seen and final. A "deferred" item is not final once its flag is on."""
+        outcome = outcomes.get(id)
+        if outcome is None:
+            return False
+        if outcome == "applying":
+            return False
+        if outcome != "deferred":
+            return True
+        if item is None:  # kind unknown yet: let it through if any flag is on
+            return not (settings.grokbot_execute_plans or settings.grokbot_record_verdicts)
+        return not self._flag_on(item)
 
     # -- tick ----------------------------------------------------------
     def tick(self) -> list[str]:
@@ -147,16 +244,18 @@ class Runner:
         self.state.sleeping = parse_sleep_flag(self.repo.root)
 
         control, normal, pending = [], [], 0
+        outcomes = self.ledger.outcomes()
+        self._prior = outcomes
         for path, text in self.repo.list_items():
             filename = Path(path).name
-            if self.ledger.seen(Path(path).stem):
+            if self._done(Path(path).stem, outcomes):
                 continue
             try:
                 item = parse_item(text)
             except QueueRejected as e:
                 self._reject(filename, Path(path).stem, "?", e.reason)
                 continue
-            if self.ledger.seen(item.id):
+            if self._done(item.id, outcomes, item):
                 continue
             pending += 1
             is_control = isinstance(item, (SleepItem, WakeItem))
@@ -211,8 +310,141 @@ class Runner:
     def _handle(self, filename: str, item) -> None:
         if isinstance(item, PreviewRequestItem):
             self._preview(filename, item)
+        elif isinstance(item, EditPlanItem) and settings.grokbot_execute_plans:
+            self._edit_plan(filename, item)
+        elif isinstance(item, VerdictItem) and settings.grokbot_record_verdicts:
+            self._verdict(filename, item)
         elif isinstance(item, _DEFERRED):
             self._defer(item)
+
+    def _upload(self, path: Path, name: str, subfolder: str) -> str | None:
+        if self.uploader is None:
+            return None
+        try:
+            return self.uploader.upload(path, name=name, subfolder=subfolder)
+        except Exception as e:
+            logger.warning("upload of %s failed: %s", name, e)
+            return None
+
+    def _edit_plan(self, filename: str, item: EditPlanItem) -> None:
+        try:
+            self._run_plan(filename, item)
+        except ApiError as e:
+            self._reject(filename, item.id, item.kind, f"api {e.status}: {_safe_detail(e.detail)}")
+        except httpx.HTTPError as e:  # transient: leave unmarked, retry next tick
+            logger.warning("plan %s hit a transient API error: %s", item.id, e)
+
+    def _run_plan(self, filename: str, item: EditPlanItem) -> None:
+        current = self.api.plan_version(item.compilation_id)
+        resumed = False
+        if current != item.base_version:
+            # A timed-out POST may have been applied server-side: the plan endpoint is
+            # idempotent by plan hash, so the same hash means "already applied".
+            plan_dict = item.plan.model_dump(mode="json")
+            if self.api.plan_hash(item.compilation_id) != plan_hash(
+                EditPlan.model_validate(plan_dict)
+            ):
+                self._reject(
+                    filename,
+                    item.id,
+                    item.kind,
+                    f"base_version {item.base_version} != current {current}",
+                    current=current,
+                )
+                return
+            # The hash is saved before any step runs, so only a complete run counts as
+            # applied; a partial one is re-POSTed and the executor resumes from its snapshot.
+            if self.api.plan_complete(item.compilation_id):
+                resumed = True
+            else:
+                self.api.apply_plan(item.compilation_id, plan_dict)
+        else:
+            self.api.apply_plan(item.compilation_id, item.plan.model_dump(mode="json"))
+        output = self.api.compilation_output(item.compilation_id)
+        if not output or not Path(output).is_file():
+            self._reject(filename, item.id, item.kind, "plan applied but no rendered output found")
+            return
+        result = self._watch(output)
+        c = result.critique
+        mp4 = self._upload(Path(output), f"{item.id}.mp4", "renders")
+        crit = None
+        if c is not None:
+            critique_path = Path(output).parent / "critique.json"
+            critique_path.write_text(c.model_dump_json(indent=2), encoding="utf-8")
+            crit = self._upload(critique_path, f"{item.id}-critique.json", "digests")
+        payload = {
+            "plan_id": item.id,
+            "drive": {"mp4": mp4, "critique": crit},
+            "critic": (
+                {
+                    "verdict": c.overall_verdict,
+                    "opener": c.opener_strength,
+                    "climax": c.climax_strength,
+                    "pacing": c.pacing,
+                }
+                if c is not None
+                else None
+            ),
+            "copy": item.copy.model_dump(mode="json") if item.copy else None,
+        }
+        if resumed:
+            payload["resumed"] = True
+        if c is None:
+            payload["critic_error"] = _safe_detail(result.error or "critic returned nothing")
+        self._send("render.done", payload)
+        # The plan is applied; a resend would be stale, so never leave it unmarked.
+        self._mark(item.id, item.kind, "applied")
+
+    def _log_decision(self, item: VerdictItem, reason: str) -> None:
+        self.previews_dir.parent.mkdir(parents=True, exist_ok=True)
+        line = {
+            "id": item.id,
+            "game": item.game,
+            "clip_ref": item.clip_ref,
+            "verdict": item.verdict,
+            "rule": item.rule,
+            "reason": reason,
+            "logged_at": datetime.now(timezone.utc).isoformat(),
+        }
+        with (self.previews_dir.parent / "decisions.log").open("a", encoding="utf-8") as f:
+            f.write(json.dumps(line) + "\n")
+        self._mark(item.id, item.kind, "logged")
+
+    def _verdict(self, filename: str, item: VerdictItem) -> None:
+        # Only a verdict that quotes Noodlz may reach the mentor corrections.
+        if not item.has_quote:
+            self._log_decision(item, "no quote")
+            return
+        if len(item.quote.strip()) < 3 or len(item.rule.strip()) < 3:
+            self._log_decision(item, "quote or rule shorter than 3 characters")
+            return
+        source = f"grokbot:{item.id}"
+        try:
+            if self._prior.get(item.id) == "applying":
+                # A crash or 5xx may have left the post half-done: check before re-posting.
+                recorded = self.api.recent_corrections(item.game)
+                if any(c.get("source_context") == source for c in recorded):
+                    self._mark(item.id, item.kind, "applied")
+                    return
+            self.ledger.mark(item.id, item.kind, "applying")
+            self.api.record_correction(
+                {
+                    "game": item.game,
+                    "feedback": item.quote,
+                    "rule": item.rule,
+                    "clip_ref": item.clip_ref,
+                    "source_context": source,
+                    "tags": ["grokbot"],
+                    "verdict": item.verdict,
+                }
+            )
+        except ApiError as e:
+            self._reject(filename, item.id, item.kind, f"api {e.status}: {_safe_detail(e.detail)}")
+            return
+        except httpx.HTTPError as e:  # transient: stays "applying", re-checked next tick
+            logger.warning("verdict %s hit a transient API error: %s", item.id, e)
+            return
+        self._mark(item.id, item.kind, "applied")
 
     def _defer(self, item) -> None:
         self._mark(item.id, item.kind, "deferred")
