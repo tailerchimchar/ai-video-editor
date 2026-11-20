@@ -1,6 +1,11 @@
 # Player names to block from digests (one per line, case-insensitive).
 # Copy this to player-names.txt and add your real names. That file is gitignored.
 #
+# IMPORTANT: If this file is configured via GROKBOT_PLAYER_NAMES_PATH or
+# --player-names but is missing or unreadable, publishing is BLOCKED (fail closed).
+# A round.publish_failed event is emitted with reason "names_file_missing" or
+# "names_file_unreadable". No uploads are attempted.
+#
 # These names are checked against all digest text fields (voice, copy, panel).
 # A match blocks publishing before any upload, like the transcript leak check.
 #

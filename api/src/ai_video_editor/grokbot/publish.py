@@ -38,25 +38,28 @@ logger = logging.getLogger(__name__)
 CLIP_PADDING_SECONDS = 10.0
 
 
-def _load_player_names(path: Path | None) -> set[str]:
+def _load_player_names(path: Path | None) -> tuple[set[str], str | None]:
     """Load player names from a local file (one name per line).
 
-    Returns an empty set if the path is None, the file is missing, or unreadable.
-    This is fail-safe: a missing file is a warning, not a block.
+    Returns (names, error_reason). When path is None, returns (empty set, None)
+    meaning no check is configured. When path is set but the file is missing or
+    unreadable, returns (empty set, reason) to block publishing (fail closed).
     """
     if path is None:
-        return set()
+        return set(), None
     if not path.is_file():
-        logger.warning("publish: player names file %s not found, skipping name check", path)
-        return set()
+        logger.error(
+            "publish: player names file %s not found, blocking publish (fail closed)", path
+        )
+        return set(), "names_file_missing"
     try:
         text = path.read_text(encoding="utf-8")
         names = {line.strip().casefold() for line in text.splitlines() if line.strip()}
         logger.info("publish: loaded %d player names from %s", len(names), path)
-        return names
+        return names, None
     except OSError as e:
-        logger.warning("publish: could not read player names file %s: %s", path, e)
-        return set()
+        logger.error("publish: could not read player names file %s: %s", path, e)
+        return set(), "names_file_unreadable"
 
 
 def _digest_contains_player_name(digest: Digest, names: set[str]) -> list[str]:
@@ -105,6 +108,15 @@ class PublishUploadError(RuntimeError):
         if digest_failed:
             parts.append("digest upload failed")
         super().__init__(f"round {round_name}: {'; '.join(parts)}")
+
+
+class PlayerNamesFileError(RuntimeError):
+    """The player names file is missing or unreadable; publishing blocked."""
+
+    def __init__(self, path: Path, reason: str):
+        self.path = path
+        self.reason = reason
+        super().__init__(f"player names file {path}: {reason}")
 
 
 def _default_ask_many() -> Callable | None:
@@ -179,14 +191,39 @@ def publish_round(
 
     `player_names_path`: optional path to a local file with player names (one per
     line). If set and the digest contains any name, publishing is blocked like
-    the transcript leak check. Missing file = warning, not error (fail safe).
+    the transcript leak check. If the file is missing or unreadable, publishing
+    is blocked (fail closed) and round.publish_failed is emitted.
 
     Raises:
         DigestLeakError: If transcript text appears in the digest.
         PlayerNameLeakError: If a player name appears in the digest.
+        PlayerNamesFileError: If the player names file is configured but missing/unreadable.
         PublishUploadError: If an upload fails when an uploader is configured.
     """
     round_dir = Path(round_dir)
+
+    # Privacy gate 2 (early): player names file must be readable if configured
+    # This runs before digest build so no work is wasted on a missing file
+    if player_names_path is not None:
+        player_names, file_error = _load_player_names(player_names_path)
+        if file_error is not None:
+            failure_payload = {
+                "round": round_dir.name,
+                "step": "names_file",
+                "reason": file_error,
+                "failed_clips": [],
+                "digest_failed": False,
+            }
+            logger.error(
+                "publish: round %s blocked - player names file error: %s",
+                round_dir.name,
+                file_error,
+            )
+            emit(Event(event="round.publish_failed", payload=failure_payload))
+            raise PlayerNamesFileError(player_names_path, file_error)
+    else:
+        player_names = set()
+
     digest: Digest = build_digest(round_dir, game=game)
     digest.compilation_id = compilation_id
     digest.asset_id = asset_id
@@ -207,8 +244,7 @@ def publish_round(
         if leaks:
             raise DigestLeakError(f"digest leaks {len(leaks)} transcript fragment(s)")
 
-    # Privacy gate 2: player names (fail safe if file missing)
-    player_names = _load_player_names(player_names_path)
+    # Privacy gate 2 (content): check digest against loaded names
     name_matches = _digest_contains_player_name(digest, player_names)
     if name_matches:
         raise PlayerNameLeakError(
@@ -324,6 +360,10 @@ def main(argv: list[str] | None = None) -> None:
     except PublishUploadError as e:
         print(f"upload failed: {e}", file=sys.stderr)
         sys.exit(4)
+    except PlayerNamesFileError as e:
+        print(f"names file error: {e}", file=sys.stderr)
+        _flush_webhook()  # flush the round.publish_failed event
+        sys.exit(5)
     _flush_webhook()
     print(json.dumps(result, indent=2))
 
