@@ -13,19 +13,28 @@ negative also disables the gate. When enabled:
 7. Only confident fails trigger a revision request (max 2 retries/criterion)
 8. Errors/timeouts skip the gate and proceed to owner approval
 
+Experiment (off by default): `GROKBOT_QUALITY_GATE_JEV_FRAMES_ENABLED` sends the
+sampled frames to Jev directly (skips Haiku description). Shadow mode runs both
+paths and keeps the Haiku verdict. Image errors fall back to the Haiku path.
+
 Design: pure core (scoring logic) separated from I/O (VLM client, Jev).
 Dependency injection for testability: tests use fakes, no real model calls.
+
+Privacy: in-game names in frames are allowed. Never quote other players' chat
+or voice; this path carries no transcripts.
 """
 
 from __future__ import annotations
 
+import base64
 import logging
 import re
 import time
+import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from pydantic import BaseModel
 
@@ -33,9 +42,14 @@ from ..config import settings
 from ..edit_plan import QualityCriterion
 
 if TYPE_CHECKING:
+    from ..decisions.backends.jev import JevTransport
     from ..vlm.backends.base import VLMBackend
 
 _log = logging.getLogger(__name__)
+
+# TypeSafe Jev image limits (inclusive). Docs: https://docs.typesafe.ai/images
+_JEV_MIN_SIDE = 280
+_JEV_MAX_SIDE = 1568
 
 
 class Verdict(str, Enum):
@@ -522,6 +536,374 @@ def _sample_frames(
     )
 
 
+def prepare_jev_frame(src: Path, dest: Path) -> Path:
+    """Resize/pad a frame into TypeSafe's 280-1568 px per-side window.
+
+    Uses Pillow (already used by the VLM montage path). No new dependency.
+    """
+    from PIL import Image
+
+    with Image.open(src) as original:
+        img = original.convert("RGB")
+        # Shrink longest side into the max box (thumbnail never upscales).
+        img.thumbnail((_JEV_MAX_SIDE, _JEV_MAX_SIDE), Image.Resampling.LANCZOS)
+        w, h = img.size
+        if w < _JEV_MIN_SIDE or h < _JEV_MIN_SIDE:
+            scale = max(_JEV_MIN_SIDE / max(w, 1), _JEV_MIN_SIDE / max(h, 1))
+            new_w = max(_JEV_MIN_SIDE, min(_JEV_MAX_SIDE, round(w * scale)))
+            new_h = max(_JEV_MIN_SIDE, min(_JEV_MAX_SIDE, round(h * scale)))
+            if max(new_w, new_h) > _JEV_MAX_SIDE or min(w * scale, h * scale) < _JEV_MIN_SIDE:
+                # Letterbox onto a min-side canvas when aspect can't satisfy both.
+                canvas_w = max(w, _JEV_MIN_SIDE)
+                canvas_h = max(h, _JEV_MIN_SIDE)
+                canvas_w = min(canvas_w, _JEV_MAX_SIDE)
+                canvas_h = min(canvas_h, _JEV_MAX_SIDE)
+                canvas = Image.new("RGB", (canvas_w, canvas_h), color=(0, 0, 0))
+                canvas.paste(img, ((canvas_w - w) // 2, (canvas_h - h) // 2))
+                img = canvas
+            else:
+                img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        img.save(dest, format="JPEG", quality=90, optimize=True)
+    return dest
+
+
+def prepare_jev_frames(frames: list[Path], scratch_dir: Path) -> list[Path]:
+    """Prepare up to 6 frames for a Jev image request."""
+    out_dir = scratch_dir / "jev_frames"
+    prepared: list[Path] = []
+    for i, frame in enumerate(frames[: settings.grokbot_quality_gate_max_frames]):
+        dest = out_dir / f"jev_frame_{i:03d}.jpg"
+        try:
+            prepared.append(prepare_jev_frame(frame, dest))
+        except Exception as exc:
+            _log.warning("quality_gate: prepare_jev_frame failed for %s: %s", frame, exc)
+            raise
+    return prepared
+
+
+def _frame_assets(frames: list[Path]) -> tuple[dict[str, dict], list[dict]]:
+    """Build TypeSafe assets map + state frame entries with UUID references."""
+    assets: dict[str, dict] = {}
+    frame_entries: list[dict] = []
+    for i, path in enumerate(frames):
+        ref = f"{uuid.uuid4()}-f{i}"
+        data = base64.b64encode(path.read_bytes()).decode("ascii")
+        fmt = "png" if path.suffix.lower() == ".png" else "jpg"
+        assets[ref] = {"type": "image", "format": fmt, "data_base64": data}
+        frame_entries.append({"index": i, "frame": ref})
+    return assets, frame_entries
+
+
+def _clip_json(metadata: RenderMetadata) -> dict[str, Any]:
+    """Clip JSON for Jev state. No transcripts; captions are plan paraphrases."""
+    return {
+        "duration_seconds": metadata.duration_seconds,
+        "aspect_ratio": metadata.aspect_ratio,
+        "digest_moment_labels": list(metadata.digest_moment_labels),
+        "captions": list(metadata.captions),
+        "game": metadata.game,
+        "clip_windows": list(metadata.clip_windows),
+    }
+
+
+def _answer_to_criterion_result(
+    criterion: QualityCriterion,
+    *,
+    value: bool | None,
+    probability: float,
+    backend: str,
+) -> CriterionResult:
+    """Map a bool answer onto pass/fail/unsure with the gate threshold."""
+    if backend == "rules":
+        return CriterionResult(
+            criterion_id=criterion.id,
+            verdict=Verdict.UNSURE,
+            confidence=0.0,
+            reason="rules fallback: Jev unavailable",
+        )
+    if value is True:
+        verdict = Verdict.PASS
+    elif value is False:
+        threshold = settings.grokbot_quality_gate_confidence_threshold
+        verdict = Verdict.FAIL if probability >= threshold else Verdict.UNSURE
+    else:
+        verdict = Verdict.UNSURE
+
+    # Audio-led criteria are never failed on frames alone.
+    if criterion.audio_led and verdict == Verdict.FAIL:
+        return CriterionResult(
+            criterion_id=criterion.id,
+            verdict=Verdict.UNSURE,
+            confidence=probability,
+            reason="audio-led: frames alone cannot fail; routed as unsure",
+        )
+
+    return CriterionResult(
+        criterion_id=criterion.id,
+        verdict=verdict,
+        confidence=probability,
+        reason=f"Jev ({backend}): p={probability:.2f}",
+    )
+
+
+def _maybe_cost_log(event: str, payload: dict[str, Any]) -> None:
+    """Write to cost_log when that module exists on the branch."""
+    try:
+        from .. import cost_log as cost_log_mod
+    except ImportError:
+        return
+    writer = getattr(cost_log_mod, "log_event", None) or getattr(cost_log_mod, "record", None)
+    if callable(writer):
+        try:
+            writer(event, payload)
+        except Exception as exc:
+            _log.debug("quality_gate cost_log write failed: %s", exc)
+
+
+@dataclass
+class FramesScoreBundle:
+    """Results + observability from a frames-to-Jev scoring pass."""
+
+    results: list[CriterionResult]
+    latency_ms: int = 0
+    input_tokens: int | None = None
+    error: str | None = None
+
+
+class FramesJevScorer:
+    """Score criteria by sending prepared frames + clip JSON to Jev in one request.
+
+    Skips the Haiku vision description. Uses HttpTransport assets + Danger-Zone
+    header. Audio-led fails are forced to UNSURE. Errors surface as UNSURE.
+    """
+
+    def __init__(self, transport: JevTransport | None = None) -> None:
+        self._transport = transport
+
+    def _get_transport(self) -> JevTransport:
+        if self._transport is not None:
+            return self._transport
+        from ..decisions.backends.jev import default_transport
+
+        transport = default_transport()
+        if transport is None:
+            raise RuntimeError("Jev is not configured: set TYPESAFE_API_KEY")
+        return transport
+
+    def score_all(
+        self,
+        criteria: list[QualityCriterion],
+        frames: list[Path],
+        metadata: RenderMetadata,
+        *,
+        already_passed: set[str] | None = None,
+    ) -> FramesScoreBundle:
+        from ..decisions.backends.jev import from_jev_answer, to_jev_question
+        from ..decisions.models import BoolQuestion
+
+        already_passed = already_passed or set()
+        results: list[CriterionResult | None] = [None] * len(criteria)
+        to_ask: list[tuple[int, QualityCriterion]] = []
+
+        for i, criterion in enumerate(criteria):
+            if criterion.id in already_passed:
+                results[i] = CriterionResult(
+                    criterion_id=criterion.id,
+                    verdict=Verdict.PASS,
+                    confidence=1.0,
+                    reason="previously passed",
+                )
+            else:
+                to_ask.append((i, criterion))
+
+        if not to_ask:
+            return FramesScoreBundle(results=[r for r in results if r is not None])
+
+        prepared_error: str | None = None
+        try:
+            # Caller may pass already-prepared paths; re-prepare is idempotent enough
+            # when files are JPEGs in range, but we always go through prepare for safety.
+            scratch = frames[0].parent if frames else Path(".")
+            prepared = prepare_jev_frames(frames, scratch)
+            assets, frame_entries = _frame_assets(prepared)
+            state = {
+                "clip": _clip_json(metadata),
+                "frames": frame_entries,
+            }
+            questions: dict[str, dict] = {}
+            question_objs: dict[str, BoolQuestion] = {}
+            for qi, (_idx, criterion) in enumerate(to_ask):
+                key = f"q{qi}"
+                if criterion.audio_led:
+                    prompt = (
+                        f"Using only `clip` metadata (digest_moment_labels, captions, "
+                        f"duration) — ignore `frames` — does this video meet: "
+                        f"'{criterion.text}'?"
+                    )
+                else:
+                    prompt = (
+                        f"Looking at `frames` and `clip`, does this video meet the "
+                        f"criterion: '{criterion.text}'?"
+                    )
+                question_objs[key] = BoolQuestion(prompt=prompt)
+                questions[key] = to_jev_question(question_objs[key])
+        except Exception as exc:
+            prepared_error = f"image prepare error: {exc}"
+            _log.warning("quality_gate frames: %s", prepared_error)
+            for idx, criterion in to_ask:
+                results[idx] = CriterionResult(
+                    criterion_id=criterion.id,
+                    verdict=Verdict.UNSURE,
+                    confidence=0.0,
+                    reason=prepared_error,
+                )
+            return FramesScoreBundle(
+                results=[r for r in results if r is not None],
+                error=prepared_error,
+            )
+
+        transport = self._get_transport()
+        start = time.perf_counter()
+        try:
+            from ..anthropic_surface import SpendCapError, reserve_call
+
+            try:
+                reserve_call("jev", settings.typesafe_max_calls, "TYPESAFE_MAX_CALLS")
+            except SpendCapError as exc:
+                raise RuntimeError(str(exc)) from exc
+
+            raw_answers = transport.ask(state, questions, assets=assets)
+            latency_ms = int((time.perf_counter() - start) * 1000)
+            usage = getattr(transport, "last_usage", None) or {}
+            input_tokens = usage.get("input_tokens") if isinstance(usage, dict) else None
+
+            for key, (idx, criterion) in zip(questions, to_ask, strict=True):
+                if key not in raw_answers:
+                    results[idx] = CriterionResult(
+                        criterion_id=criterion.id,
+                        verdict=Verdict.UNSURE,
+                        confidence=0.0,
+                        reason=f"jev reply missing {key!r}",
+                    )
+                    continue
+                answer = from_jev_answer(question_objs[key], raw_answers[key])
+                results[idx] = _answer_to_criterion_result(
+                    criterion,
+                    value=answer.value if isinstance(answer.value, bool) else None,
+                    probability=answer.probability,
+                    backend=answer.backend,
+                )
+
+            _log.info(
+                "quality_gate_jev_frames scored=%d latency_ms=%d input_tokens=%s",
+                len(to_ask),
+                latency_ms,
+                input_tokens,
+            )
+            return FramesScoreBundle(
+                results=[r for r in results if r is not None],
+                latency_ms=latency_ms,
+                input_tokens=input_tokens if isinstance(input_tokens, int) else None,
+            )
+        except Exception as exc:
+            latency_ms = int((time.perf_counter() - start) * 1000)
+            err = f"frames jev error: {exc}"
+            _log.warning("quality_gate frames scoring failed: %s", exc)
+            for idx, criterion in to_ask:
+                results[idx] = CriterionResult(
+                    criterion_id=criterion.id,
+                    verdict=Verdict.UNSURE,
+                    confidence=0.0,
+                    reason=err,
+                )
+            return FramesScoreBundle(
+                results=[r for r in results if r is not None],
+                latency_ms=latency_ms,
+                error=err,
+            )
+
+
+def _log_shadow_comparison(
+    *,
+    haiku_results: list[CriterionResult],
+    frames_bundle: FramesScoreBundle,
+    haiku_latency_ms: int,
+) -> None:
+    """Structured log + optional cost_log for shadow mode agreement."""
+    frames_by_id = {r.criterion_id: r for r in frames_bundle.results}
+    agreement: dict[str, bool] = {}
+    for hr in haiku_results:
+        fr = frames_by_id.get(hr.criterion_id)
+        agreement[hr.criterion_id] = fr is not None and fr.verdict == hr.verdict
+
+    payload = {
+        "event": "quality_gate_jev_frames_shadow",
+        "agreement": agreement,
+        "haiku_latency_ms": haiku_latency_ms,
+        "frames_latency_ms": frames_bundle.latency_ms,
+        "frames_input_tokens": frames_bundle.input_tokens,
+        "frames_error": frames_bundle.error,
+        "haiku_verdicts": {r.criterion_id: r.verdict.value for r in haiku_results},
+        "frames_verdicts": {r.criterion_id: r.verdict.value for r in frames_bundle.results},
+    }
+    _log.info(
+        "quality_gate_jev_frames_shadow agreement=%s haiku_latency_ms=%d "
+        "frames_latency_ms=%d frames_input_tokens=%s frames_error=%s",
+        agreement,
+        haiku_latency_ms,
+        frames_bundle.latency_ms,
+        frames_bundle.input_tokens,
+        frames_bundle.error,
+    )
+    _maybe_cost_log("quality_gate_jev_frames_shadow", payload)
+
+
+def _score_haiku_path(
+    *,
+    frames: list[Path],
+    jev_criteria: list[QualityCriterion],
+    metadata: RenderMetadata,
+    vision_client: VisionClient,
+    batched_scorer: BatchedJevScorer,
+    result: GateResult,
+    start_time: float,
+    timeout: float,
+) -> tuple[list[CriterionResult], int]:
+    """Haiku description + batched Jev. Returns (results, scoring_latency_ms)."""
+    if time.monotonic() - start_time > timeout:
+        result.skipped = True
+        result.skip_reason = "timeout before vision"
+        return [], 0
+
+    vision_start = time.monotonic()
+    user_prompt = _VISION_USER_PROMPT.format(
+        duration=metadata.duration_seconds,
+        aspect=metadata.aspect_ratio,
+        n_frames=len(frames),
+        game=metadata.game or "unknown",
+    )
+    description, usage_info = vision_client.describe_video(
+        frames,
+        system_prompt=_VISION_SYSTEM_PROMPT,
+        user_prompt=user_prompt,
+    )
+    result.vision_description = description
+    result.cost_estimate = usage_info
+    result.timings["vision_ms"] = int((time.monotonic() - vision_start) * 1000)
+
+    if time.monotonic() - start_time > timeout:
+        result.skipped = True
+        result.skip_reason = "timeout before Jev scoring"
+        return [], 0
+
+    scoring_start = time.monotonic()
+    jev_results = batched_scorer.score_all(jev_criteria, description, metadata)
+    scoring_ms = int((time.monotonic() - scoring_start) * 1000)
+    result.timings["scoring_ms"] = scoring_ms
+    return jev_results, scoring_ms
+
+
 def run_quality_gate(
     video_path: Path,
     criteria: list[QualityCriterion],
@@ -533,6 +915,7 @@ def run_quality_gate(
     vision_client: VisionClient | None = None,
     jev_scorer: JevScorer | None = None,
     batched_scorer: BatchedJevScorer | None = None,
+    frames_scorer: FramesJevScorer | None = None,
     timeout_seconds: float | None = None,
 ) -> tuple[GateResult, list[RevisionRequest]]:
     """Run the quality gate on a rendered video.
@@ -545,6 +928,7 @@ def run_quality_gate(
     Args:
         already_passed: Set of criterion IDs that passed on a previous attempt.
             These criteria are not re-evaluated; they appear in the result as PASS.
+        frames_scorer: Optional frames-to-Jev scorer (experiment / tests).
 
     Gate is disabled when:
     - GROKBOT_QUALITY_GATE_ENABLED=false
@@ -568,6 +952,9 @@ def run_quality_gate(
     already_passed = already_passed or set()
     vision_client = vision_client or DefaultVisionClient()
     batched_scorer = batched_scorer or BatchedJevScorer()
+    frames_scorer = frames_scorer or FramesJevScorer()
+    use_frames = settings.grokbot_quality_gate_jev_frames_enabled
+    shadow = settings.grokbot_quality_gate_jev_frames_shadow
 
     result = GateResult(passed=True)
     revision_requests: list[RevisionRequest] = []
@@ -575,7 +962,6 @@ def run_quality_gate(
     try:
         # 1. Check timing criteria first (pure computation, no model calls)
         # Also handle already-passed criteria from previous attempts
-        timing_results: list[CriterionResult] = []
         jev_criteria: list[QualityCriterion] = []
 
         for criterion in criteria:
@@ -595,7 +981,6 @@ def run_quality_gate(
             timing_result = check_timing_criteria(criterion.id, metadata)
             if timing_result is not None:
                 timing_result.retry_count = retry_counts.get(criterion.id, 0)
-                timing_results.append(timing_result)
                 result.criteria_results.append(timing_result)
             else:
                 jev_criteria.append(criterion)
@@ -625,45 +1010,89 @@ def run_quality_gate(
                         )
                     )
             else:
-                # 3. Vision pass
-                if time.monotonic() - start_time > timeout:
-                    return GateResult(
-                        passed=True, skipped=True, skip_reason="timeout before vision"
-                    ), []
+                haiku_results: list[CriterionResult] = []
+                haiku_latency_ms = 0
+                frames_bundle: FramesScoreBundle | None = None
+                used_frames_primary = False
 
-                vision_start = time.monotonic()
-                user_prompt = _VISION_USER_PROMPT.format(
-                    duration=metadata.duration_seconds,
-                    aspect=metadata.aspect_ratio,
-                    n_frames=len(frames),
-                    game=metadata.game or "unknown",
-                )
-                description, usage_info = vision_client.describe_video(
-                    frames,
-                    system_prompt=_VISION_SYSTEM_PROMPT,
-                    user_prompt=user_prompt,
-                )
-                result.vision_description = description
-                result.cost_estimate = usage_info
-                result.timings["vision_ms"] = int((time.monotonic() - vision_start) * 1000)
+                # Shadow always needs the Haiku path as the real result.
+                # Frames-primary runs frames first; image errors fall back to Haiku.
+                if shadow or not use_frames:
+                    if time.monotonic() - start_time > timeout:
+                        return GateResult(
+                            passed=True, skipped=True, skip_reason="timeout before vision"
+                        ), []
+                    haiku_results, haiku_latency_ms = _score_haiku_path(
+                        frames=frames,
+                        jev_criteria=jev_criteria,
+                        metadata=metadata,
+                        vision_client=vision_client,
+                        batched_scorer=batched_scorer,
+                        result=result,
+                        start_time=start_time,
+                        timeout=timeout,
+                    )
 
-                # 4. Score all Jev criteria in one batched request
-                if time.monotonic() - start_time > timeout:
-                    result.skipped = True
-                    result.skip_reason = "timeout before Jev scoring"
-                else:
-                    scoring_start = time.monotonic()
-                    # Note: already_passed should be set by caller if criteria passed previously.
-                    # We don't track pass/fail history here, so pass empty set.
-                    jev_results = batched_scorer.score_all(
+                if (use_frames or shadow) and not (result.skipped and not shadow):
+                    frames_bundle = frames_scorer.score_all(
                         jev_criteria,
-                        description,
+                        frames,
                         metadata,
                     )
-                    for criterion, cr in zip(jev_criteria, jev_results, strict=True):
+                    result.timings["frames_jev_ms"] = frames_bundle.latency_ms
+                    if frames_bundle.input_tokens is not None:
+                        result.cost_estimate = {
+                            **result.cost_estimate,
+                            "frames_jev_input_tokens": frames_bundle.input_tokens,
+                        }
+
+                if shadow:
+                    if frames_bundle is not None:
+                        _log_shadow_comparison(
+                            haiku_results=haiku_results,
+                            frames_bundle=frames_bundle,
+                            haiku_latency_ms=haiku_latency_ms,
+                        )
+                    chosen = haiku_results
+                elif use_frames:
+                    if frames_bundle is not None and frames_bundle.error is None:
+                        chosen = frames_bundle.results
+                        used_frames_primary = True
+                        result.vision_description = ""
+                    else:
+                        # Fail-safe: image/Jev error → Haiku description path.
+                        _log.warning(
+                            "quality_gate: frames path failed (%s); falling back to Haiku",
+                            frames_bundle.error if frames_bundle else "no bundle",
+                        )
+                        if not haiku_results:
+                            if time.monotonic() - start_time > timeout:
+                                return GateResult(
+                                    passed=True,
+                                    skipped=True,
+                                    skip_reason="timeout before Haiku fallback",
+                                ), []
+                            haiku_results, haiku_latency_ms = _score_haiku_path(
+                                frames=frames,
+                                jev_criteria=jev_criteria,
+                                metadata=metadata,
+                                vision_client=vision_client,
+                                batched_scorer=batched_scorer,
+                                result=result,
+                                start_time=start_time,
+                                timeout=timeout,
+                            )
+                        chosen = haiku_results
+                else:
+                    chosen = haiku_results
+
+                result.timings["scoring_path"] = (
+                    "jev_frames" if used_frames_primary else "haiku_description"
+                )
+                if len(chosen) == len(jev_criteria):
+                    for criterion, cr in zip(jev_criteria, chosen, strict=True):
                         cr.retry_count = retry_counts.get(criterion.id, 0)
                         result.criteria_results.append(cr)
-                    result.timings["scoring_ms"] = int((time.monotonic() - scoring_start) * 1000)
 
         # 5. Process results and generate revision requests
         for cr in result.criteria_results:
