@@ -116,6 +116,22 @@ class Settings(BaseSettings):
     # Timeout for the entire quality gate step (vision + Jev scoring).
     grokbot_quality_gate_timeout_seconds: float = 60.0
 
+    # --- Jev ranker cascade ---
+    # Put Jev in front of Haiku as a confidence filter. Candidates where
+    # Jev is confident (keep or reject) skip the Haiku call; only unsure
+    # candidates go to Haiku. Disabled by default so the existing behavior
+    # is unchanged until the owner enables it.
+    grokbot_jev_ranker_cascade_enabled: bool = False
+    # Confidence thresholds for the Jev cascade. A candidate is "confident
+    # keep" when Jev says keep with probability >= this threshold (and
+    # likewise for reject). Candidates below threshold are unsure and go
+    # to Haiku. The 0.8 defaults are conservative: Jev must be very sure
+    # before we skip Haiku. NOTE: funny threshold mismatch - the ranker
+    # uses 0.6-0.7 for funny_score routing while bucketing uses 0.8. We
+    # do not change existing thresholds here; this is documented.
+    grokbot_jev_keep_threshold: float = 0.8
+    grokbot_jev_reject_threshold: float = 0.8
+
     # Riot API candidate source (League). Free dev key from
     # developer.riotgames.com. Source stays inert until all three are set.
     riot_api_key: str = ""
