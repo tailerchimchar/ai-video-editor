@@ -35,6 +35,7 @@ from .queue import (
     EditPlanItem,
     PreviewRequestItem,
     QueueRejected,
+    RenderRequestItem,
     SleepItem,
     VerdictItem,
     WakeItem,
@@ -187,7 +188,7 @@ def _safe_detail(detail, limit: int = 500) -> str:
     return _PATH_RE.sub("<path>", str(detail))[:limit]
 
 
-_DEFERRED = (EditPlanItem, VerdictItem, DeployItem)
+_DEFERRED = (EditPlanItem, VerdictItem, DeployItem, RenderRequestItem)
 
 
 class Runner:

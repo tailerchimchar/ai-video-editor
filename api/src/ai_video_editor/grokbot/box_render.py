@@ -6,7 +6,7 @@ outputs from the same edit plan, uploads results back to Drive, and
 emits a video.rendered event.
 
 Design constraints:
-- One render at a time (file lock prevents concurrent jobs)
+- One render at a time (file lock prevents concurrent jobs; fcntl/Linux)
 - Fail fast: download/upload failures emit failure events, not partial
   success
 - Scratch cleanup only after ALL outputs upload successfully (HIGH RISK)
@@ -16,15 +16,21 @@ Design constraints:
 Events emitted:
 - video.rendered: success, includes both aspect ratio outputs
 - render.failed: any failure (busy, download, render, upload)
+
+Entry point: ``box-render`` CLI (``main``) consumes a render_request JSON
+file written by the Editor into the queue repo. The PC API does not
+accept render submissions.
 """
 
 from __future__ import annotations
 
-import fcntl
+import argparse
 import json
 import logging
+import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from dataclasses import dataclass, field
@@ -39,11 +45,13 @@ from ..storage import BoxRenderStorage, DriveStorage, StorageError
 
 if TYPE_CHECKING:
     from ..grokbot.drive import Uploader
+    from ..grokbot.queue import RenderRequestItem
 
 _log = logging.getLogger(__name__)
 
-LOCK_FILE = "/tmp/ai-video-editor-box-render.lock"
 SCRATCH_PREFIX = "box-render-"
+_PATH_RE = re.compile(r"[A-Za-z]:[\\/][^\"'\r\n]+|/[^\"'\r\n]+")
+_DEFAULT_LOCK = "/tmp/ai-video-editor-box-render.lock"
 
 
 @dataclass
@@ -57,6 +65,7 @@ class RenderInput:
     trims: list[dict]
     concat_order: list[str]
     game: str | None = None
+    # Resolved from a library song_id only — never a raw queue path.
     music_path: str | None = None
     music_volume: float = 0.25
     captions_enabled: bool = True
@@ -87,15 +96,38 @@ class RenderResult:
     timings: dict = field(default_factory=dict)
 
 
-class RenderLock:
-    """Simple file lock for single-render concurrency."""
+def _safe_error(detail: str | None, limit: int = 500) -> str | None:
+    """Strip absolute paths from error text before it reaches events."""
+    if detail is None:
+        return None
+    return _PATH_RE.sub("<path>", str(detail))[:limit]
 
-    def __init__(self, lock_path: str = LOCK_FILE):
-        self._lock_path = lock_path
+
+def _lock_path() -> str:
+    return settings.grokbot_box_lock_file or _DEFAULT_LOCK
+
+
+def _render_timeout() -> float:
+    return float(settings.grokbot_box_render_timeout or 600.0)
+
+
+def _download_timeout() -> float:
+    return float(settings.grokbot_box_download_timeout or 300.0)
+
+
+class RenderLock:
+    """Simple file lock for single-render concurrency (fcntl; Unix only)."""
+
+    def __init__(self, lock_path: str | None = None):
+        self._lock_path = lock_path or _lock_path()
         self._fd: int | None = None
 
     def acquire(self) -> bool:
         """Try to acquire the lock. Returns True if acquired."""
+        try:
+            import fcntl
+        except ImportError as e:
+            raise RuntimeError("RenderLock requires fcntl (Linux/macOS)") from e
         try:
             self._fd = open(self._lock_path, "w")  # noqa: SIM115
             fcntl.flock(self._fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -112,9 +144,11 @@ class RenderLock:
         """Release the lock."""
         if self._fd:
             try:
+                import fcntl
+
                 fcntl.flock(self._fd.fileno(), fcntl.LOCK_UN)
                 self._fd.close()
-            except OSError:
+            except (ImportError, OSError):
                 pass
             self._fd = None
 
@@ -127,10 +161,19 @@ class RenderLock:
         self.release()
 
 
+def _ffprobe_bin() -> str:
+    """Derive ffprobe from the ffmpeg binary name without rewriting directories."""
+    p = Path(settings.ffmpeg_path)
+    name = p.name
+    if "ffmpeg" in name:
+        return str(p.with_name(name.replace("ffmpeg", "ffprobe", 1)))
+    return str(p.with_name("ffprobe"))
+
+
 def _probe_duration(path: Path) -> float:
     """Get video duration via ffprobe."""
     cmd = [
-        settings.ffmpeg_path.replace("ffmpeg", "ffprobe"),
+        _ffprobe_bin(),
         "-v",
         "error",
         "-show_entries",
@@ -149,22 +192,23 @@ def _probe_duration(path: Path) -> float:
     return 0.0
 
 
-def _run_ffmpeg(cmd: list[str], timeout: float = 600.0) -> tuple[bool, str | None]:
+def _run_ffmpeg(cmd: list[str], timeout: float | None = None) -> tuple[bool, str | None]:
     """Run ffmpeg command with timeout. Returns (ok, error)."""
+    limit = _render_timeout() if timeout is None else timeout
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=limit)
         if result.returncode != 0:
-            return False, result.stderr[-1500:]
+            return False, _safe_error(result.stderr[-1500:] if result.stderr else "ffmpeg failed")
         return True, None
     except subprocess.TimeoutExpired:
-        return False, f"ffmpeg timed out after {timeout}s"
+        return False, f"ffmpeg timed out after {limit}s"
     except FileNotFoundError:
         return False, "ffmpeg not found"
 
 
 def _render_single_aspect(
     scratch_dir: Path,
-    input_clips: list[Path],
+    clip_paths: dict[str, Path],
     trims: list[dict],
     concat_order: list[str],
     aspect: str,
@@ -175,25 +219,22 @@ def _render_single_aspect(
 ) -> tuple[Path | None, str | None]:
     """Render a single aspect ratio output. Returns (output_path, error).
 
-    For 9:16, uses the existing cropped_hud_9x16 layout which places
-    the minimap and score appropriately for the game. For 16:9, uses
-    a simple scale to cap resolution (no crop).
-
-    No LLM or vision calls: pure ffmpeg, deterministic.
+    Clips are keyed by clip_ref. Part files are named by trim index so
+    shared id prefixes cannot overwrite each other.
     """
     parts_dir = scratch_dir / f"parts_{aspect.replace(':', 'x')}"
     parts_dir.mkdir(parents=True, exist_ok=True)
 
-    clip_id_to_path = {t["clip_id"]: p for t, p in zip(trims, input_clips, strict=False)}
     parts: list[Path] = []
+    trim_to_part: dict[str, Path] = {}
 
-    for trim in trims:
+    for i, trim in enumerate(trims):
         clip_id = trim["clip_id"]
-        src = clip_id_to_path.get(clip_id)
+        src = clip_paths.get(clip_id)
         if not src or not src.exists():
             return None, f"missing clip: {clip_id}"
 
-        part_path = parts_dir / f"part_{clip_id[:8]}.mp4"
+        part_path = parts_dir / f"part_{i:03d}.mp4"
         start_s = float(trim.get("start_s", 0))
         end_s = float(trim.get("end_s", 0))
         duration = max(0.0, end_s - start_s)
@@ -261,16 +302,16 @@ def _render_single_aspect(
         if not ok:
             return None, f"clip render failed ({clip_id}): {err}"
         parts.append(part_path)
+        trim_to_part[clip_id] = part_path
 
     if not parts:
         return None, "no parts rendered"
 
     ordered_parts = []
     for clip_id in concat_order:
-        for trim, part in zip(trims, parts, strict=False):
-            if trim["clip_id"] == clip_id:
-                ordered_parts.append(part)
-                break
+        part = trim_to_part.get(clip_id)
+        if part is not None:
+            ordered_parts.append(part)
 
     if not ordered_parts:
         ordered_parts = parts
@@ -350,6 +391,82 @@ def _cpu_codec_opts() -> list[str]:
     return ["-preset", "veryfast", "-crf", "23"]
 
 
+def render_input_from_request(item: RenderRequestItem) -> RenderInput:
+    """Build a RenderInput from a validated RenderRequestItem.
+
+    Music is not resolved here: a future library lookup may set
+    ``music_path`` from ``music_song_id``. Raw filesystem paths from the
+    queue are never accepted.
+    """
+    clips = [
+        {
+            "clip_ref": c.clip_ref,
+            "drive_id": c.drive_id,
+            "start_s": c.start_s,
+            "end_s": c.end_s,
+        }
+        for c in item.clips
+    ]
+    trims = [{"clip_id": c.clip_ref, "start_s": c.start_s, "end_s": c.end_s} for c in item.clips]
+    return RenderInput(
+        edit_plan_id=item.edit_plan_id,
+        edit_plan_version=item.edit_plan_version,
+        asset_id=item.asset_id,
+        clips=clips,
+        trims=trims,
+        concat_order=list(item.concat_order),
+        game=item.game,
+        music_path=None,
+    )
+
+
+def _scratch_parent() -> Path:
+    """Directory that owns job scratch dirs (configured or system temp)."""
+    configured = settings.grokbot_box_scratch_dir
+    if configured is not None:
+        parent = Path(configured)
+        parent.mkdir(parents=True, exist_ok=True)
+        return parent.resolve()
+    return Path(tempfile.gettempdir()).resolve()
+
+
+def _is_safe_scratch(scratch_dir: Path) -> bool:
+    """True only for a non-symlink job dir we created under an allowed parent."""
+    try:
+        resolved = scratch_dir.resolve()
+    except OSError:
+        return False
+    if scratch_dir.is_symlink() or resolved.is_symlink():
+        return False
+    if not resolved.name.startswith(SCRATCH_PREFIX):
+        return False
+    allowed = {Path(tempfile.gettempdir()).resolve()}
+    configured = settings.grokbot_box_scratch_dir
+    if configured is not None:
+        allowed.add(Path(configured).resolve())
+    return resolved.parent in allowed
+
+
+def _make_scratch_dir() -> Path:
+    return Path(tempfile.mkdtemp(prefix=SCRATCH_PREFIX, dir=str(_scratch_parent())))
+
+
+def _cleanup_scratch(scratch_dir: Path, *, created: bool) -> bool:
+    """Delete scratch only if this job created it and the guard passes."""
+    if not created or scratch_dir is None or not scratch_dir.exists():
+        return False
+    if not _is_safe_scratch(scratch_dir):
+        _log.warning("scratch dir failed cleanup guard, not cleaning: %s", scratch_dir)
+        return False
+    try:
+        shutil.rmtree(scratch_dir)
+        _log.info("cleaned scratch dir: %s", scratch_dir)
+        return True
+    except OSError as e:
+        _log.warning("scratch cleanup failed: %s", e)
+        return False
+
+
 def run_box_render(
     uploader: Uploader,
     render_input: RenderInput,
@@ -361,20 +478,12 @@ def run_box_render(
     """Run a box render job end-to-end.
 
     1. Acquire lock (fail fast if busy)
-    2. Create scratch directory
-    3. Download clips from Drive
+    2. Create scratch directory (unless storage is injected)
+    3. Download clips from Drive keyed by clip_ref
     4. Render both 9:16 and 16:9 outputs
     5. Upload outputs to Drive
     6. Emit video.rendered event
     7. Clean up scratch (HIGH RISK: only after all uploads succeed)
-
-    Args:
-        uploader: Drive uploader (used to build DriveStorage if storage is None)
-        render_input: Input specification for the render job
-        emit_fn: Event emitter function
-        lock: Optional render lock (defaults to RenderLock())
-        storage: Optional storage backend for dependency injection.
-            When None, DriveStorage is built from uploader and a temp scratch dir.
 
     Returns RenderResult with success/failure details.
     """
@@ -398,41 +507,48 @@ def run_box_render(
         return result
 
     scratch_dir: Path | None = None
+    created_scratch = False
     _storage: BoxRenderStorage
     try:
         if storage is not None:
             _storage = storage
             scratch_dir = _storage.scratch_dir
         else:
-            scratch_dir = Path(tempfile.mkdtemp(prefix=SCRATCH_PREFIX))
-            _storage = DriveStorage(uploader, scratch_dir)
-        _log.info("box render started: plan=%s scratch=%s", render_input.edit_plan_id, scratch_dir)
+            scratch_dir = _make_scratch_dir()
+            created_scratch = True
+            _storage = DriveStorage(uploader, scratch_dir, download_timeout=_download_timeout())
+        _log.info(
+            "box render started: plan=%s scratch=%s",
+            render_input.edit_plan_id,
+            scratch_dir,
+        )
         download_start = time.monotonic()
-        local_clips = []
+        clip_paths: dict[str, Path] = {}
 
         for i, clip in enumerate(render_input.clips):
             drive_id = clip.get("drive_id")
+            clip_ref = clip.get("clip_ref") or str(i + 1)
             if not drive_id:
                 result.error = f"clip {i} missing drive_id"
                 _emit_failure(emit_fn, result, "download")
                 return result
             try:
                 local_path = _storage.download_clip(drive_id, f"clip_{i:03d}.mp4")
-                local_clips.append(local_path)
+                clip_paths[clip_ref] = local_path
             except StorageError as e:
-                result.error = f"download failed: clip {i}: {e}"
+                result.error = _safe_error(f"download failed: clip {i}: {e}")
                 _emit_failure(emit_fn, result, "download")
                 return result
 
         result.timings["download_seconds"] = round(time.monotonic() - download_start, 2)
         dl_secs = result.timings["download_seconds"]
-        _log.info("downloaded %d clips in %.1fs", len(local_clips), dl_secs)
+        _log.info("downloaded %d clips in %.1fs", len(clip_paths), dl_secs)
 
         render_start = time.monotonic()
         for aspect in ["9:16", "16:9"]:
             output_path, err = _render_single_aspect(
                 scratch_dir,
-                local_clips,
+                clip_paths,
                 render_input.trims,
                 render_input.concat_order,
                 aspect,
@@ -441,7 +557,7 @@ def run_box_render(
                 music_volume=render_input.music_volume,
             )
             if err or not output_path or not output_path.exists():
-                result.error = f"render failed ({aspect}): {err}"
+                result.error = _safe_error(f"render failed ({aspect}): {err}")
                 _emit_failure(emit_fn, result, "render")
                 return result
 
@@ -470,7 +586,7 @@ def run_box_render(
                 )
                 output.drive_id = drive_id
             except StorageError as e:
-                result.error = f"upload failed ({output.aspect}): {e}"
+                result.error = _safe_error(f"upload failed ({output.aspect}): {e}")
                 _emit_failure(emit_fn, result, "upload")
                 return result
 
@@ -483,27 +599,37 @@ def run_box_render(
 
         _emit_success(emit_fn, result)
 
-        # HIGH RISK: Scratch cleanup only after ALL uploads succeeded
-        # This is a deliberate design choice approved by the owner.
-        # Scope: only the job's own scratch_dir, never anything else.
-        if scratch_dir and scratch_dir.exists():
-            if str(scratch_dir).startswith(tempfile.gettempdir()):
-                shutil.rmtree(scratch_dir, ignore_errors=True)
-                result.scratch_cleaned = True
-                _log.info("cleaned scratch dir: %s", scratch_dir)
-            else:
-                _log.warning("scratch dir outside temp, not cleaning: %s", scratch_dir)
+        # HIGH RISK: Scratch cleanup only after ALL uploads succeeded.
+        result.scratch_cleaned = _cleanup_scratch(scratch_dir, created=created_scratch)
 
         return result
 
     except Exception as e:
-        result.error = f"unexpected error: {e}"
+        result.error = _safe_error(f"unexpected error: {type(e).__name__}")
         _log.exception("box render failed: %s", e)
         _emit_failure(emit_fn, result, "internal")
         return result
 
     finally:
         _lock.release()
+
+
+def run_render_request(
+    item: RenderRequestItem,
+    uploader: Uploader,
+    *,
+    emit_fn=emit,
+    lock: RenderLock | None = None,
+    storage: BoxRenderStorage | None = None,
+) -> RenderResult:
+    """Queue-consumer entry: convert a RenderRequestItem and run the job."""
+    return run_box_render(
+        uploader,
+        render_input_from_request(item),
+        emit_fn=emit_fn,
+        lock=lock,
+        storage=storage,
+    )
 
 
 def _emit_success(emit_fn, result: RenderResult) -> None:
@@ -543,7 +669,43 @@ def _emit_failure(emit_fn, result: RenderResult, stage: str) -> None:
                 "edit_plan_version": result.edit_plan_version,
                 "asset_id": result.asset_id,
                 "stage": stage,
-                "error": result.error,
+                "error": _safe_error(result.error),
             },
         )
     )
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI: ``box-render path/to/render_request.json`` on the Linux box."""
+    parser = argparse.ArgumentParser(description="Run one box render_request JSON file")
+    parser.add_argument("item", type=Path, help="path to a render_request queue JSON file")
+    args = parser.parse_args(argv)
+
+    if not settings.grokbot_box_render_enabled:
+        print("box render disabled (set GROKBOT_BOX_RENDER_ENABLED=true)", file=sys.stderr)
+        return 2
+
+    from ..grokbot.drive import uploader_from_settings
+    from ..grokbot.queue import parse_item
+
+    text = args.item.read_text(encoding="utf-8")
+    item = parse_item(text)
+    if item.kind != "render_request":
+        print(f"expected kind=render_request, got {item.kind}", file=sys.stderr)
+        return 2
+
+    uploader = uploader_from_settings()
+    if uploader is None:
+        print("Drive uploader not configured", file=sys.stderr)
+        return 2
+
+    result = run_render_request(item, uploader)
+    if result.ok:
+        print(json.dumps({"ok": True, "outputs": [o.drive_id for o in result.outputs]}))
+        return 0
+    print(json.dumps({"ok": False, "error": result.error}), file=sys.stderr)
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

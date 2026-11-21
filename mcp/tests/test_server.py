@@ -39,18 +39,10 @@ def test_list_assets_filters_by_game_substring():
         return httpx.Response(
             200,
             json=[
-                {
-                    "id": "1",
-                    "filename": "lol.mp4",
-                    "game": "League of Legends",
-                    "created_at": "2026-05-21T01:00:00Z",
-                },
-                {
-                    "id": "2",
-                    "filename": "val.mp4",
-                    "game": "Valorant",
-                    "created_at": "2026-05-20T01:00:00Z",
-                },
+                {"id": "1", "filename": "lol.mp4", "game": "League of Legends",
+                 "created_at": "2026-05-21T01:00:00Z"},
+                {"id": "2", "filename": "val.mp4", "game": "Valorant",
+                 "created_at": "2026-05-20T01:00:00Z"},
             ],
         )
 
@@ -92,7 +84,6 @@ def test_insert_compilation_clip_posts_correct_body():
         )
 
     import json as _json
-
     assert seen["url"].endswith("/api/v1/edit/compile/comp-1/insert")
     body = _json.loads(seen["body"])
     assert body["text"] == "CLUTCH"
@@ -123,16 +114,9 @@ def test_list_session_buckets_hits_bucketing_endpoint():
             200,
             json={
                 "session": "07-07-2026_23h44",
-                "hype": [
-                    {
-                        "file": "01_ace_5m.mp4",
-                        "event_type": "ace",
-                        "hype_score": 0.95,
-                        "funny_score": 0.2,
-                        "story_score": 0.4,
-                        "reason": "event_type=ace",
-                    }
-                ],
+                "hype": [{"file": "01_ace_5m.mp4", "event_type": "ace",
+                          "hype_score": 0.95, "funny_score": 0.2,
+                          "story_score": 0.4, "reason": "event_type=ace"}],
                 "story": [],
                 "voice_over": [],
                 "funny": [],
@@ -142,11 +126,12 @@ def test_list_session_buckets_hits_bucketing_endpoint():
 
     with _patch_client(handler):
         out = server.list_session_buckets(
-            game="Valorant",
-            session="07-07-2026_23h44",
+            game="Valorant", session="07-07-2026_23h44",
         )
     assert seen["method"] == "GET"
-    assert seen["url"].endswith("/api/v1/highlights/Valorant/07-07-2026_23h44/buckets")
+    assert seen["url"].endswith(
+        "/api/v1/highlights/Valorant/07-07-2026_23h44/buckets"
+    )
     assert out["hype"][0]["file"] == "01_ace_5m.mp4"
 
 
@@ -178,56 +163,9 @@ def test_watch_montage_posts_custom_name_body():
         out = server.watch_montage(custom_name="Valorant_best_of_v1")
 
     import json as _json
-
     assert seen["method"] == "POST"
     assert seen["url"].endswith("/api/v1/shorts/watch")
     body = _json.loads(seen["body"])
     assert body["custom_name"] == "Valorant_best_of_v1"
     assert body["save_markdown"] is True
     assert out["critique"]["overall_verdict"] == "needs_edits"
-
-
-def test_submit_box_render_posts_to_backend():
-    seen: dict = {}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        seen["method"] = request.method
-        seen["url"] = str(request.url)
-        seen["body"] = request.read().decode()
-        return httpx.Response(200, json={"id": "item-1", "status": "queued"})
-
-    with _patch_client(handler):
-        out = server.submit_box_render(
-            asset_id="asset-1",
-            edit_plan_id="plan-1",
-            edit_plan_version="1",
-            game="league",
-            clips=[{"clip_ref": "1", "drive_id": "d1", "start_s": 0.0, "end_s": 10.0}],
-            concat_order=["1"],
-        )
-
-    import json as _json
-
-    assert seen["method"] == "POST"
-    assert seen["url"].endswith("/api/v1/grokbot/render")
-    body = _json.loads(seen["body"])
-    assert body["asset_id"] == "asset-1"
-    assert body["game"] == "league"
-    assert out == {"id": "item-1", "status": "queued"}
-
-
-def test_submit_box_render_surfaces_disabled_response():
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(503, json={"detail": "box render disabled"})
-
-    with _patch_client(handler):
-        out = server.submit_box_render(
-            asset_id="asset-1",
-            edit_plan_id="plan-1",
-            edit_plan_version="1",
-            game="league",
-            clips=[{"clip_ref": "1", "drive_id": "d1", "start_s": 0.0, "end_s": 10.0}],
-            concat_order=["1"],
-        )
-
-    assert out == {"error": "box render disabled", "status_code": 503}

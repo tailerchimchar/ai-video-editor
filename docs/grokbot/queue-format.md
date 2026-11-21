@@ -7,7 +7,7 @@ Reference for Lead and Editor. Every item is one JSON file in the `queue/` folde
 | field | rule |
 |---|---|
 | `id` | a fresh uuid4 string, never reused |
-| `kind` | `edit_plan`, `preview_request`, `verdict`, `deploy`, `sleep` or `wake` |
+| `kind` | `edit_plan`, `preview_request`, `verdict`, `deploy`, `sleep`, `wake` or `render_request` |
 | `author_bot` | `lead`, `editor` or `devops` (the Viewer has no queue access) |
 | `created` | ISO 8601 UTC timestamp |
 | `schema_version` | the number 1 |
@@ -160,9 +160,10 @@ Editor only. Triggers a box render job on the Linux render box. The box download
 - `edit_plan_id`: unique id for this edit plan
 - `edit_plan_version`: version string for idempotency
 - `game`: `league` or `valorant` exactly (determines 9:16 HUD layout)
-- `clips`: list of clips, each with `clip_ref` (1-based string), `drive_id` (from `round.published`), `start_s`, `end_s`
-- `concat_order`: list of `clip_ref` values in render order
-- `music_song_id`: optional library id (letters, digits, hyphen, underscore only)
+- `clips`: 1–20 clips, each with `clip_ref` (1-based string), `drive_id` (Drive file id: letters/digits/hyphen/underscore, 10–128 chars, from `round.published`), `start_s`, `end_s` with `0 <= start_s < end_s` and window ≤ 180 s
+- `concat_order`: 1–20 `clip_ref` values in render order
+- `music_song_id`: optional library id (letters, digits, hyphen, underscore only; never a path)
+- The PC runner validates and defers these items (`queue.deferred`). The Linux box runs them via `uv run box-render <queue-item.json>` with `GROKBOT_BOX_RENDER_ENABLED=true`.
 
 ```json
 {

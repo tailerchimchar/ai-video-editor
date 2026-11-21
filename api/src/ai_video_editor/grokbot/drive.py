@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import re
 import uuid
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
@@ -26,6 +27,10 @@ FILES_URL = "https://www.googleapis.com/drive/v3/files"
 FOLDER_MIME = "application/vnd.google-apps.folder"
 # Refresh a little early so a token never expires mid-request.
 _EXPIRY_MARGIN = timedelta(seconds=60)
+# Drive file ids are opaque; reject anything that could alter the URL path.
+DRIVE_FILE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{10,128}$")
+# Cap a single download so a large file cannot fill the box's RAM/disk.
+DEFAULT_MAX_DOWNLOAD_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB
 
 
 class DriveError(RuntimeError):
@@ -36,6 +41,15 @@ class Uploader(Protocol):
     def upload(self, path: Path, *, name: str, subfolder: str) -> str: ...
 
     def prune(self, *, subfolder: str, older_than_days: int) -> int: ...
+
+    def download(
+        self,
+        file_id: str,
+        dest: Path,
+        *,
+        max_bytes: int = DEFAULT_MAX_DOWNLOAD_BYTES,
+        timeout: float = 300.0,
+    ) -> Path: ...
 
 
 def _utcnow() -> datetime:
@@ -166,6 +180,53 @@ class DriveUploader:
         return self._multipart(
             {"name": name, "parents": [parent]}, Path(path).read_bytes(), content_type
         )
+
+    # -- download -----------------------------------------------------
+    def download(
+        self,
+        file_id: str,
+        dest: Path,
+        *,
+        max_bytes: int = DEFAULT_MAX_DOWNLOAD_BYTES,
+        timeout: float = 300.0,
+    ) -> Path:
+        """Stream a Drive file to ``dest`` with an id check and byte cap."""
+        if not DRIVE_FILE_ID_RE.fullmatch(file_id):
+            raise DriveError("invalid Drive file id")
+        dest = Path(dest)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        url = f"{FILES_URL}/{file_id}"
+        written = 0
+        try:
+            with self._client.stream(
+                "GET",
+                url,
+                params={"alt": "media"},
+                headers=self._headers(),
+                follow_redirects=True,
+                timeout=timeout,
+            ) as resp:
+                if not resp.is_success:
+                    raise DriveError(
+                        f"Drive download failed: HTTP {resp.status_code} {resp.text[:200]}"
+                    )
+                with dest.open("wb") as out:
+                    for chunk in resp.iter_bytes():
+                        written += len(chunk)
+                        if written > max_bytes:
+                            out.close()
+                            dest.unlink(missing_ok=True)
+                            raise DriveError("download exceeds size cap")
+                        out.write(chunk)
+        except DriveError:
+            raise
+        except httpx.HTTPError as e:
+            dest.unlink(missing_ok=True)
+            raise DriveError(f"Drive download network error: {e}") from e
+        except OSError as e:
+            dest.unlink(missing_ok=True)
+            raise DriveError(f"Drive download IO error: {e}") from e
+        return dest
 
     # -- prune --------------------------------------------------------
     def prune(self, *, subfolder: str, older_than_days: int) -> int:

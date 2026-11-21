@@ -1,115 +1,108 @@
-"""Storage backend tests: LocalStorage and protocol compliance."""
+"""DriveStorage and DriveUploader.download tests."""
 
+from __future__ import annotations
+
+from pathlib import Path
+
+import httpx
 import pytest
 
-from ai_video_editor.storage import LocalStorage, StorageBackend, StorageError
+from ai_video_editor.grokbot.drive import (
+    DEFAULT_MAX_DOWNLOAD_BYTES,
+    DriveError,
+    DriveUploader,
+)
+from ai_video_editor.storage import BoxRenderStorage, DriveStorage, StorageError
 
 
-class TestLocalStorage:
-    def test_implements_protocol(self):
-        storage = LocalStorage()
-        assert isinstance(storage, StorageBackend)
+class _FakeUploader:
+    def __init__(self):
+        self.downloads: list[tuple[str, Path]] = []
+        self.uploads: list[tuple[str, str]] = []
 
-    def test_write_and_read_bytes(self, tmp_path):
-        storage = LocalStorage()
-        path = tmp_path / "test.txt"
-        data = b"hello world"
+    def download(self, file_id: str, dest: Path, *, max_bytes: int = 0, timeout: float = 300.0):
+        self.downloads.append((file_id, dest))
+        dest.write_bytes(b"clip-bytes")
+        return dest
 
-        storage.write_bytes(str(path), data)
-        assert storage.read_bytes(str(path)) == data
+    def upload(self, path: Path, *, name: str, subfolder: str) -> str:
+        self.uploads.append((name, subfolder))
+        return "uploaded-id"
 
-    def test_write_creates_parent_dirs(self, tmp_path):
-        storage = LocalStorage()
-        path = tmp_path / "a" / "b" / "c" / "test.txt"
+    def prune(self, *, subfolder: str, older_than_days: int) -> int:
+        return 0
 
-        storage.write_bytes(str(path), b"data")
-        assert path.exists()
 
-    def test_exists_true_for_file(self, tmp_path):
-        storage = LocalStorage()
-        path = tmp_path / "file.txt"
-        path.write_bytes(b"x")
+class TestDriveStorage:
+    def test_implements_protocol(self, tmp_path):
+        storage = DriveStorage(_FakeUploader(), tmp_path)
+        assert isinstance(storage, BoxRenderStorage)
 
-        assert storage.exists(str(path))
+    def test_download_clip_uses_uploader(self, tmp_path):
+        up = _FakeUploader()
+        storage = DriveStorage(up, tmp_path, download_timeout=12.0)
+        path = storage.download_clip("FAKE-drive-clip-0001", "clip_000.mp4")
+        assert path == tmp_path / "clip_000.mp4"
+        assert path.read_bytes() == b"clip-bytes"
+        assert up.downloads == [("FAKE-drive-clip-0001", path)]
 
-    def test_exists_false_for_missing(self, tmp_path):
-        storage = LocalStorage()
-        assert not storage.exists(str(tmp_path / "missing"))
+    def test_upload_file_uses_uploader(self, tmp_path):
+        up = _FakeUploader()
+        storage = DriveStorage(up, tmp_path)
+        local = tmp_path / "out.mp4"
+        local.write_bytes(b"x")
+        assert storage.upload_file(local, "out.mp4", "finished") == "uploaded-id"
+        assert up.uploads == [("out.mp4", "finished")]
 
-    def test_mkdir_creates_directory(self, tmp_path):
-        storage = LocalStorage()
-        path = tmp_path / "new_dir"
+    def test_download_maps_drive_error(self, tmp_path):
+        class Boom:
+            def download(self, *a, **k):
+                raise DriveError("nope")
 
-        storage.mkdir(str(path))
-        assert path.is_dir()
+        storage = DriveStorage(Boom(), tmp_path)  # type: ignore[arg-type]
+        with pytest.raises(StorageError, match="Drive download failed"):
+            storage.download_clip("FAKE-drive-clip-0001", "c.mp4")
 
-    def test_mkdir_with_parents(self, tmp_path):
-        storage = LocalStorage()
-        path = tmp_path / "a" / "b" / "c"
 
-        storage.mkdir(str(path), parents=True)
-        assert path.is_dir()
+def test_drive_uploader_download_streams_and_caps(tmp_path):
+    chunks = [b"a" * 100, b"b" * 100]
 
-    def test_listdir(self, tmp_path):
-        storage = LocalStorage()
-        (tmp_path / "a.txt").write_bytes(b"a")
-        (tmp_path / "b.txt").write_bytes(b"b")
-        (tmp_path / "subdir").mkdir()
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params.get("alt") == "media"
+        assert "/files/FAKE-drive-clip-0001" in str(request.url)
+        return httpx.Response(200, content=b"".join(chunks))
 
-        items = storage.listdir(str(tmp_path))
-        assert set(items) == {"a.txt", "b.txt", "subdir"}
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    up = DriveUploader("cid", "sec", "rt", "folder", client=client)
+    up._token = "tok"
+    from datetime import datetime, timezone
 
-    def test_remove_file(self, tmp_path):
-        storage = LocalStorage()
-        path = tmp_path / "to_delete.txt"
-        path.write_bytes(b"data")
+    up._token_expiry = datetime.max.replace(tzinfo=timezone.utc)
 
-        storage.remove(str(path))
-        assert not path.exists()
+    dest = tmp_path / "out.mp4"
+    assert up.download("FAKE-drive-clip-0001", dest) == dest
+    assert dest.read_bytes() == b"".join(chunks)
 
-    def test_remove_missing_is_noop(self, tmp_path):
-        storage = LocalStorage()
-        storage.remove(str(tmp_path / "missing"))
 
-    def test_rmtree(self, tmp_path):
-        storage = LocalStorage()
-        path = tmp_path / "tree"
-        path.mkdir()
-        (path / "file.txt").write_bytes(b"x")
-        (path / "subdir").mkdir()
-        (path / "subdir" / "nested.txt").write_bytes(b"y")
+def test_drive_uploader_download_rejects_bad_id(tmp_path):
+    up = DriveUploader("cid", "sec", "rt", "folder", client=httpx.Client())
+    with pytest.raises(DriveError, match="invalid Drive file id"):
+        up.download("../etc/passwd", tmp_path / "x")
 
-        storage.rmtree(str(path))
-        assert not path.exists()
 
-    def test_rmtree_missing_is_noop(self, tmp_path):
-        storage = LocalStorage()
-        storage.rmtree(str(tmp_path / "missing"))
+def test_drive_uploader_download_enforces_byte_cap(tmp_path):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"x" * 50)
 
-    def test_copy_to_local(self, tmp_path):
-        storage = LocalStorage()
-        src = tmp_path / "src.txt"
-        dst = tmp_path / "dst.txt"
-        src.write_bytes(b"content")
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    up = DriveUploader("cid", "sec", "rt", "folder", client=client)
+    up._token = "tok"
+    from datetime import datetime, timezone
 
-        storage.copy_to_local(str(src), str(dst))
-        assert dst.read_bytes() == b"content"
+    up._token_expiry = datetime.max.replace(tzinfo=timezone.utc)
 
-    def test_copy_from_local(self, tmp_path):
-        storage = LocalStorage()
-        src = tmp_path / "src.txt"
-        dst = tmp_path / "dst.txt"
-        src.write_bytes(b"content")
-
-        storage.copy_from_local(str(src), str(dst))
-        assert dst.read_bytes() == b"content"
-
-    def test_read_missing_raises_storage_error(self, tmp_path):
-        storage = LocalStorage()
-        with pytest.raises(StorageError):
-            storage.read_bytes(str(tmp_path / "missing"))
-
-    def test_listdir_missing_raises_storage_error(self, tmp_path):
-        storage = LocalStorage()
-        with pytest.raises(StorageError):
-            storage.listdir(str(tmp_path / "missing"))
+    dest = tmp_path / "out.mp4"
+    with pytest.raises(DriveError, match="size cap"):
+        up.download("FAKE-drive-clip-0001", dest, max_bytes=10)
+    assert not dest.exists()
+    assert DEFAULT_MAX_DOWNLOAD_BYTES > 0

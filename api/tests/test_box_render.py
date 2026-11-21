@@ -4,6 +4,7 @@ Tests cover:
 - Pure planning for both aspect ratios (unit)
 - Integration with fake storage and testsrc clip (integration)
 - End-to-end: outputs uploaded, event emitted, scratch cleanup (e2e)
+- Scratch cleanup guard, upload-partial path, queue consumer wiring
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -19,13 +21,19 @@ import pytest
 
 from ai_video_editor.config import settings
 from ai_video_editor.grokbot.box_render import (
+    SCRATCH_PREFIX,
     RenderInput,
     RenderLock,
     _16x9_filter,
+    _cleanup_scratch,
     _cpu_codec_opts,
+    _ffprobe_bin,
+    _is_safe_scratch,
     _probe_duration,
     _render_single_aspect,
+    render_input_from_request,
     run_box_render,
+    run_render_request,
 )
 
 # --- Unit tests: pure functions ---
@@ -55,13 +63,19 @@ class TestAspectFilter:
         assert "pad" in vf
 
 
+class TestFfprobePath:
+    def test_replaces_basename_only(self, monkeypatch):
+        monkeypatch.setattr(settings, "ffmpeg_path", "/opt/ffmpeg/bin/ffmpeg")
+        assert _ffprobe_bin() == "/opt/ffmpeg/bin/ffprobe"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="fcntl lock is Unix-only")
 class TestRenderLock:
     def test_acquire_and_release(self, tmp_path):
         lock_file = tmp_path / "test.lock"
         lock = RenderLock(str(lock_file))
         assert lock.acquire()
         lock.release()
-        assert not lock_file.exists() or lock_file.read_text() != ""
 
     def test_lock_prevents_concurrent_acquisition(self, tmp_path):
         lock_file = tmp_path / "test.lock"
@@ -89,7 +103,7 @@ class TestRenderInput:
             edit_plan_id="plan-001",
             edit_plan_version="1",
             asset_id="asset-001",
-            clips=[{"drive_id": "d1", "clip_ref": "1"}],
+            clips=[{"drive_id": "FAKE-drive-clip-0001", "clip_ref": "1"}],
             trims=[{"clip_id": "1", "start_s": 0, "end_s": 10}],
             concat_order=["1"],
             game="league",
@@ -98,6 +112,16 @@ class TestRenderInput:
         assert inp.game == "league"
         assert inp.music_path is None
         assert inp.music_volume == 0.25
+
+
+class FakeLock:
+    """Always-acquire lock for tests that do not exercise concurrency."""
+
+    def acquire(self) -> bool:
+        return True
+
+    def release(self) -> None:
+        return None
 
 
 # --- Integration tests with testsrc ---
@@ -159,7 +183,7 @@ class TestRenderSingleAspect:
 
         output, err = _render_single_aspect(
             scratch,
-            [test_clip],
+            {"c1": test_clip},
             [{"clip_id": "c1", "start_s": 0, "end_s": 1}],
             ["c1"],
             "16:9",
@@ -176,7 +200,7 @@ class TestRenderSingleAspect:
 
         output, err = _render_single_aspect(
             scratch,
-            [test_clip],
+            {"c1": test_clip},
             [{"clip_id": "c1", "start_s": 0, "end_s": 1}],
             ["c1"],
             "9:16",
@@ -188,13 +212,37 @@ class TestRenderSingleAspect:
         assert output.exists()
         assert output.stat().st_size > 0
 
+    def test_keys_clips_by_ref_not_zip_order(self, tmp_path, test_clip):
+        """Trims ordered differently from download order still map by clip_ref."""
+        scratch = tmp_path / "scratch"
+        scratch.mkdir()
+        other = scratch / "other.mp4"
+        shutil.copy(test_clip, other)
+
+        # Paths keyed by ref; trim order differs from insertion order.
+        clip_paths = {"2": other, "1": test_clip}
+        output, err = _render_single_aspect(
+            scratch,
+            clip_paths,
+            [
+                {"clip_id": "1", "start_s": 0, "end_s": 0.5},
+                {"clip_id": "2", "start_s": 0, "end_s": 0.5},
+            ],
+            ["1", "2"],
+            "16:9",
+        )
+        assert err is None
+        assert output is not None
+        parts = list((scratch / "parts_16x9").glob("part_*.mp4"))
+        assert {p.name for p in parts} == {"part_000.mp4", "part_001.mp4"}
+
     def test_missing_clip_returns_error(self, tmp_path, test_clip):
         scratch = tmp_path / "scratch"
         scratch.mkdir()
 
         output, err = _render_single_aspect(
             scratch,
-            [],
+            {},
             [{"clip_id": "missing", "start_s": 0, "end_s": 1}],
             ["missing"],
             "16:9",
@@ -212,6 +260,31 @@ class TestProbeDuration:
     def test_returns_zero_for_missing_file(self, tmp_path):
         duration = _probe_duration(tmp_path / "nonexistent.mp4")
         assert duration == 0.0
+
+
+class TestScratchGuard:
+    def test_refuses_temp_root(self):
+        assert not _is_safe_scratch(Path(tempfile.gettempdir()))
+
+    def test_refuses_wrong_prefix(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(settings, "grokbot_box_scratch_dir", None)
+        bad = Path(tempfile.gettempdir()) / "not-box-render-xyz"
+        bad.mkdir(exist_ok=True)
+        try:
+            assert not _is_safe_scratch(bad)
+        finally:
+            bad.rmdir()
+
+    def test_accepts_job_dir_under_temp(self):
+        real = Path(tempfile.mkdtemp(prefix=SCRATCH_PREFIX))
+        try:
+            assert _is_safe_scratch(real)
+        finally:
+            shutil.rmtree(real, ignore_errors=True)
+
+    def test_cleanup_refuses_unsafe(self, tmp_path):
+        assert _cleanup_scratch(tmp_path, created=True) is False
+        assert tmp_path.exists()
 
 
 # --- End-to-end tests with fake Drive ---
@@ -235,6 +308,12 @@ class FakeUploader:
         self._upload_counter += 1
         return f"fake-drive-id-{self._upload_counter}"
 
+    def download(self, file_id: str, dest: Path, *, max_bytes: int = 0, timeout: float = 300.0):
+        self.downloads.append(file_id)
+        dest = Path(dest)
+        dest.write_bytes(self._download_data.get(file_id, b"fake"))
+        return dest
+
 
 class TestRunBoxRenderE2E:
     @pytest.fixture(autouse=True)
@@ -249,7 +328,7 @@ class TestRunBoxRenderE2E:
             edit_plan_id="plan-disabled",
             edit_plan_version="1",
             asset_id="asset-disabled",
-            clips=[{"drive_id": "d1", "clip_ref": "1"}],
+            clips=[{"drive_id": "FAKE-drive-clip-0001", "clip_ref": "1"}],
             trims=[{"clip_id": "1", "start_s": 0, "end_s": 1}],
             concat_order=["1"],
         )
@@ -257,7 +336,7 @@ class TestRunBoxRenderE2E:
             uploader,
             render_input,
             emit_fn=lambda e: events.append(e),
-            lock=RenderLock(str(tmp_path / "test.lock")),
+            lock=FakeLock(),
         )
         assert not result.ok
         assert result.error == "box render disabled"
@@ -274,35 +353,31 @@ class TestRunBoxRenderE2E:
         local_clip = scratch / "clip_000.mp4"
         shutil.copy(test_clip, local_clip)
 
-        lock = RenderLock(str(tmp_path / "test.lock"))
+        fake_storage = MagicMock()
+        fake_storage.scratch_dir = scratch
+        fake_storage.download_clip.return_value = local_clip
+        fake_storage.upload_file.side_effect = [
+            "drive-9x16-id",
+            "drive-16x9-id",
+        ]
 
-        with patch("ai_video_editor.grokbot.box_render.DriveStorage") as mock_drive_storage:
-            mock_storage = MagicMock()
-            mock_storage.scratch_dir = scratch
-            mock_storage.download_clip.return_value = local_clip
-            mock_storage.upload_file.side_effect = [
-                "drive-9x16-id",
-                "drive-16x9-id",
-            ]
-            mock_drive_storage.return_value = mock_storage
+        render_input = RenderInput(
+            edit_plan_id="plan-e2e",
+            edit_plan_version="1",
+            asset_id="asset-e2e",
+            clips=[{"drive_id": "FAKE-drive-clip-0001", "clip_ref": "1"}],
+            trims=[{"clip_id": "1", "start_s": 0, "end_s": 1}],
+            concat_order=["1"],
+            game="league",
+        )
 
-            render_input = RenderInput(
-                edit_plan_id="plan-e2e",
-                edit_plan_version="1",
-                asset_id="asset-e2e",
-                clips=[{"drive_id": "d1", "clip_ref": "1"}],
-                trims=[{"clip_id": "1", "start_s": 0, "end_s": 1}],
-                concat_order=["1"],
-                game="league",
-            )
-
-            with patch("tempfile.mkdtemp", return_value=str(scratch)):
-                result = run_box_render(
-                    uploader,
-                    render_input,
-                    emit_fn=lambda e: events.append(e),
-                    lock=lock,
-                )
+        result = run_box_render(
+            uploader,
+            render_input,
+            emit_fn=lambda e: events.append(e),
+            lock=FakeLock(),
+            storage=fake_storage,
+        )
 
         assert result.ok
         assert len(result.outputs) == 2
@@ -315,6 +390,7 @@ class TestRunBoxRenderE2E:
         assert payload["edit_plan_id"] == "plan-e2e"
         assert len(payload["outputs"]) == 2
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="fcntl lock is Unix-only")
     def test_emits_render_failed_when_busy(self, tmp_path):
         events: list = []
         uploader = FakeUploader()
@@ -327,7 +403,7 @@ class TestRunBoxRenderE2E:
                 edit_plan_id="plan-busy",
                 edit_plan_version="1",
                 asset_id="asset-busy",
-                clips=[{"drive_id": "d1", "clip_ref": "1"}],
+                clips=[{"drive_id": "FAKE-drive-clip-0001", "clip_ref": "1"}],
                 trims=[{"clip_id": "1", "start_s": 0, "end_s": 1}],
                 concat_order=["1"],
             )
@@ -352,9 +428,7 @@ class TestRunBoxRenderE2E:
         events: list = []
         uploader = FakeUploader()
 
-        lock = RenderLock(str(tmp_path / "test.lock"))
-
-        real_scratch = Path(tempfile.mkdtemp(prefix="box-render-"))
+        real_scratch = Path(tempfile.mkdtemp(prefix=SCRATCH_PREFIX))
         local_clip = real_scratch / "clip_000.mp4"
         shutil.copy(test_clip, local_clip)
 
@@ -372,58 +446,113 @@ class TestRunBoxRenderE2E:
                 edit_plan_id="plan-clean",
                 edit_plan_version="1",
                 asset_id="asset-clean",
-                clips=[{"drive_id": "d1", "clip_ref": "1"}],
+                clips=[{"drive_id": "FAKE-drive-clip-0001", "clip_ref": "1"}],
                 trims=[{"clip_id": "1", "start_s": 0, "end_s": 1}],
                 concat_order=["1"],
                 game="league",
             )
 
-            with patch("tempfile.mkdtemp", return_value=str(real_scratch)):
+            with patch(
+                "ai_video_editor.grokbot.box_render._make_scratch_dir",
+                return_value=real_scratch,
+            ):
                 result = run_box_render(
                     uploader,
                     render_input,
                     emit_fn=lambda e: events.append(e),
-                    lock=lock,
+                    lock=FakeLock(),
                 )
 
                 assert result.ok
                 assert result.scratch_cleaned
+                assert not real_scratch.exists()
 
     def test_scratch_kept_on_failure(self, tmp_path):
         events: list = []
         uploader = FakeUploader()
 
-        lock = RenderLock(str(tmp_path / "test.lock"))
+        from ai_video_editor.storage import StorageError
+
+        fake_storage = MagicMock()
+        fake_storage.scratch_dir = tmp_path / "scratch"
+        fake_storage.scratch_dir.mkdir()
+        fake_storage.download_clip.side_effect = StorageError("download failed")
+
+        render_input = RenderInput(
+            edit_plan_id="plan-fail",
+            edit_plan_version="1",
+            asset_id="asset-fail",
+            clips=[{"drive_id": "FAKE-drive-clip-0001", "clip_ref": "1"}],
+            trims=[{"clip_id": "1", "start_s": 0, "end_s": 1}],
+            concat_order=["1"],
+        )
+
+        result = run_box_render(
+            uploader,
+            render_input,
+            emit_fn=lambda e: events.append(e),
+            lock=FakeLock(),
+            storage=fake_storage,
+        )
+
+        assert not result.ok
+        assert not result.scratch_cleaned
+
+        failed = [e for e in events if e.event == "render.failed"]
+        assert len(failed) == 1
+        assert failed[0].payload["stage"] == "download"
+
+    def test_partial_upload_keeps_scratch_and_skips_video_rendered(self, tmp_path, test_clip):
+        events: list = []
+        uploader = FakeUploader()
 
         from ai_video_editor.storage import StorageError
 
+        real_scratch = Path(tempfile.mkdtemp(prefix=SCRATCH_PREFIX))
+        local_clip = real_scratch / "clip_000.mp4"
+        shutil.copy(test_clip, local_clip)
+
         with patch("ai_video_editor.grokbot.box_render.DriveStorage") as mock_drive_storage:
             mock_storage = MagicMock()
-            mock_storage.download_clip.side_effect = StorageError("download failed")
+            mock_storage.scratch_dir = real_scratch
+            mock_storage.download_clip.return_value = local_clip
+            mock_storage.upload_file.side_effect = [
+                "drive-9x16-id",
+                StorageError("second upload failed"),
+            ]
             mock_drive_storage.return_value = mock_storage
 
             render_input = RenderInput(
-                edit_plan_id="plan-fail",
+                edit_plan_id="plan-partial",
                 edit_plan_version="1",
-                asset_id="asset-fail",
-                clips=[{"drive_id": "d1", "clip_ref": "1"}],
+                asset_id="asset-partial",
+                clips=[{"drive_id": "FAKE-drive-clip-0001", "clip_ref": "1"}],
                 trims=[{"clip_id": "1", "start_s": 0, "end_s": 1}],
                 concat_order=["1"],
+                game="league",
             )
 
-            result = run_box_render(
-                uploader,
-                render_input,
-                emit_fn=lambda e: events.append(e),
-                lock=lock,
-            )
+            with patch(
+                "ai_video_editor.grokbot.box_render._make_scratch_dir",
+                return_value=real_scratch,
+            ):
+                result = run_box_render(
+                    uploader,
+                    render_input,
+                    emit_fn=lambda e: events.append(e),
+                    lock=FakeLock(),
+                )
 
+        try:
             assert not result.ok
             assert not result.scratch_cleaned
-
+            assert real_scratch.exists()
+            assert not any(e.event == "video.rendered" for e in events)
             failed = [e for e in events if e.event == "render.failed"]
             assert len(failed) == 1
-            assert failed[0].payload["stage"] == "download"
+            assert failed[0].payload["stage"] == "upload"
+        finally:
+            shutil.rmtree(real_scratch, ignore_errors=True)
 
     def test_uses_injected_storage_for_download_and_upload(self, tmp_path, test_clip):
         """Test that run_box_render uses injected storage backend."""
@@ -434,8 +563,6 @@ class TestRunBoxRenderE2E:
         scratch.mkdir()
         local_clip = scratch / "clip_000.mp4"
         shutil.copy(test_clip, local_clip)
-
-        lock = RenderLock(str(tmp_path / "test.lock"))
 
         fake_storage = MagicMock()
         fake_storage.scratch_dir = scratch
@@ -449,7 +576,7 @@ class TestRunBoxRenderE2E:
             edit_plan_id="plan-injected",
             edit_plan_version="1",
             asset_id="asset-injected",
-            clips=[{"drive_id": "d1", "clip_ref": "1"}],
+            clips=[{"drive_id": "FAKE-drive-clip-0001", "clip_ref": "1"}],
             trims=[{"clip_id": "1", "start_s": 0, "end_s": 1}],
             concat_order=["1"],
             game="league",
@@ -459,14 +586,14 @@ class TestRunBoxRenderE2E:
             uploader,
             render_input,
             emit_fn=lambda e: events.append(e),
-            lock=lock,
+            lock=FakeLock(),
             storage=fake_storage,
         )
 
         assert result.ok
         assert len(result.outputs) == 2
 
-        fake_storage.download_clip.assert_called_once_with("d1", "clip_000.mp4")
+        fake_storage.download_clip.assert_called_once_with("FAKE-drive-clip-0001", "clip_000.mp4")
 
         assert fake_storage.upload_file.call_count == 2
         upload_calls = fake_storage.upload_file.call_args_list
@@ -476,9 +603,12 @@ class TestRunBoxRenderE2E:
 
         assert result.outputs[0].drive_id == "injected-9x16-id"
         assert result.outputs[1].drive_id == "injected-16x9-id"
+        # Injected scratch is not job-created: must not be cleaned.
+        assert not result.scratch_cleaned
+        assert scratch.exists()
 
 
-# --- Queue item tests ---
+# --- Queue item / consumer tests ---
 
 
 class TestRenderRequestItem:
@@ -497,7 +627,12 @@ class TestRenderRequestItem:
                 "edit_plan_version": "1",
                 "game": "league",
                 "clips": [
-                    {"clip_ref": "1", "drive_id": "d1", "start_s": 0.0, "end_s": 10.0},
+                    {
+                        "clip_ref": "1",
+                        "drive_id": "FAKE-drive-clip-0001",
+                        "start_s": 0.0,
+                        "end_s": 10.0,
+                    },
                 ],
                 "concat_order": ["1"],
             }
@@ -507,6 +642,11 @@ class TestRenderRequestItem:
         assert item.kind == "render_request"
         assert item.asset_id == "asset-001"
         assert len(item.clips) == 1
+
+        inp = render_input_from_request(item)
+        assert inp.clips[0]["drive_id"] == "FAKE-drive-clip-0001"
+        assert inp.trims[0]["clip_id"] == "1"
+        assert inp.music_path is None
 
     def test_reject_empty_clips(self):
         from ai_video_editor.grokbot.queue import QueueRejected, parse_item
@@ -527,9 +667,87 @@ class TestRenderRequestItem:
             }
         )
 
-        with pytest.raises(QueueRejected) as exc:
+        with pytest.raises(QueueRejected):
             parse_item(item_json)
-        assert "at least one clip" in str(exc.value)
+
+    def test_reject_short_drive_id(self):
+        from ai_video_editor.grokbot.queue import QueueRejected, parse_item
+
+        item_json = json.dumps(
+            {
+                "id": "d4e5f6a7-b8c9-4d0e-1f2a-3b4c5d6e7f8a",
+                "kind": "render_request",
+                "author_bot": "editor",
+                "created": "2026-11-21T02:30:00Z",
+                "schema_version": 1,
+                "asset_id": "asset-001",
+                "edit_plan_id": "plan-001",
+                "edit_plan_version": "1",
+                "game": "league",
+                "clips": [
+                    {"clip_ref": "1", "drive_id": "short", "start_s": 0.0, "end_s": 10.0},
+                ],
+                "concat_order": ["1"],
+            }
+        )
+        with pytest.raises(QueueRejected):
+            parse_item(item_json)
+
+    def test_reject_zero_length_window(self):
+        from ai_video_editor.grokbot.queue import QueueRejected, parse_item
+
+        item_json = json.dumps(
+            {
+                "id": "d4e5f6a7-b8c9-4d0e-1f2a-3b4c5d6e7f8a",
+                "kind": "render_request",
+                "author_bot": "editor",
+                "created": "2026-11-21T02:30:00Z",
+                "schema_version": 1,
+                "asset_id": "asset-001",
+                "edit_plan_id": "plan-001",
+                "edit_plan_version": "1",
+                "game": "league",
+                "clips": [
+                    {
+                        "clip_ref": "1",
+                        "drive_id": "FAKE-drive-clip-0001",
+                        "start_s": 5.0,
+                        "end_s": 5.0,
+                    },
+                ],
+                "concat_order": ["1"],
+            }
+        )
+        with pytest.raises(QueueRejected):
+            parse_item(item_json)
+
+    def test_reject_unknown_game(self):
+        from ai_video_editor.grokbot.queue import QueueRejected, parse_item
+
+        item_json = json.dumps(
+            {
+                "id": "d4e5f6a7-b8c9-4d0e-1f2a-3b4c5d6e7f8a",
+                "kind": "render_request",
+                "author_bot": "editor",
+                "created": "2026-11-21T02:30:00Z",
+                "schema_version": 1,
+                "asset_id": "asset-001",
+                "edit_plan_id": "plan-001",
+                "edit_plan_version": "1",
+                "game": "fortnite",
+                "clips": [
+                    {
+                        "clip_ref": "1",
+                        "drive_id": "FAKE-drive-clip-0001",
+                        "start_s": 0.0,
+                        "end_s": 10.0,
+                    },
+                ],
+                "concat_order": ["1"],
+            }
+        )
+        with pytest.raises(QueueRejected):
+            parse_item(item_json)
 
     def test_reject_invalid_concat_order(self):
         from ai_video_editor.grokbot.queue import QueueRejected, parse_item
@@ -546,7 +764,12 @@ class TestRenderRequestItem:
                 "edit_plan_version": "1",
                 "game": "league",
                 "clips": [
-                    {"clip_ref": "1", "drive_id": "d1", "start_s": 0.0, "end_s": 10.0},
+                    {
+                        "clip_ref": "1",
+                        "drive_id": "FAKE-drive-clip-0001",
+                        "start_s": 0.0,
+                        "end_s": 10.0,
+                    },
                 ],
                 "concat_order": ["2"],
             }
@@ -556,20 +779,53 @@ class TestRenderRequestItem:
             parse_item(item_json)
         assert "unknown clip_ref" in str(exc.value)
 
+    def test_run_render_request_consumes_queue_item(self, tmp_path, test_clip, monkeypatch):
+        monkeypatch.setattr(settings, "grokbot_box_render_enabled", True)
+        from ai_video_editor.grokbot.queue import parse_item
 
-# --- Flag / endpoint tests ---
+        events: list = []
+        item = parse_item(
+            json.dumps(
+                {
+                    "id": "d4e5f6a7-b8c9-4d0e-1f2a-3b4c5d6e7f8a",
+                    "kind": "render_request",
+                    "author_bot": "editor",
+                    "created": "2026-11-21T02:30:00Z",
+                    "schema_version": 1,
+                    "asset_id": "asset-001",
+                    "edit_plan_id": "plan-001",
+                    "edit_plan_version": "1",
+                    "game": "league",
+                    "clips": [
+                        {
+                            "clip_ref": "1",
+                            "drive_id": "FAKE-drive-clip-0001",
+                            "start_s": 0.0,
+                            "end_s": 1.0,
+                        },
+                    ],
+                    "concat_order": ["1"],
+                }
+            )
+        )
+        scratch = tmp_path / "scratch"
+        scratch.mkdir()
+        local_clip = scratch / "clip_000.mp4"
+        shutil.copy(test_clip, local_clip)
+        fake_storage = MagicMock()
+        fake_storage.scratch_dir = scratch
+        fake_storage.download_clip.return_value = local_clip
+        fake_storage.upload_file.side_effect = ["out-9x16", "out-16x9"]
 
-
-_RENDER_BODY = {
-    "asset_id": "asset-001",
-    "edit_plan_id": "plan-001",
-    "edit_plan_version": "1",
-    "game": "league",
-    "clips": [
-        {"clip_ref": "1", "drive_id": "d1", "start_s": 0.0, "end_s": 10.0},
-    ],
-    "concat_order": ["1"],
-}
+        result = run_render_request(
+            item,
+            FakeUploader(),
+            emit_fn=lambda e: events.append(e),
+            lock=FakeLock(),
+            storage=fake_storage,
+        )
+        assert result.ok
+        assert any(e.event == "video.rendered" for e in events)
 
 
 def test_box_render_flag_defaults_off(tmp_path):
@@ -583,22 +839,23 @@ def test_box_render_flag_defaults_off(tmp_path):
     assert loaded.grokbot_box_render_enabled is False
 
 
-def test_submit_render_returns_503_when_flag_off(client, monkeypatch):
-    monkeypatch.setattr(settings, "grokbot_box_render_enabled", False)
-    r = client.post("/api/v1/grokbot/render", json=_RENDER_BODY)
-    assert r.status_code == 503
-    assert r.json()["detail"] == "box render disabled"
-
-
-def test_submit_render_queues_when_flag_on(client, monkeypatch, tmp_path):
-    monkeypatch.setattr(settings, "grokbot_box_render_enabled", True)
-    queue_root = tmp_path / "queue-repo"
-    (queue_root / "queue").mkdir(parents=True)
-    monkeypatch.setattr(settings, "grokbot_queue_repo_dir", queue_root)
-
-    r = client.post("/api/v1/grokbot/render", json=_RENDER_BODY)
-    assert r.status_code == 200
-    body = r.json()
-    assert body["status"] == "queued"
-    assert "id" in body
-    assert (queue_root / "queue" / f"{body['id']}.json").is_file()
+def test_grokbot_render_route_removed(client):
+    r = client.post(
+        "/api/v1/grokbot/render",
+        json={
+            "asset_id": "asset-001",
+            "edit_plan_id": "plan-001",
+            "edit_plan_version": "1",
+            "game": "league",
+            "clips": [
+                {
+                    "clip_ref": "1",
+                    "drive_id": "FAKE-drive-clip-0001",
+                    "start_s": 0.0,
+                    "end_s": 10.0,
+                },
+            ],
+            "concat_order": ["1"],
+        },
+    )
+    assert r.status_code == 404
