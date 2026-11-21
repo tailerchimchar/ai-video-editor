@@ -8,6 +8,8 @@ without ffmpeg.
 
 Aspect is configurable per render — `"16:9"` is a passthrough,
 `"9:16"` does a center crop + scale to 720x1280 for TikTok/Reels.
+`"9:16_hud"` (flag-gated via `HUD_ASPECT_ENABLED`) runs the effect
+then the existing `cropped_hud_9x16` layout so minimap/scoreline survive.
 """
 
 from __future__ import annotations
@@ -16,6 +18,12 @@ import subprocess
 from pathlib import Path
 
 from .config import settings
+
+# Flag-gated vertical aspect that preserves HUD via cropped_hud_9x16.
+HUD_ASPECT = "9:16_hud"
+# Top-band caption y for 9:16_hud (source coords before the HUD layout).
+# Default `h-th-60` lands on the ability bar after vertical conversion.
+HUD_CAPTION_Y = "h/8"
 
 # ROI presets are expressed as ffmpeg crop-friendly fractional
 # expressions (iw/ih) so they auto-scale to any source resolution.
@@ -64,10 +72,44 @@ def aspect_filter(aspect: str) -> str:
 
     `"16:9"` (default) is a no-op. `"9:16"` does a centered crop to 9:16
     and scales to a 720x1280 mobile frame (TikTok/Reels canonical).
+
+    `"9:16_hud"` is NOT handled here — it needs `-filter_complex` via
+    `build_hud_aspect_filter_complex`. Callers must branch before using
+    this helper.
     """
     if aspect == "9:16":
         return "crop=ih*9/16:ih:(iw-ih*9/16)/2:0,scale=720:1280"
-    return ""  # 16:9 / passthrough
+    return ""  # 16:9 / passthrough / unknown
+
+
+def validate_edit_aspect(aspect: str, *, hud_enabled: bool) -> None:
+    """Raise ValueError when `aspect` is not allowed under current flags.
+
+    Pure — flag is injected by the caller (router / apply_*). Does not
+    read settings. Legacy aspects are always allowed.
+    """
+    if aspect == HUD_ASPECT and not hud_enabled:
+        raise ValueError(
+            "aspect '9:16_hud' requires HUD_ASPECT_ENABLED=true "
+            "(set the flag in config / .env to enable the HUD layout)"
+        )
+
+
+def hud_caption_segments(segments: list[dict]) -> list[dict]:
+    """Copy segments, injecting top-band `y_position` unless already set.
+
+    Explicit `style.y_position` always wins. Used only for `9:16_hud` so
+    default bottom captions do not land on the ability bar / minimap.
+    """
+    out: list[dict] = []
+    for s in segments or []:
+        s = dict(s)
+        style = dict(s.get("style") or {})
+        if "y_position" not in style:
+            style["y_position"] = HUD_CAPTION_Y
+            s["style"] = style
+        out.append(s)
+    return out
 
 
 def zoom_upscale_filter(*, scale_to_1080p: bool, aspect: str) -> str:
@@ -77,12 +119,12 @@ def zoom_upscale_filter(*, scale_to_1080p: bool, aspect: str) -> str:
     1920x1080 when factor is 2.0 with a center crop of a 1080p source —
     factor 1.5 yields 2560x1440, so later fixed-fontsize captions look
     tiny. Flag on: scale the cropped frame to height 1080 (width
-    auto, lanczos). For `9:16`, return "" — `aspect_filter` already
-    scales to 720x1280.
+    auto, lanczos). For `9:16` / `9:16_hud`, return "" — those paths
+    already target 720x1280 via aspect_filter or cropped_hud_9x16.
     """
     if not scale_to_1080p:
         return "scale=iw*2:ih*2"
-    if aspect == "9:16":
+    if aspect in ("9:16", HUD_ASPECT):
         return ""
     return "scale=-2:1080:flags=lanczos"
 
@@ -90,6 +132,28 @@ def zoom_upscale_filter(*, scale_to_1080p: bool, aspect: str) -> str:
 # Base 9:16 output resolution — TikTok / Reels / Shorts canonical.
 _SHORT_WIDTH = 720
 _SHORT_HEIGHT = 1280
+
+
+def build_hud_aspect_filter_complex(
+    effect_vf: str,
+    *,
+    game: str | None = None,
+) -> str:
+    """Chain a linear `-vf` effect into `cropped_hud_9x16` (filter_complex).
+
+    Pure filter builder — reuses the existing HUD layout; does not
+    duplicate overlay geometry. `effect_vf` is a comma-joined chain with
+    no labels (e.g. crop+scale, drawtext, geq). Empty / ``"null"`` skips
+    the effect and returns the HUD graph alone.
+
+    Entry is still driven from input 0; exit label is ``[out]``.
+    """
+    hud = cropped_hud_9x16(game=game)
+    if not effect_vf or effect_vf == "null":
+        return hud
+    # Apply the effect once, then feed that stream into the HUD graph
+    # (which otherwise starts at [0:v]).
+    return f"[0:v]{effect_vf}[fx];" + hud.replace("[0:v]", "[fx]", 1)
 
 
 def cropped_hud_9x16(
@@ -552,6 +616,34 @@ def _src_args(asset_path: str, start: float, end: float) -> list[str]:
     return ["-ss", str(start), "-i", asset_path, "-t", str(dur)]
 
 
+def _apply_with_hud(
+    asset_path: str,
+    out_path: str,
+    *,
+    start: float,
+    end: float,
+    effect_vf: str,
+    game: str | None,
+) -> tuple[bool, str | None]:
+    """Run `effect_vf` then `cropped_hud_9x16` via `-filter_complex`."""
+    fc = build_hud_aspect_filter_complex(effect_vf, game=game)
+    cmd = [
+        settings.ffmpeg_path,
+        "-y",
+        *_src_args(asset_path, start, end),
+        "-filter_complex",
+        fc,
+        "-map",
+        "[out]",
+        "-map",
+        "0:a?",
+        "-c:a",
+        "copy",
+        out_path,
+    ]
+    return _run_ffmpeg(cmd)
+
+
 def apply_zoom(
     asset_path: str,
     out_path: str,
@@ -561,6 +653,7 @@ def apply_zoom(
     factor: float,
     roi: str | dict,
     aspect: str,
+    game: str | None = None,
     scale_to_1080p: bool = False,
 ) -> tuple[bool, str | None]:
     w, h, x, y = resolve_roi(roi, factor)
@@ -568,6 +661,15 @@ def apply_zoom(
     up = zoom_upscale_filter(scale_to_1080p=scale_to_1080p, aspect=aspect)
     if up:
         chain.append(up)
+    if aspect == HUD_ASPECT:
+        return _apply_with_hud(
+            asset_path,
+            out_path,
+            start=start,
+            end=end,
+            effect_vf=",".join(chain),
+            game=game,
+        )
     tail = aspect_filter(aspect)
     if tail:
         chain.append(tail)
@@ -592,8 +694,20 @@ def apply_caption(
     end: float,
     segments: list[dict],
     aspect: str,
+    game: str | None = None,
 ) -> tuple[bool, str | None]:
-    chain = [caption_filters(segments, clip_start_offset=start)]
+    segs = hud_caption_segments(segments) if aspect == HUD_ASPECT else segments
+    caps = caption_filters(segs, clip_start_offset=start)
+    if aspect == HUD_ASPECT:
+        return _apply_with_hud(
+            asset_path,
+            out_path,
+            start=start,
+            end=end,
+            effect_vf=caps or "null",
+            game=game,
+        )
+    chain = [caps]
     tail = aspect_filter(aspect)
     if tail:
         chain.append(tail)
@@ -622,6 +736,7 @@ def apply_focus(
     r_frac: float,
     dim: float,
     aspect: str,
+    game: str | None = None,
 ) -> tuple[bool, str | None]:
     """Spotlight: dim the frame to `dim` brightness everywhere except a
     soft circle at (x_frac, y_frac) of radius `r_frac` x min(iw,ih).
@@ -632,7 +747,12 @@ def apply_focus(
     rr = f"(min(iw,ih)*{r_frac})"
     # Inside circle → 1.0, outside → `dim`. Linear falloff on the edge.
     mask = f"if(lt(hypot(X-{cx},Y-{cy}),{rr}),lum(X,Y),lum(X,Y)*{dim})"
-    chain = [f"geq=lum='{mask}':cb=cb:cr=cr"]
+    effect = f"geq=lum='{mask}':cb=cb:cr=cr"
+    if aspect == HUD_ASPECT:
+        return _apply_with_hud(
+            asset_path, out_path, start=start, end=end, effect_vf=effect, game=game
+        )
+    chain = [effect]
     tail = aspect_filter(aspect)
     if tail:
         chain.append(tail)

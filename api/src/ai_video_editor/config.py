@@ -23,8 +23,8 @@ class Settings(BaseSettings):
     # lands on 1920x1080 when factor is 2.0 (center ROI on 1080p); other
     # factors leave oversized frames so fixed-fontsize captions look tiny.
     # When True, scale the crop to height 1080 (lanczos) instead. Skipped
-    # for 9:16 — aspect_filter already targets 720x1280. Default off keeps
-    # byte-for-byte legacy behavior until Noodlz opts in.
+    # for 9:16 / 9:16_hud — those paths already target 720x1280. Default
+    # off keeps byte-for-byte legacy behavior until Noodlz opts in.
     zoom_scale_to_1080p_enabled: bool = False
 
     # ffmpeg's drawtext filter needs an explicit font file on Windows
@@ -396,6 +396,12 @@ class Settings(BaseSettings):
     shorts_beat_flash_source: str = "kills"
     shorts_beat_flash_intensity: float = 0.2
     shorts_beat_flash_duration_seconds: float = 0.10
+
+    # Per-clip edit aspect "9:16_hud" — after the effect, run the existing
+    # cropped_hud_9x16 layout (LoL / Valorant) instead of a plain center
+    # crop. Default off so legacy 16:9 / 9:16 paths stay unchanged; when
+    # off, requests with aspect=9:16_hud get a 400.
+    hud_aspect_enabled: bool = False
 
     # Clip intensity scorer (intensity.py). Raw weights; the score is
     # clamped to [0, 1] so they only need to be relative to each other.

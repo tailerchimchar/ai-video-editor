@@ -269,9 +269,10 @@ def zoom_clip(
     aspect: str = "16:9",
 ) -> dict:
     """Zoom in on part of a clip's frame. `roi` can be 'center',
-    'scoreline_lol', 'minimap_lol', or 'full'. `aspect` is '16:9' or
-    '9:16' (TikTok/Reels vertical). Renders a new .mp4 to
-    WORKSPACE/edits/."""
+    'scoreline_lol', 'minimap_lol', or 'full'. `aspect` is '16:9',
+    '9:16' (center-crop vertical), or '9:16_hud' (HUD-preserving
+    vertical; requires HUD_ASPECT_ENABLED on the API). Renders a new
+    .mp4 to WORKSPACE/edits/."""
     return _edit(
         "zoom",
         {
@@ -297,7 +298,8 @@ def caption_clip(
     pulls the transcript segments overlapping [start, end] from the DB
     and draws each at its real time (TikTok-style auto-captions).
     Requires the asset to have been transcribed first if you want the
-    auto path."""
+    auto path. `aspect` is '16:9', '9:16', or '9:16_hud' (HUD layout;
+    requires HUD_ASPECT_ENABLED — defaults caption y to the top band)."""
     return _edit(
         "caption",
         {
@@ -323,7 +325,8 @@ def focus_clip(
 ) -> dict:
     """Spotlight effect: darken the frame and leave a soft circle of
     normal brightness at fractional position (x, y) with radius
-    `radius * min(w, h)`. `dim` is the outside-circle brightness (0..1)."""
+    `radius * min(w, h)`. `dim` is the outside-circle brightness (0..1).
+    `aspect` is '16:9', '9:16', or '9:16_hud' (requires HUD_ASPECT_ENABLED)."""
     return _edit(
         "focus",
         {
@@ -2003,7 +2006,8 @@ def caption_video(
         side by placing them at slightly different X positions via
         the style's y_position and letting drawtext auto-center each).
 
-    `aspect`: '9:16', '16:9', or 'source' (no aspect change).
+    `aspect`: '9:16', '16:9', 'source' (no aspect change), or
+    '9:16_hud' (HUD-preserving vertical; requires HUD_ASPECT_ENABLED).
 
     Output: `WORKSPACE/captions/<name>.mp4`. Sync -- returns the path
     when the encode finishes (~5-20s depending on clip length).

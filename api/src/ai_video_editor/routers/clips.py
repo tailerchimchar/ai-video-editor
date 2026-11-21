@@ -378,7 +378,16 @@ class CaptionVideoBody(BaseModel):
     name: str | None = Field(default=None)
     aspect: str = Field(
         default="9:16",
-        description="Output aspect: '9:16', '16:9', or 'source' (no change).",
+        description=(
+            "Output aspect: '9:16', '16:9', 'source' (no change), or "
+            "'9:16_hud' (HUD-preserving vertical; requires HUD_ASPECT_ENABLED)."
+        ),
+    )
+    game: str | None = Field(
+        default=None,
+        description=(
+            "Game name for '9:16_hud' layout variant (Valorant vs LoL). Ignored for other aspects."
+        ),
     )
 
 
@@ -392,6 +401,13 @@ async def caption_video_by_path(body: CaptionVideoBody):
     at the same timestamp can use different fonts (emoji glyph on the
     left, text on the right).
     """
+    from ..edits import validate_edit_aspect
+
+    try:
+        validate_edit_aspect(body.aspect, hud_enabled=settings.hud_aspect_enabled)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
     src = Path(body.source_path)
     if not src.is_file():
         raise HTTPException(404, f"source not found: {src}")
@@ -421,6 +437,7 @@ async def caption_video_by_path(body: CaptionVideoBody):
         end=duration,
         segments=segments,
         aspect=body.aspect,
+        game=body.game,
     )
     if not ok:
         raise HTTPException(500, f"caption failed: {(err or '')[:500]}")

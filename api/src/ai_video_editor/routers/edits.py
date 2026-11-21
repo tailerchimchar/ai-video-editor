@@ -83,7 +83,7 @@ from ..compile_journal import (
 )
 from ..config import settings
 from ..database import get_db
-from ..edits import apply_caption, apply_focus, apply_zoom
+from ..edits import apply_caption, apply_focus, apply_zoom, validate_edit_aspect
 from ..feedback import log_event as _log_feedback
 from ..intros import (
     get_default_intro_name,
@@ -120,12 +120,20 @@ def _out_path(asset_filename: str, kind: str) -> str:
     return (folder / f"{kind}_{ts}.mp4").as_posix()
 
 
+def _require_aspect(aspect: str) -> None:
+    """400 when aspect is gated off (injects HUD_ASPECT_ENABLED)."""
+    try:
+        validate_edit_aspect(aspect, hud_enabled=settings.hud_aspect_enabled)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
 # --- shared request shape ---
 class _BaseEditRequest(BaseModel):
     asset_id: str
     start_seconds: float = Field(0.0, ge=0.0)
     end_seconds: float = Field(..., gt=0.0)
-    aspect: Literal["16:9", "9:16"] = "16:9"
+    aspect: Literal["16:9", "9:16", "9:16_hud"] = "16:9"
 
 
 class ZoomRequest(_BaseEditRequest):
@@ -201,6 +209,7 @@ async def _enqueue_edit(asset_id: str, kind: str) -> tuple[dict, str, str, str]:
 async def zoom(req: ZoomRequest):
     if req.end_seconds <= req.start_seconds:
         raise HTTPException(400, "end_seconds must be greater than start_seconds")
+    _require_aspect(req.aspect)
     asset, job_id, edit_id, out_path = await _enqueue_edit(req.asset_id, "zoom")
     params = req.model_dump()
 
@@ -213,6 +222,7 @@ async def zoom(req: ZoomRequest):
             factor=req.factor,
             roi=req.roi,
             aspect=req.aspect,
+            game=asset.get("game"),
             scale_to_1080p=settings.zoom_scale_to_1080p_enabled,
         )
 
@@ -224,6 +234,7 @@ async def zoom(req: ZoomRequest):
 async def caption(req: CaptionRequest):
     if req.end_seconds <= req.start_seconds:
         raise HTTPException(400, "end_seconds must be greater than start_seconds")
+    _require_aspect(req.aspect)
     asset, job_id, edit_id, out_path = await _enqueue_edit(req.asset_id, "caption")
 
     # Default: auto-pull transcript segments overlapping the clip window.
@@ -259,6 +270,7 @@ async def caption(req: CaptionRequest):
             end=req.end_seconds,
             segments=segments,
             aspect=req.aspect,
+            game=asset.get("game"),
         )
 
     _track(_run_edit_job(job_id, edit_id, asset, "caption", params, out_path, work))
@@ -269,6 +281,7 @@ async def caption(req: CaptionRequest):
 async def focus(req: FocusRequest):
     if req.end_seconds <= req.start_seconds:
         raise HTTPException(400, "end_seconds must be greater than start_seconds")
+    _require_aspect(req.aspect)
     asset, job_id, edit_id, out_path = await _enqueue_edit(req.asset_id, "focus")
     params = req.model_dump()
 
@@ -283,6 +296,7 @@ async def focus(req: FocusRequest):
             r_frac=req.radius,
             dim=req.dim,
             aspect=req.aspect,
+            game=asset.get("game"),
         )
 
     _track(_run_edit_job(job_id, edit_id, asset, "focus", params, out_path, work))
