@@ -79,6 +79,58 @@ class Settings(BaseSettings):
     grokbot_queue_depth_cap: int = 10
     grokbot_execute_plans: bool = False
     grokbot_record_verdicts: bool = False
+    # Player name check mode: off (skip), warn (log and continue), block (fail).
+    # Default is off (name check disabled).
+    grokbot_player_name_check: Literal["off", "warn", "block"] = "off"
+    # Path to a local file with player names (one per line) to check in digests.
+    # Gitignored, kept on PC. Only used when grokbot_player_name_check != off.
+    grokbot_player_names_path: str = ""
+
+    # Box render: headless Linux box that renders edit plans from Drive clips.
+    # HIGH RISK: These settings control cloud rendering and auto-cleanup.
+    # Off by default — set GROKBOT_BOX_RENDER_ENABLED=true on the box only.
+    # GROKBOT_BOX_SCRATCH_DIR: local temp directory for downloaded clips and
+    # intermediate render outputs. Cleaned ONLY after successful upload.
+    # GROKBOT_BOX_FINISHED_FOLDER: Drive subfolder for uploaded finished videos.
+    grokbot_box_render_enabled: bool = False
+    grokbot_box_scratch_dir: Path | None = None
+    grokbot_box_finished_folder: str = "finished"
+    grokbot_box_lock_file: str = "/tmp/ai-video-editor-box-render.lock"
+    grokbot_box_download_timeout: float = 300.0
+    grokbot_box_render_timeout: float = 600.0
+
+    # Quality gate: optional post-render check using VLM + Jev scoring.
+    # Off by default to preserve existing render flow unchanged.
+    grokbot_quality_gate_enabled: bool = False
+    # Max frames sampled per render for the vision pass (at most 6).
+    grokbot_quality_gate_max_frames: int = 6
+    # Max pixel width for sampled frames (512 keeps token cost low).
+    grokbot_quality_gate_frame_max_width: int = 512
+    # Confidence threshold: only confident fails trigger revisions.
+    grokbot_quality_gate_confidence_threshold: float = 0.7
+    # Max retries per criterion before routing to owner approval.
+    grokbot_quality_gate_max_retries: int = 2
+    # Daily cap on quality gate VLM calls. 0 or negative = gate disabled.
+    # Default 100 allows ~100 renders/day with the gate. Resets at UTC midnight.
+    grokbot_quality_gate_daily_cap: int = 100
+    # Timeout for the entire quality gate step (vision + Jev scoring).
+    grokbot_quality_gate_timeout_seconds: float = 60.0
+
+    # --- Jev ranker cascade ---
+    # Put Jev in front of Haiku as a confidence filter. Candidates where
+    # Jev is confident (keep or reject) skip the Haiku call; only unsure
+    # candidates go to Haiku. Disabled by default so the existing behavior
+    # is unchanged until the owner enables it.
+    grokbot_jev_ranker_cascade_enabled: bool = False
+    # Confidence thresholds for the Jev cascade. A candidate is "confident
+    # keep" when Jev says keep with probability >= this threshold (and
+    # likewise for reject). Candidates below threshold are unsure and go
+    # to Haiku. The 0.8 defaults are conservative: Jev must be very sure
+    # before we skip Haiku. NOTE: funny threshold mismatch - the ranker
+    # uses 0.6-0.7 for funny_score routing while bucketing uses 0.8. We
+    # do not change existing thresholds here; this is documented.
+    grokbot_jev_keep_threshold: float = 0.8
+    grokbot_jev_reject_threshold: float = 0.8
 
     # Riot API candidate source (League). Free dev key from
     # developer.riotgames.com. Source stays inert until all three are set.

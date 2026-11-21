@@ -67,6 +67,7 @@ The runner talks to the local API, so the API must be running first. Env for the
 | `GROKBOT_API_BASE_URL` | `http://127.0.0.1:8000` | where the runner reaches the API |
 | `GROKBOT_EXECUTE_PLANS` | `false` | run `edit_plan` items (phase 2); off means they are held |
 | `GROKBOT_RECORD_VERDICTS` | `false` | send quoted `verdict` items to the mentor (phase 2) |
+| `GROKBOT_BOX_RENDER_ENABLED` | `false` | gate `POST /api/v1/grokbot/render` and `run_box_render`; off returns 503 / disabled |
 | `GROKBOT_RUNNER_POLL_SECONDS` | `60` | how often the runner pulls the queue |
 | `GROKBOT_HEARTBEAT_SECONDS` | `300` | heartbeat cadence (its own thread, never blocked by a render) |
 | `GROKBOT_QUEUE_DEPTH_CAP` | `10` | pending items before a `queue.depth` warning |

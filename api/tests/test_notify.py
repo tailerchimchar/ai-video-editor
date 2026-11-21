@@ -200,7 +200,10 @@ def test_live_env_webhook_is_blanked_by_test_isolation(tmp_path, monkeypatch):
 
     fake_env = tmp_path / ".env"
     fake_env.write_text(
-        "GROKBOT_WEBHOOK_URL=https://lead.example/hook\nGROKBOT_WEBHOOK_KEY=live\n",
+        "GROKBOT_WEBHOOK_URL=https://lead.example/hook\n"
+        "GROKBOT_WEBHOOK_KEY=live\n"
+        f"OUTPLAYED_MEDIA_DIR={tmp_path}\n"
+        f"WORKSPACE_DIR={tmp_path}\n",
         encoding="utf-8",
     )
     loaded = Settings(_env_file=fake_env)  # type: ignore[call-arg]

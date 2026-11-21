@@ -146,3 +146,9 @@ _thumbnails/
 
 # superpowers SDD workspace (ledgers, briefs, reports)
 .superpowers/
+
+# Player names list for grokbot publish privacy gate (kept only on PC).
+# The file is never committed; only the .example template is tracked.
+player-names.txt
+**/player-names.txt
+!**/player-names.example.txt

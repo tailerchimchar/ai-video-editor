@@ -323,6 +323,7 @@ _PLUMBING_TOOLS = frozenset(
         "list_highlights_clips",
         "list_highlights_sessions",
         "list_outplayed_clips",
+        "submit_box_render",
     }
 )
 

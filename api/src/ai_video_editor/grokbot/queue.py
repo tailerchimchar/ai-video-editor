@@ -28,6 +28,7 @@ from ..edit_plan import (
     PlanEffect,
     PlanMusic,
     PlanSfx,
+    QualityCriterion,
     Rejected,
     SourceClip,
 )
@@ -95,6 +96,10 @@ class _StrictRejected(Rejected):
     model_config = ConfigDict(extra="forbid")
 
 
+class _StrictQualityCriterion(QualityCriterion):
+    model_config = ConfigDict(extra="forbid")
+
+
 class StrictEditPlan(EditPlan):
     model_config = ConfigDict(extra="forbid")
 
@@ -104,6 +109,7 @@ class StrictEditPlan(EditPlan):
     cards: list[_StrictPlanCard] = Field(default_factory=list)
     sfx: list[_StrictPlanSfx] = Field(default_factory=list)
     rejected: list[_StrictRejected] = Field(default_factory=list)
+    quality_criteria: list[_StrictQualityCriterion] = Field(default_factory=list)
 
 
 # `copy` shadows BaseModel.copy on purpose (the bots' JSON contract); keep
@@ -177,8 +183,52 @@ class WakeItem(Envelope):
     kind: Literal["wake"]
 
 
+class RenderClip(_Strict):
+    """One clip in a render_request, identified by Drive file id."""
+
+    clip_ref: str
+    drive_id: str
+    start_s: float = 0.0
+    end_s: float = 0.0
+
+
+class RenderRequestItem(Envelope):
+    """Box render job: render an edit plan from Drive clips.
+
+    Written by the Editor. The box downloads clips by drive_id, renders
+    both 9:16 and 16:9 outputs, uploads to Drive, and emits video.rendered.
+    """
+
+    kind: Literal["render_request"]
+    asset_id: str
+    edit_plan_id: str
+    edit_plan_version: str
+    game: str = Field(pattern=r"^[a-z][a-z0-9_]{0,31}$")
+    clips: list[RenderClip]
+    concat_order: list[str]
+    music_song_id: str | None = None
+
+    @model_validator(mode="after")
+    def _check_clips(self) -> RenderRequestItem:
+        if not self.clips:
+            raise ValueError("at least one clip required")
+        refs = [c.clip_ref for c in self.clips]
+        if len(refs) != len(set(refs)):
+            raise ValueError("duplicate clip_ref")
+        for ref in self.concat_order:
+            if ref not in refs:
+                raise ValueError(f"concat_order references unknown clip_ref: {ref}")
+        return self
+
+
 QueueItem = Annotated[
-    EditPlanItem | PreviewRequestItem | VerdictItem | DeployItem | SleepItem | WakeItem,
+    EditPlanItem
+    | PreviewRequestItem
+    | VerdictItem
+    | DeployItem
+    | SleepItem
+    | WakeItem
+    | RenderRequestItem,
     Field(discriminator="kind"),
 ]
 

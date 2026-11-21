@@ -66,6 +66,19 @@ class Rejected(BaseModel):
     why: str
 
 
+class QualityCriterion(BaseModel):
+    """A quality criterion the Editor wants checked after render.
+
+    Visual-led criteria are scored from sampled frames; audio-led criteria
+    are scored from digest moment labels and metadata only (never fails
+    on frames alone).
+    """
+
+    id: str
+    text: str
+    audio_led: bool = False
+
+
 class EditPlan(BaseModel):
     format: str
     source_clips: list[SourceClip] = Field(default_factory=list)
@@ -75,6 +88,7 @@ class EditPlan(BaseModel):
     cards: list[PlanCard] = Field(default_factory=list)
     sfx: list[PlanSfx] = Field(default_factory=list)
     rejected: list[Rejected] = Field(default_factory=list)
+    quality_criteria: list[QualityCriterion] = Field(default_factory=list)
 
 
 def discover_sfx_names() -> set[str]:
