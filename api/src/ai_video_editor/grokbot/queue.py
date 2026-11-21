@@ -28,6 +28,7 @@ from ..edit_plan import (
     PlanEffect,
     PlanMusic,
     PlanSfx,
+    QualityCriterion,
     Rejected,
     SourceClip,
 )
@@ -95,6 +96,10 @@ class _StrictRejected(Rejected):
     model_config = ConfigDict(extra="forbid")
 
 
+class _StrictQualityCriterion(QualityCriterion):
+    model_config = ConfigDict(extra="forbid")
+
+
 class StrictEditPlan(EditPlan):
     model_config = ConfigDict(extra="forbid")
 
@@ -104,6 +109,14 @@ class StrictEditPlan(EditPlan):
     cards: list[_StrictPlanCard] = Field(default_factory=list)
     sfx: list[_StrictPlanSfx] = Field(default_factory=list)
     rejected: list[_StrictRejected] = Field(default_factory=list)
+    quality_criteria: list[_StrictQualityCriterion] = Field(default_factory=list, max_length=10)
+
+    @model_validator(mode="after")
+    def _unique_quality_criteria_ids(self) -> StrictEditPlan:
+        ids = [c.id for c in self.quality_criteria]
+        if len(ids) != len(set(ids)):
+            raise ValueError("quality_criteria ids must be unique")
+        return self
 
 
 # `copy` shadows BaseModel.copy on purpose (the bots' JSON contract); keep
