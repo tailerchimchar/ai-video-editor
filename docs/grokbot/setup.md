@@ -108,6 +108,8 @@ On day one only previews, sleep and wake are executed. Edit plans, verdicts and 
 
 ## 10. After each panel round
 
+Round folders are named `YYYY-MM-DD_HHMM_<champion>_<K-D-A>` (date and local start time of the recording, champion, KDA), e.g. `2026-11-19_0145_zeri_9-5-6`. Drive mirrors that: `clips/<round>/` and `digests/<date>/`; `previews/` is flat (the 7-day prune reads it).
+
 After each panel round, run this from the `api` folder (the API must be running when you pass a compilation id):
 
 ```

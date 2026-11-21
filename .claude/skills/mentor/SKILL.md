@@ -175,5 +175,6 @@ their typed JSON, then loads THIS file and applies it as policy.
 - Every rule in this file is Valorant-learned until a dated LoL entry
   says otherwise. When a LoL lesson lands, add it under "How to update
   this file" with the game named.
-- When the Grok team is on, publish the round after the chair decides: `uv run grokbot-publish-round <round folder> --game league [--compilation-id <id>] [--asset-id <id>]` from `api/` (see `docs/grokbot/setup.md` section 10).
+- Round folder name (chair creates it under `WORKSPACE/panel/`): `YYYY-MM-DD_HHMM_<champion>_<K-D-A>`, e.g. `2026-11-19_0145_zeri_9-5-6`. Date and local start time of the recording (from the highlights session folder, `11-19-2026_1h45` -> `2026-11-19_0145`), champion lower-case, KDA at the end. Two games of the same champion on one day never collide. Drive mirrors it: `clips/<round>/`, `digests/<date>/`.
+- When the Grok team is on, publish the round after the chair decides: `uv run grokbot-publish-round <round folder> --game league --clips-dir "<highlights session folder>" [--compilation-id <id>] [--asset-id <id>]` from `api/` (see `docs/grokbot/setup.md` section 10).
 - 2026-11-19 (League, first panel round): the chair held one LoL tie for Noodlz (9m41s "Diana" gripe: gaming-expert 1/5 vs viewer-expert pass). The VLM critic hears nothing, so for voice-comms shorts its dead_air flags on talk-only tails are advisory, not blocking. Panel agents need the Write tool to file their JSON; fixed in .claude/agents.
