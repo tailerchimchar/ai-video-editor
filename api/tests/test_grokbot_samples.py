@@ -30,7 +30,7 @@ def test_digest_sample_is_valid_digest():
     assert digest.round == "2026-11-20_dryrun"
     assert len(digest.clips) == 3
 
-    # Verify padding fields are present
+    # Suggested padding fields are present (Drive file still covers start_s..end_s)
     for clip in digest.clips:
         assert clip.padded_start_s is not None
         assert clip.padded_end_s is not None
@@ -38,8 +38,8 @@ def test_digest_sample_is_valid_digest():
         assert clip.moment_end_s == clip.end_s
 
 
-def test_digest_sample_clips_have_correct_padding():
-    """The sample digest clips have correct 10-second padding."""
+def test_digest_sample_clips_have_correct_suggested_padding():
+    """The sample digest clips have correct 10-second suggested padding."""
     sample = json.loads((SAMPLES_DIR / "digest_sample.json").read_text())
     digest = Digest.model_validate(sample)
 

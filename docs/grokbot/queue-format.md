@@ -180,7 +180,7 @@ Sent when a panel round's digest and clips have been successfully uploaded to Dr
 
 **A null `asset_id`** means no `preview_request` can be made for this round. The Lead should ask Noodlz for the asset id if previews are needed.
 
-**A null `drive.digest` or null values in `drive.clips`** when an uploader is configured indicates an upload failure. In that case `round.publish_failed` is sent instead and `round.published` is never emitted.
+**A null `drive.digest` or null values in `drive.clips`** when an uploader is configured usually means a missing local file or an upload that returned no id. With `GROKBOT_STRICT_UPLOAD_GATE=true`, a real upload exception instead emits `round.publish_failed` and never sends `round.published`. With the flag off (default), `round.published` still ships and null ids remain in the payload.
 
 Example:
 
@@ -210,7 +210,7 @@ Example:
 
 ### round.publish_failed
 
-Sent when publishing fails for any reason. When this event is sent, `round.published` is NOT sent. The round is incomplete and should not be processed.
+Sent when publishing fails for a names-file error (block mode) or, with `GROKBOT_STRICT_UPLOAD_GATE=true`, when a Drive upload fails. When this event is sent, `round.published` is NOT sent. Privacy refusals (`DigestLeakError`, `PlayerNameLeakError`) exit without emitting this event.
 
 | field | type | meaning |
 |---|---|---|
@@ -226,9 +226,9 @@ Sent when publishing fails for any reason. When this event is sent, `round.publi
 |---|---|
 | `names_file_missing` | The player names file does not exist (block mode only) |
 | `names_file_unreadable` | The player names file exists but could not be read (block mode only) |
-| `upload failed` | A Drive upload failed |
+| `upload failed` | A Drive upload failed (`GROKBOT_STRICT_UPLOAD_GATE=true` only) |
 
-**Note:** The `names_file_missing` and `names_file_unreadable` reasons only occur when `GROKBOT_PLAYER_NAME_CHECK=block`. In `off` (default) or `warn` modes, a missing or unreadable file does not block publishing.
+**Note:** The `names_file_missing` and `names_file_unreadable` reasons only occur when `GROKBOT_PLAYER_NAME_CHECK=block`. In `off` (default) or `warn` modes, a missing or unreadable file does not block publishing. The `upload failed` reason and this event for uploads only occur when `GROKBOT_STRICT_UPLOAD_GATE=true` (default off).
 
 Example (upload failure):
 
@@ -342,8 +342,8 @@ Each digest clip has two sets of time windows:
 
 | Fields | Meaning |
 |---|---|
-| `start_s`, `end_s` | The original moment window (from event detection) |
+| `start_s`, `end_s` | The window covered by the Drive/local clip file (from event detection) |
 | `moment_start_s`, `moment_end_s` | Same as above (explicit copy for clarity) |
-| `padded_start_s`, `padded_end_s` | The exported clip window (~10s padding, clamped to source bounds) |
+| `padded_start_s`, `padded_end_s` | Suggested padded window (~10s each side) for a future re-export — **not** what was uploaded |
 
-A downstream renderer can use the padded window for the actual clip file and the moment window to re-trim or center effects.
+The uploaded file still covers `start_s`..`end_s`. Nothing in publish re-cuts a padded clip. Treat `padded_*` as a hint only; do not assume the Drive file starts at `padded_start_s`.

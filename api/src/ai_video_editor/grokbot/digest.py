@@ -28,13 +28,15 @@ logger = logging.getLogger(__name__)
 class DigestClip(BaseModel):
     ref: str
     event: str
+    # The Drive/local clip file covers start_s..end_s (no padded export yet).
     start_s: float
     end_s: float
-    # The padded window (what was actually exported, clamped to source bounds).
-    # Downstream renderers can re-trim using moment_start_s/moment_end_s.
+    # Suggested padded window (~10s each side) for a future re-export.
+    # Not the bytes on Drive today — those still cover start_s..end_s.
+    # Clamped to [0, source_duration] when source_duration is known; else [0, inf].
     padded_start_s: float | None = None
     padded_end_s: float | None = None
-    # The original moment window before padding (the event detection's window).
+    # Explicit copy of the moment window (same as start_s/end_s).
     moment_start_s: float | None = None
     moment_end_s: float | None = None
     panel: dict[str, Any] = Field(default_factory=dict)
@@ -100,10 +102,11 @@ def build_digest(
     Args:
         round_dir: Path to the round folder containing clips.json and expert JSONs.
         game: Game identifier (league, valorant).
-        padding_seconds: Seconds to pad on each side of each clip (default 10).
+        padding_seconds: Seconds to suggest on each side of each clip (default 10).
+            These populate padded_* fields only; the uploaded file is not re-cut.
         source_duration: Total duration of the source recording in seconds.
-            If provided, padded windows are clamped to [0, source_duration].
-            If None, padded windows are clamped to [0, inf].
+            If provided, suggested padded windows are clamped to [0, source_duration].
+            If None, suggested padded windows are clamped to [0, inf].
     """
     clips = _load(round_dir / "clips.json")
     clips = clips if isinstance(clips, list) else []

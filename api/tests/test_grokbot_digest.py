@@ -109,8 +109,8 @@ def test_digest_carries_optional_compilation_fields():
     assert (d2.compilation_id, d2.compilation_version) == ("c", "2")
 
 
-def test_build_digest_includes_padded_and_moment_windows(fixture_round):
-    """Digest clips include padded_start_s/padded_end_s and moment_start_s/moment_end_s."""
+def test_build_digest_includes_suggested_padded_and_moment_windows(fixture_round):
+    """Digest clips include suggested padded_* and moment_* fields (file still covers start/end)."""
     d = dg.build_digest(fixture_round, game="lol")
 
     for clip in d.clips:
@@ -120,8 +120,8 @@ def test_build_digest_includes_padded_and_moment_windows(fixture_round):
         assert clip.moment_end_s == clip.end_s
 
 
-def test_build_digest_pads_by_10_seconds_default(fixture_round):
-    """Default padding is 10 seconds on each side."""
+def test_build_digest_suggests_10_seconds_padding_default(fixture_round):
+    """Default suggested padding is 10 seconds on each side."""
     d = dg.build_digest(fixture_round, game="lol")
     clip = d.clips[0]
 
@@ -130,8 +130,8 @@ def test_build_digest_pads_by_10_seconds_default(fixture_round):
     assert clip.padded_end_s == clip.end_s + 10.0
 
 
-def test_build_digest_clamps_padding_to_zero(fixture_round):
-    """Padded start never goes below 0."""
+def test_build_digest_clamps_suggested_padding_to_zero(fixture_round):
+    """Suggested padded start never goes below 0."""
     import json
 
     clips = json.loads((fixture_round / "clips.json").read_text())
@@ -143,8 +143,8 @@ def test_build_digest_clamps_padding_to_zero(fixture_round):
     assert d.clips[0].padded_start_s == 0.0  # Clamped
 
 
-def test_build_digest_clamps_padding_to_source_duration(fixture_round):
-    """When source_duration is provided, padded end is clamped to it."""
+def test_build_digest_clamps_suggested_padding_to_source_duration(fixture_round):
+    """When source_duration is provided, suggested padded end is clamped to it."""
     d = dg.build_digest(fixture_round, game="lol", source_duration=900.0)
     clip = d.clips[0]
 
@@ -153,8 +153,8 @@ def test_build_digest_clamps_padding_to_source_duration(fixture_round):
     assert clip.padded_end_s == 900.0
 
 
-def test_build_digest_custom_padding(fixture_round):
-    """Padding can be customized."""
+def test_build_digest_custom_suggested_padding(fixture_round):
+    """Suggested padding can be customized."""
     d = dg.build_digest(fixture_round, game="lol", padding_seconds=5.0)
     clip = d.clips[0]
 

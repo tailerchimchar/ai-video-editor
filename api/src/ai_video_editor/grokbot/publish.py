@@ -11,9 +11,11 @@ Privacy gate: when the round has a `transcript.json`, a digest that leaks
 any transcript fragment is refused before anything is uploaded. A clip file
 outside WORKSPACE_DIR / OUTPLAYED_MEDIA_DIR is never uploaded.
 
-Upload gate: if any clip upload or the digest upload fails when an uploader
-is configured, `round.published` is never sent. Instead `round.publish_failed`
-is emitted so consumers know the round is incomplete.
+Upload gate (opt-in via GROKBOT_STRICT_UPLOAD_GATE): if any clip upload or
+the digest upload fails when an uploader is configured, `round.published` is
+never sent. Instead `round.publish_failed` is emitted so consumers know the
+round is incomplete. With the flag off (default), failed uploads still emit
+`round.published` with null Drive ids (historical behaviour).
 """
 
 from __future__ import annotations
@@ -35,8 +37,6 @@ from .paths import inside
 
 logger = logging.getLogger(__name__)
 
-CLIP_PADDING_SECONDS = 10.0
-
 
 def _default_player_names_path() -> Path:
     """Return the conventional repo-relative path for the player names file.
@@ -52,8 +52,9 @@ def _default_player_names_path() -> Path:
 def _load_player_names(path: Path) -> tuple[set[str], str | None]:
     """Load player names from a local file (one name per line).
 
-    Returns (names, error_reason). When the file is missing or unreadable,
-    returns (empty set, reason) to block publishing (fail closed).
+    Blank lines and lines whose first non-whitespace char is `#` are skipped
+    (comments). Returns (names, error_reason). When the file is missing or
+    unreadable, returns (empty set, reason) to block publishing (fail closed).
     """
     if not path.is_file():
         logger.error(
@@ -62,7 +63,12 @@ def _load_player_names(path: Path) -> tuple[set[str], str | None]:
         return set(), "names_file_missing"
     try:
         text = path.read_text(encoding="utf-8")
-        names = {line.strip().casefold() for line in text.splitlines() if line.strip()}
+        names: set[str] = set()
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            names.add(stripped.casefold())
         logger.info("publish: loaded %d player names from %s", len(names), path)
         return names, None
     except OSError as e:
@@ -140,6 +146,18 @@ def _clip_path(round_dir: Path, file: str) -> Path:
     return p if p.is_absolute() else round_dir / p
 
 
+def _drive_clip_name(round_dir: Path, ref: str, path: Path) -> str:
+    """Name used for the Drive upload of one clip.
+
+    Default (flag off): the source basename. With grokbot_drive_clip_rename,
+    `<round>-<ref><suffix>` so flat clips/ folders do not collide across rounds.
+    Always preserves the source suffix (never forces .mp4).
+    """
+    if settings.grokbot_drive_clip_rename:
+        return f"{round_dir.name}-{ref}{path.suffix}"
+    return path.name
+
+
 def _upload(
     uploader: Uploader | None, path: Path, name: str, subfolder: str
 ) -> tuple[str | None, bool]:
@@ -198,23 +216,20 @@ def publish_round(
     compilation's current plan version when `compilation_id` is given.
 
     `player_names_path`: path to a local file with player names (one per line).
-    Behavior depends on `name_check_mode`:
+    Behaviour depends on settings.grokbot_player_name_check:
     - "off": skip the check entirely, file not required
     - "warn": check if file exists, log warning on match, publish anyway
     - "block": block on match (exit 3) or missing/unreadable file (exit 5)
     When None, defaults to the conventional repo-relative path (api/player-names.txt).
 
-    `name_check_mode`: "off", "warn", or "block". Defaults to settings value.
-
     Raises:
         DigestLeakError: If transcript text appears in the digest.
         PlayerNameLeakError: If a player name appears in the digest (block mode only).
         PlayerNamesFileError: If the file is missing/unreadable (block mode only).
-        PublishUploadError: If an upload fails when an uploader is configured.
+        PublishUploadError: If an upload fails when strict_upload_gate is on.
     """
     round_dir = Path(round_dir)
 
-    # Determine name check mode from settings if not explicitly passed
     check_mode = settings.grokbot_player_name_check
 
     # Privacy gate 2 (early): player names check based on mode
@@ -296,7 +311,7 @@ def publish_round(
             skipped += 1
             path = None
         if path:
-            drive_name = f"{round_dir.name}-{clip.ref}.mp4"
+            drive_name = _drive_clip_name(round_dir, clip.ref, path)
             file_id, success = _upload(uploader, path, drive_name, "clips")
             clip.drive = file_id
             if not success:
@@ -309,8 +324,12 @@ def publish_round(
     local.write_text(digest.model_dump_json(indent=2), encoding="utf-8")
     digest_id, digest_ok = _upload(uploader, local, f"{round_dir.name}-digest.json", "digests")
 
-    # If uploader is configured and any upload failed, emit failure event
-    if uploader is not None and (failed_clips or not digest_ok):
+    # Strict upload gate (opt-in): refuse round.published on any upload failure.
+    if (
+        settings.grokbot_strict_upload_gate
+        and uploader is not None
+        and (failed_clips or not digest_ok)
+    ):
         failure_payload = {
             "round": round_dir.name,
             "step": "digest" if not digest_ok else "clips",
@@ -392,6 +411,7 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(3)
     except PublishUploadError as e:
         print(f"upload failed: {e}", file=sys.stderr)
+        _flush_webhook()  # flush the round.publish_failed event
         sys.exit(4)
     except PlayerNamesFileError as e:
         print(f"names file error: {e}", file=sys.stderr)

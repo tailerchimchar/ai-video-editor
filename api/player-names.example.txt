@@ -1,6 +1,8 @@
 # Player names to check in digests (one per line, case-insensitive).
 # Copy this to player-names.txt and add your names. That file is gitignored.
 #
+# Blank lines and lines starting with # are comments and are ignored.
+#
 # This file is OPTIONAL unless GROKBOT_PLAYER_NAME_CHECK=block.
 #
 # Modes (set via GROKBOT_PLAYER_NAME_CHECK):
