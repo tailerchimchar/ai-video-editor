@@ -180,6 +180,7 @@ def isolation(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "langfuse_secret_key", "")
     monkeypatch.setattr(settings, "anthropic_api_key", "test-key")
     monkeypatch.setattr(settings, "typesafe_api_key", "test-jev-key")
+    monkeypatch.setattr(settings, "grokbot_box_render_enabled", True)
     monkeypatch.setattr(settings, "grokbot_quality_gate_enabled", True)
     monkeypatch.setattr(settings, "grokbot_quality_gate_daily_cap", 100)
     monkeypatch.setattr(settings, "grokbot_jev_ranker_cascade_enabled", True)
