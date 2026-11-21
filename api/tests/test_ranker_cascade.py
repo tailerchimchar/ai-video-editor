@@ -2,29 +2,35 @@
 
 Covers:
   - Confidence routing: confident keeps, confident rejects, unsure to Haiku
-  - Fail-safe: Jev errors or rules fallback -> unsure
+  - Fail-safe: Jev errors, non-jev backends, mass-reject -> Haiku
   - Threshold behavior
-  - Privacy boundary: box path never includes transcript fields
-  - Integration: only unsure candidates reach Haiku
-  - Cost logging
+  - Privacy boundary: box path never includes transcript in serialized body
+  - Integration: rejects skip Haiku; keeps trust Haiku keep
+  - Cost logging: never estimate dollars/tokens
 """
 
 from __future__ import annotations
 
+import json
+
+import httpx
 import pytest
 
 from ai_video_editor.config import settings
 from ai_video_editor.cost_log import CostLog
-from ai_video_editor.decisions import Answer
+from ai_video_editor.decisions import Answer, BoolQuestion, ScoreQuestion
+from ai_video_editor.decisions.backends import jev as jev_backend
 from ai_video_editor.models import RankedCandidate
 from ai_video_editor.ranker_cascade import (
     CascadeMode,
     DefaultJevScorer,
     JevScores,
+    ScorerUsage,
     build_candidate_state_box,
     build_candidate_state_pc,
     cascade_rank,
     rank_candidates_with_cascade,
+    scrub_candidate_transcripts,
     state_contains_transcript,
 )
 
@@ -66,13 +72,31 @@ def _candidate(
 class FakeJevScorer:
     """Fake Jev scorer for testing. Returns pre-configured scores."""
 
-    def __init__(self, scores: dict[str, JevScores | None]):
+    def __init__(
+        self,
+        scores: dict[str, JevScores | None],
+        *,
+        usage: ScorerUsage | None = None,
+    ):
         self.scores = scores
         self.called_with: list[dict] = []
+        self._usage = usage
 
-    def score_candidates(self, candidates: list[dict]) -> tuple[list[JevScores | None], int]:
+    def score_candidates(
+        self, candidates: list[dict]
+    ) -> tuple[list[JevScores | None], ScorerUsage]:
         self.called_with = candidates
-        return [self.scores.get(c["id"]) for c in candidates], len(candidates) * 100
+        scores = [self.scores.get(c["id"]) for c in candidates]
+        if self._usage is not None:
+            return scores, self._usage
+        usable = [s for s in scores if s is not None and not s.from_rules_fallback]
+        if not usable:
+            return scores, ScorerUsage(request_count=0, backend="rules")
+        return scores, ScorerUsage(
+            input_tokens=None,
+            request_count=len(candidates),
+            backend="jev",
+        )
 
 
 class FakeHaikuRanker:
@@ -187,6 +211,38 @@ class TestConfidenceRouting:
         assert ranked.hype_score == 0.8
         assert ranked.suggested_start_seconds == 8.0
         assert "Haiku" in ranked.reason
+
+    def test_confident_keep_trusts_haiku_drop(self):
+        """Haiku keep=False must not be overridden by Jev keep=True."""
+        candidates = [_candidate("c1", event_type="ace")]
+        scorer = FakeJevScorer({"c1": _confident_keep()})
+        ranker = FakeHaikuRanker(
+            {
+                "c1": RankedCandidate(
+                    candidate_id="c1",
+                    keep=False,
+                    funny_score=0.1,
+                    hype_score=0.1,
+                    story_score=0.1,
+                    suggested_start_seconds=10.0,
+                    suggested_end_seconds=20.0,
+                    reason="Haiku says drop this candidate",
+                )
+            }
+        )
+
+        result = cascade_rank(
+            "league",
+            candidates,
+            jev_scorer=scorer,
+            haiku_ranker=ranker,
+            keep_threshold=0.8,
+        )
+
+        assert len(result.rankings) == 1
+        assert result.rankings[0].keep is False
+        assert result.rankings[0].reason == "Haiku says drop this candidate"
+        assert result.rankings[0].funny_score == 0.1
 
     def test_confident_reject_is_dropped_entirely(self):
         candidates = [_candidate("c1"), _candidate("c2")]
@@ -307,6 +363,55 @@ class TestFailSafe:
         assert result.stats.jev_decided == 0
         assert result.stats.escalated_unsure == 1
         assert len(ranker.called_with) == 1
+
+    def test_haiku_decision_backend_marks_unsure(self):
+        """Answers with backend!=jev must not confidently keep/reject."""
+        haiku_scores = JevScores(
+            keep=True,
+            keep_probability=0.99,
+            funny_score=9,
+            hype_score=9,
+            story_score=9,
+            funny_probability=0.99,
+            hype_probability=0.99,
+            story_probability=0.99,
+            from_rules_fallback=True,  # non-jev (haiku) treated as unsure
+        )
+        candidates = [_candidate("c1", event_type="ace")]
+        scorer = FakeJevScorer({"c1": haiku_scores})
+        ranker = FakeHaikuRanker()
+
+        result = cascade_rank(
+            "league",
+            candidates,
+            jev_scorer=scorer,
+            haiku_ranker=ranker,
+            keep_threshold=0.8,
+        )
+
+        assert result.stats.jev_kept == 0
+        assert result.stats.jev_decided == 0
+        assert result.stats.escalated_unsure == 1
+        assert len(ranker.called_with) == 1
+
+    def test_default_scorer_non_jev_backend_is_unsure(self):
+        """DefaultJevScorer marks haiku-backend answers as from_rules_fallback."""
+
+        def haiku_ask_many(items):
+            out = []
+            for q, _state in items:
+                if hasattr(q, "lo"):
+                    out.append(Answer(value=5, probability=0.99, backend="haiku"))
+                else:
+                    out.append(Answer(value=True, probability=0.99, backend="haiku"))
+            return out
+
+        scorer = DefaultJevScorer(ask_many_fn=haiku_ask_many)
+        scores, usage = scorer.score_candidates([_candidate("c1", event_type="ace")])
+        assert scores[0] is not None
+        assert scores[0].from_rules_fallback is True
+        assert usage.backend == "rules"
+        assert usage.request_count == 0
 
     def test_thin_signals_audio_peak_always_unsure(self):
         candidates = [_candidate("c1", source="audio_peak", event_type="audio_peak")]
@@ -448,13 +553,14 @@ class TestPrivacyBoundary:
             state = {"candidate": {field: "some text"}}
             assert state_contains_transcript(state), f"Should detect {field}"
 
-    def test_box_mode_scorer_uses_box_builder(self):
-        """Verify that BOX mode scorer uses the box state builder."""
-        states_built = []
+    def test_box_mode_scorer_serialized_body_excludes_secret(self):
+        """BOX mode: secret must be absent from json.dumps of the Jev state."""
+        secret = "SECRET_TRANSCRIPT_STRING_XYZ"
+        bodies: list[str] = []
 
         def capturing_ask_many(items):
             for _q, state in items:
-                states_built.append(state)
+                bodies.append(json.dumps(state, default=str))
             return [
                 Answer(value=True, probability=0.9, backend="jev"),
                 Answer(value=5, probability=0.8, backend="jev"),
@@ -463,20 +569,72 @@ class TestPrivacyBoundary:
             ]
 
         scorer = DefaultJevScorer(ask_many_fn=capturing_ask_many, mode=CascadeMode.BOX)
-        c = _candidate("c1", text="transcript text should not appear")
+        c = _candidate("c1", text=secret)
         scorer.score_candidates([c])
 
-        assert len(states_built) == 4
-        for state in states_built:
-            assert not state_contains_transcript(state), "BOX mode leaked transcript"
+        assert len(bodies) == 4
+        for body in bodies:
+            assert secret not in body, "BOX mode leaked transcript into serialized state"
+            assert not state_contains_transcript(json.loads(body))
 
-    def test_cascade_rank_with_box_mode(self):
-        """Integration test: cascade_rank in BOX mode never sends transcripts."""
-        states_seen = []
+    def test_box_mode_http_transport_body_excludes_secret(self):
+        """HttpTransport-level: secret absent from the POST JSON body in BOX mode."""
+        secret = "SECRET_TRANSCRIPT_STRING_XYZ"
+        seen: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen["raw"] = request.content.decode("utf-8")
+            seen["body"] = json.loads(request.content)
+            return httpx.Response(
+                200,
+                json={
+                    "model": "jev-1.13.0",
+                    "answers": {
+                        "q0": {"type": "noul", "noul": 0.6},
+                        "q1": {
+                            "type": "score",
+                            "score": 5,
+                            "probabilities": {"5": 0.8},
+                        },
+                        "q2": {
+                            "type": "score",
+                            "score": 5,
+                            "probabilities": {"5": 0.8},
+                        },
+                        "q3": {
+                            "type": "score",
+                            "score": 5,
+                            "probabilities": {"5": 0.8},
+                        },
+                    },
+                    "usage": {"input_tokens": 12, "output_tokens": 0},
+                },
+            )
+
+        transport = jev_backend.HttpTransport(
+            "ts-key",
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+        state = build_candidate_state_box(_candidate("c1", text=secret))
+        questions = {
+            "q0": jev_backend.to_jev_question(BoolQuestion(prompt="keep?")),
+            "q1": jev_backend.to_jev_question(ScoreQuestion(prompt="funny?", lo=0, hi=10)),
+            "q2": jev_backend.to_jev_question(ScoreQuestion(prompt="hype?", lo=0, hi=10)),
+            "q3": jev_backend.to_jev_question(ScoreQuestion(prompt="story?", lo=0, hi=10)),
+        }
+        transport.ask(state, questions)
+
+        assert secret not in seen["raw"]
+        assert secret not in json.dumps(seen["body"], default=str)
+
+    def test_cascade_rank_box_mode_scrubs_haiku_payload(self):
+        """BOX mode: Haiku payload must not contain the transcript secret."""
+        secret = "SECRET_TRANSCRIPT_STRING_XYZ"
+        states_seen: list[str] = []
 
         def capturing_ask_many(items):
             for _q, state in items:
-                states_seen.append(state)
+                states_seen.append(json.dumps(state, default=str))
             return [
                 Answer(value=True, probability=0.6, backend="jev"),
                 Answer(value=5, probability=0.8, backend="jev"),
@@ -487,7 +645,7 @@ class TestPrivacyBoundary:
         scorer = DefaultJevScorer(ask_many_fn=capturing_ask_many, mode=CascadeMode.BOX)
         ranker = FakeHaikuRanker()
 
-        c = _candidate("c1", text="secret transcript text")
+        c = _candidate("c1", text=secret)
         cascade_rank(
             "league",
             [c],
@@ -496,8 +654,17 @@ class TestPrivacyBoundary:
             mode=CascadeMode.BOX,
         )
 
-        for state in states_seen:
-            assert not state_contains_transcript(state), "BOX cascade leaked transcript"
+        for body in states_seen:
+            assert secret not in body, "BOX cascade leaked transcript to Jev"
+
+        assert len(ranker.called_with) == 1
+        haiku_body = json.dumps(ranker.called_with[0], default=str)
+        assert secret not in haiku_body, "BOX cascade leaked transcript to Haiku"
+
+    def test_scrub_candidate_transcripts_removes_secret(self):
+        secret = "SECRET_TRANSCRIPT_STRING_XYZ"
+        scrubbed = scrub_candidate_transcripts(_candidate("c1", text=secret))
+        assert secret not in json.dumps(scrubbed, default=str)
 
 
 class TestIntegration:
@@ -565,8 +732,8 @@ class TestIntegration:
         assert result.stats.escalated_unsure == 7
         assert result.stats.escalation_rate == 0.7
 
-    def test_haiku_call_skipped_when_all_rejected(self):
-        """When all candidates are confidently rejected, haiku_call_skipped=1."""
+    def test_mass_reject_failsafe_sends_all_to_haiku(self):
+        """If Jev rejects everything, fail-safe routes the batch to Haiku."""
         candidates = [_candidate("c1"), _candidate("c2")]
         scorer = FakeJevScorer(
             {
@@ -584,8 +751,35 @@ class TestIntegration:
             reject_threshold=0.8,
         )
 
-        assert result.stats.haiku_call_skipped == 1
-        assert len(ranker.called_with) == 0
+        assert result.stats.mass_reject_failsafe == 1
+        assert result.stats.haiku_call_skipped == 0
+        assert result.stats.haiku_candidates_saved == 0
+        assert {c["id"] for c in ranker.called_with} == {"c1", "c2"}
+        assert len(result.rankings) == 2
+
+    def test_partial_reject_still_saves_haiku_tokens(self):
+        """Rejects still skip Haiku when at least one keep/unsure remains."""
+        candidates = [_candidate("c1"), _candidate("c2", event_type="ace")]
+        scorer = FakeJevScorer(
+            {
+                "c1": _confident_reject(0.95),
+                "c2": _confident_keep(0.95),
+            }
+        )
+        ranker = FakeHaikuRanker()
+
+        result = cascade_rank(
+            "league",
+            candidates,
+            jev_scorer=scorer,
+            haiku_ranker=ranker,
+            reject_threshold=0.8,
+            keep_threshold=0.8,
+        )
+
+        assert result.stats.mass_reject_failsafe == 0
+        assert result.stats.haiku_candidates_saved == 1
+        assert {c["id"] for c in ranker.called_with} == {"c2"}
 
     def test_haiku_call_not_skipped_when_some_unsure(self):
         """When some candidates need Haiku, haiku_call_skipped=0."""
@@ -661,7 +855,61 @@ class TestCostLogging:
 
         assert result.cost_log.video_id == "test-video"
         assert result.cost_log.run_id == "test-run"
+        # 1 jev request + 1 haiku call
         assert len(result.cost_log.calls) == 2
+
+    def test_haiku_cost_dollars_never_estimated(self):
+        scorer = FakeJevScorer({"c1": _unsure()})
+        ranker = FakeHaikuRanker()
+
+        result = cascade_rank(
+            "league",
+            [_candidate("c1")],
+            jev_scorer=scorer,
+            haiku_ranker=ranker,
+        )
+
+        haiku_calls = [c for c in result.cost_log.calls if c.model == settings.ranker_model]
+        assert haiku_calls
+        assert all(c.cost_dollars is None for c in haiku_calls)
+
+    def test_jev_tokens_never_estimated_and_one_call_per_request(self):
+        candidates = [_candidate("c1"), _candidate("c2")]
+        scorer = FakeJevScorer(
+            {"c1": _unsure(), "c2": _unsure()},
+            usage=ScorerUsage(input_tokens=None, request_count=2, backend="jev"),
+        )
+        ranker = FakeHaikuRanker()
+
+        result = cascade_rank(
+            "league",
+            candidates,
+            jev_scorer=scorer,
+            haiku_ranker=ranker,
+        )
+
+        jev_calls = [c for c in result.cost_log.calls if c.model == settings.typesafe_model]
+        assert len(jev_calls) == 2
+        assert all(c.input_tokens is None for c in jev_calls)
+        assert all(c.cost_dollars is None for c in jev_calls)
+
+    def test_jev_cost_not_recorded_for_non_jev_backend(self):
+        scorer = FakeJevScorer(
+            {"c1": _rules_fallback()},
+            usage=ScorerUsage(request_count=0, backend="rules"),
+        )
+        ranker = FakeHaikuRanker()
+
+        result = cascade_rank(
+            "league",
+            [_candidate("c1")],
+            jev_scorer=scorer,
+            haiku_ranker=ranker,
+        )
+
+        jev_calls = [c for c in result.cost_log.calls if c.model == settings.typesafe_model]
+        assert jev_calls == []
+        assert any(c.model == settings.ranker_model for c in result.cost_log.calls)
 
     def test_cascade_metrics_in_cost_log(self):
         """Cost log should include cascade metrics from stats."""

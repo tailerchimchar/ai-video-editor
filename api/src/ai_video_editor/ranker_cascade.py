@@ -1,46 +1,49 @@
 """Jev confidence cascade for the ranker.
 
 Puts a cheap Jev pre-filter in front of the Haiku ranker. For each candidate:
-  - Jev scores keep/reject + funny/hype/story in one batched request
-  - Confident keeps go straight to the kept set (need timing from Haiku)
-  - Confident rejects are dropped
-  - Unsure candidates go to Haiku for full ranking
+  - Jev scores keep/reject + funny/hype/story (one HTTP request per candidate)
+  - Confident rejects are dropped (skip Haiku)
+  - Confident keeps still go to Haiku for timing; Haiku's keep verdict is trusted
+  - Unsure / non-Jev / mid-band candidates go to Haiku for full ranking
 
-The cascade saves Haiku cost when Jev is confident. Fail-safe: any Jev
-error or rules fallback marks candidates as unsure, so they go to Haiku.
+The cascade saves Haiku tokens on confident rejects only. Fail-safe: any Jev
+error, rules/haiku backend answers, or a mass-reject (keeps+unsure == 0)
+routes candidates to Haiku so a miscalibrated Jev cannot zero out a video.
 
 Privacy boundary
 ----------------
-Transcripts never leave the PC. The cascade supports two modes:
+Transcripts never leave the PC on the box path. The cascade supports two modes:
 
   - **PC path** (``build_candidate_state_pc``): includes transcript text
     from metadata. Use only in PC-side code where transcripts stay local.
+    Note: PC mode sends transcript text to TypeSafe (api.typesafe.ai).
   - **Box path** (``build_candidate_state_box``): excludes transcript fields
-    entirely. Only includes Outplayed events (kill/death/assist) and
-    per-clip JSON metadata. Safe for cloud/box-side code.
+    entirely from both the Jev state and the Haiku payload. Safe for
+    cloud/box-side code.
 
 The ``CascadeMode`` enum selects which builder to use. Tests verify that
-the box path never includes transcript fields.
+the box path never includes transcript fields in the serialized body.
 
 Design choices
 --------------
-1. **One Jev request per batch** — Jev's ask_many batches all candidates
-   in one HTTP call per unique state. Since we pass each candidate as
-   its own state (different signals), this becomes one Jev request
-   per candidate. The alternative (batch many candidates into one state)
-   is not supported by Jev's System One model, which evaluates questions
-   against one state at a time.
+1. **One Jev request per candidate** — Jev's ask_many batches questions
+   that share a state. Each candidate has its own state, so this is one
+   HTTP request per candidate (counted against TYPESAFE_MAX_CALLS).
 
-2. **Timing refinement for kept candidates** — Confident keeps still
-   need in/out timing and a reason. We fold them into the same Haiku
-   call as the unsure candidates rather than making a separate call.
-   This minimizes Haiku calls: one call ranks unsure + refines kept,
-   rather than two calls (one for unsure, one for timing). The ranker
-   prompt already supports variable-length batches.
+2. **Confident keeps still visit Haiku** — Keeps need in/out timing. They
+   fold into the same Haiku call as unsure candidates. Haiku may still
+   drop a keep (``keep=False`` is trusted). Only confident rejects skip
+   Haiku entirely.
+
+3. **Confident routing requires backend==\"jev\"** — Answers from rules or
+   Haiku decision backends are treated as unsure so enabling the cascade
+   with DECISIONS_BACKEND=haiku cannot add paid calls *and* drop
+   candidates.
 """
 
 from __future__ import annotations
 
+import copy
 import logging
 import time
 from dataclasses import dataclass
@@ -58,9 +61,13 @@ if TYPE_CHECKING:
 
 _log = logging.getLogger(__name__)
 
+# If Jev confidently rejects every candidate, route the whole batch to
+# Haiku rather than returning zero rankings.
+_MASS_REJECT_FAILSAFE = True
+
 
 class CascadeMode(Enum):
-    """Where the cascade is running. Determines what data goes to Jev."""
+    """Where the cascade is running. Determines what data goes to Jev/Haiku."""
 
     PC = "pc"
     BOX = "box"
@@ -81,7 +88,24 @@ class JevScores:
     funny_probability: float
     hype_probability: float
     story_probability: float
+    # True when answers did not come from the Jev backend (rules/haiku
+    # fallback). Those candidates are treated as unsure.
     from_rules_fallback: bool = False
+
+
+@dataclass(frozen=True)
+class ScorerUsage:
+    """Usage reported by a JevScorer. Tokens are never estimated.
+
+    ``backend`` must be \"jev\" for cascade cost logging to record calls.
+    ``request_count`` is the number of HTTP requests made (one per
+    candidate when each has a distinct state). ``input_tokens`` is None
+    unless the transport surfaces a real count.
+    """
+
+    input_tokens: int | None = None
+    request_count: int = 0
+    backend: str = "jev"
 
 
 @dataclass
@@ -90,10 +114,11 @@ class CascadeStats:
 
     Metrics:
       - escalated_unsure: candidates Jev couldn't decide (go to Haiku for full ranking)
-      - timing_refine: confident keeps sent to Haiku only for in/out timing
+      - timing_refine: confident keeps sent to Haiku for in/out timing (+ keep veto)
       - haiku_candidates_saved: confidently rejected candidates that never reach Haiku
       - haiku_call_skipped: 1 if nothing needed Haiku in this batch, else 0
       - escalation_rate: escalated_unsure / total_candidates (true uncertainty rate)
+      - mass_reject_failsafe: 1 if mass-reject guard fired and everything went to Haiku
     """
 
     total_candidates: int = 0
@@ -104,6 +129,7 @@ class CascadeStats:
     timing_refine: int = 0
     haiku_candidates_saved: int = 0
     haiku_call_skipped: int = 0
+    mass_reject_failsafe: int = 0
     jev_latency_ms: float = 0.0
     haiku_latency_ms: float = 0.0
 
@@ -118,8 +144,10 @@ class CascadeStats:
 class JevScorer(Protocol):
     """Protocol for Jev scoring. Tests inject a fake."""
 
-    def score_candidates(self, candidates: list[dict]) -> tuple[list[JevScores | None], int]:
-        """Score each candidate. Returns (scores, input_tokens).
+    def score_candidates(
+        self, candidates: list[dict]
+    ) -> tuple[list[JevScores | None], ScorerUsage]:
+        """Score each candidate. Returns (scores, usage).
         Returns None in scores list for candidates that errored."""
         ...
 
@@ -179,8 +207,8 @@ _STORY_QUESTION = ScoreQuestion(
 def build_candidate_state_pc(candidate: dict) -> dict:
     """Build a Jev state dict for PC-side use. Includes transcript text.
 
-    PC path: transcripts stay local, so we can include the text field
-    from metadata for richer Jev scoring.
+    PC path: transcripts stay local to the owner's machine before the
+    TypeSafe call; the text field is included for richer Jev scoring.
     """
     meta = candidate.get("metadata") or {}
     return {
@@ -227,19 +255,39 @@ def build_candidate_state_box(candidate: dict) -> dict:
     return state
 
 
+def scrub_candidate_transcripts(candidate: dict) -> dict:
+    """Shallow-copy a candidate with transcript fields removed from metadata.
+
+    Used in BOX mode before sending candidates to Haiku so a box-safe
+    cascade does not ship transcript text off the machine.
+    """
+    scrubbed = copy.copy(candidate)
+    meta = dict(candidate.get("metadata") or {})
+    for key in _TRANSCRIPT_FIELDS:
+        meta.pop(key, None)
+    scrubbed["metadata"] = meta
+    return scrubbed
+
+
 def state_contains_transcript(state: dict) -> bool:
     """Check if a state dict contains any transcript-related fields.
 
     Used by tests to verify the box path never leaks transcript data.
+    Prefer asserting against ``json.dumps`` of the transport body for
+    serialization-level coverage.
     """
     candidate = state.get("candidate") or {}
     return any(candidate.get(key) is not None for key in _TRANSCRIPT_FIELDS)
 
 
 def _parse_jev_scores(answers: list[Answer]) -> JevScores:
-    """Parse the 4 answers (keep, funny, hype, story) into JevScores."""
+    """Parse the 4 answers (keep, funny, hype, story) into JevScores.
+
+    Any non-jev backend (rules, haiku) marks ``from_rules_fallback`` so
+    confident routing only applies to real Jev answers.
+    """
     keep_ans, funny_ans, hype_ans, story_ans = answers
-    from_rules = any(a.backend == "rules" for a in answers)
+    from_non_jev = any(a.backend != "jev" for a in answers)
     return JevScores(
         keep=bool(keep_ans.value) if keep_ans.value is not None else True,
         keep_probability=keep_ans.probability,
@@ -249,7 +297,7 @@ def _parse_jev_scores(answers: list[Answer]) -> JevScores:
         funny_probability=funny_ans.probability,
         hype_probability=hype_ans.probability,
         story_probability=story_ans.probability,
-        from_rules_fallback=from_rules,
+        from_rules_fallback=from_non_jev,
     )
 
 
@@ -267,19 +315,20 @@ class DefaultJevScorer:
             build_candidate_state_pc if mode == CascadeMode.PC else build_candidate_state_box
         )
 
-    def score_candidates(self, candidates: list[dict]) -> tuple[list[JevScores | None], int]:
-        """Score all candidates. Uses one batched ask_many call.
+    def score_candidates(
+        self, candidates: list[dict]
+    ) -> tuple[list[JevScores | None], ScorerUsage]:
+        """Score all candidates via ask_many.
 
-        Each candidate becomes 4 questions (keep, funny, hype, story) with
-        its own state dict. ask_many batches efficiently — one Jev request
-        per unique state (which here is per candidate, since each has
-        different signals).
+        Each candidate becomes 4 questions with its own state dict, which
+        means one Jev HTTP request per candidate when the backend is jev.
 
-        Returns (scores, estimated_input_tokens). Tokens are estimated as
-        Jev doesn't report exact usage in the response we have access to.
+        Tokens are never estimated: ``input_tokens`` stays None unless a
+        future transport surfaces real usage. Cost logging only records
+        calls when every answer came from backend==\"jev\".
         """
         if not candidates:
-            return [], 0
+            return [], ScorerUsage(request_count=0, backend="jev")
 
         items: list[tuple] = []
         for candidate in candidates:
@@ -297,7 +346,7 @@ class DefaultJevScorer:
             all_answers = self._ask_many(items)
         except DecisionError as exc:
             _log.warning("jev cascade: ask_many failed (%s), all candidates unsure", exc)
-            return [None] * len(candidates), 0
+            return [None] * len(candidates), ScorerUsage(request_count=0, backend="error")
 
         results: list[JevScores | None] = []
         for i in range(len(candidates)):
@@ -305,8 +354,15 @@ class DefaultJevScorer:
             answers = all_answers[base : base + 4]
             results.append(_parse_jev_scores(answers))
 
-        estimated_tokens = len(candidates) * 150
-        return results, estimated_tokens
+        if any(s is None or s.from_rules_fallback for s in results):
+            # rules/haiku/error — do not claim Jev spend
+            return results, ScorerUsage(input_tokens=None, request_count=0, backend="rules")
+
+        return results, ScorerUsage(
+            input_tokens=None,
+            request_count=len(candidates),
+            backend="jev",
+        )
 
 
 @dataclass
@@ -375,14 +431,18 @@ def cascade_rank(
     ranker = haiku_ranker or _HaikuRankerAdapter(default_haiku_ranker)
 
     jev_start = time.perf_counter()
-    jev_scores, jev_input_tokens = scorer.score_candidates(candidates)
+    jev_scores, jev_usage = scorer.score_candidates(candidates)
     stats.jev_latency_ms = (time.perf_counter() - jev_start) * 1000
 
-    cost_log.record_call(
-        model=settings.typesafe_model,
-        input_tokens=jev_input_tokens,
-        cost_dollars=None,
-    )
+    if jev_usage.backend == "jev" and jev_usage.request_count > 0:
+        # One cost record per HTTP request. Tokens stay None unless the
+        # transport surfaces a real count — never estimate.
+        for _ in range(jev_usage.request_count):
+            cost_log.record_call(
+                model=settings.typesafe_model,
+                input_tokens=jev_usage.input_tokens,
+                cost_dollars=None,
+            )
 
     confident_keeps: list[tuple[dict, JevScores]] = []
     unsure: list[dict] = []
@@ -408,25 +468,47 @@ def cascade_rank(
         else:
             unsure.append(candidate)
 
-    stats.escalated_unsure = len(unsure)
-    stats.timing_refine = len(confident_keeps)
-    stats.haiku_candidates_saved = stats.jev_rejected
+    # Mass-reject fail-safe: if nothing would reach Haiku and everything
+    # was confidently rejected, send the whole batch to Haiku instead of
+    # returning zero rankings (legacy behaviour ranked them all).
+    if _MASS_REJECT_FAILSAFE and stats.jev_rejected > 0 and not confident_keeps and not unsure:
+        _log.warning(
+            "cascade: mass-reject fail-safe — routing all %d candidates to Haiku",
+            len(candidates),
+        )
+        unsure = list(candidates)
+        stats.mass_reject_failsafe = 1
+        stats.haiku_candidates_saved = 0
+        stats.escalated_unsure = len(unsure)
+        stats.timing_refine = 0
+    else:
+        stats.escalated_unsure = len(unsure)
+        stats.timing_refine = len(confident_keeps)
+        stats.haiku_candidates_saved = stats.jev_rejected
 
     haiku_candidates = unsure + [c for c, _ in confident_keeps]
+    # Mass-reject path put every candidate in unsure; don't double-add keeps.
+    if stats.mass_reject_failsafe:
+        haiku_candidates = list(unsure)
+
     stats.haiku_call_skipped = 1 if not haiku_candidates else 0
 
     haiku_results: list[RankedCandidate] = []
     if haiku_candidates:
+        haiku_payload = haiku_candidates
+        if mode == CascadeMode.BOX:
+            haiku_payload = [scrub_candidate_transcripts(c) for c in haiku_candidates]
+
         haiku_start = time.perf_counter()
-        haiku_results, haiku_input, haiku_output = ranker.rank(game, haiku_candidates)
+        haiku_results, haiku_input, haiku_output = ranker.rank(game, haiku_payload)
         stats.haiku_latency_ms = (time.perf_counter() - haiku_start) * 1000
 
-        haiku_cost = _estimate_haiku_cost(haiku_input, haiku_output)
+        # Dollars from client usage only — never estimate from a price table.
         cost_log.record_call(
             model=settings.ranker_model,
             input_tokens=haiku_input,
             output_tokens=haiku_output,
-            cost_dollars=haiku_cost,
+            cost_dollars=None,
         )
 
     haiku_by_id = {r.candidate_id: r for r in haiku_results}
@@ -435,20 +517,7 @@ def cascade_rank(
     for candidate, scores in confident_keeps:
         cid = candidate.get("id", "")
         haiku_result = haiku_by_id.get(cid)
-        if haiku_result:
-            rankings.append(
-                RankedCandidate(
-                    candidate_id=cid,
-                    keep=True,
-                    funny_score=scores.funny_score / 10.0,
-                    hype_score=scores.hype_score / 10.0,
-                    story_score=scores.story_score / 10.0,
-                    suggested_start_seconds=haiku_result.suggested_start_seconds,
-                    suggested_end_seconds=haiku_result.suggested_end_seconds,
-                    reason=haiku_result.reason,
-                )
-            )
-        else:
+        if haiku_result is None:
             rankings.append(
                 RankedCandidate(
                     candidate_id=cid,
@@ -461,16 +530,32 @@ def cascade_rank(
                     reason="Jev confident keep (timing from candidate bounds)",
                 )
             )
+        elif not haiku_result.keep:
+            # Trust Haiku's drop — do not force keep=True with Jev scores.
+            rankings.append(haiku_result)
+        else:
+            rankings.append(
+                RankedCandidate(
+                    candidate_id=cid,
+                    keep=True,
+                    funny_score=scores.funny_score / 10.0,
+                    hype_score=scores.hype_score / 10.0,
+                    story_score=scores.story_score / 10.0,
+                    suggested_start_seconds=haiku_result.suggested_start_seconds,
+                    suggested_end_seconds=haiku_result.suggested_end_seconds,
+                    reason=haiku_result.reason,
+                )
+            )
 
+    keep_ids = {c.get("id") for c, _ in confident_keeps}
     for result in haiku_results:
-        is_kept_candidate = any(c.get("id") == result.candidate_id for c, _ in confident_keeps)
-        if not is_kept_candidate:
+        if result.candidate_id not in keep_ids:
             rankings.append(result)
 
     _log.info(
         "cascade_rank: candidates=%d jev_decided=%d (kept=%d rejected=%d) "
         "escalated_unsure=%d timing_refine=%d escalation_rate=%.2f "
-        "haiku_candidates_saved=%d haiku_call_skipped=%d "
+        "haiku_candidates_saved=%d haiku_call_skipped=%d mass_reject_failsafe=%d "
         "jev_latency_ms=%.0f haiku_latency_ms=%.0f",
         stats.total_candidates,
         stats.jev_decided,
@@ -481,6 +566,7 @@ def cascade_rank(
         stats.escalation_rate,
         stats.haiku_candidates_saved,
         stats.haiku_call_skipped,
+        stats.mass_reject_failsafe,
         stats.jev_latency_ms,
         stats.haiku_latency_ms,
     )
@@ -500,18 +586,6 @@ def cascade_rank(
     cost_log.emit()
 
     return CascadeResult(rankings=rankings, stats=stats, cost_log=cost_log)
-
-
-def _estimate_haiku_cost(input_tokens: int, output_tokens: int) -> float:
-    """Estimate Haiku cost from token counts.
-
-    Haiku 4.5 pricing (as of 2026):
-      - Input: $0.80 / 1M tokens
-      - Output: $4.00 / 1M tokens
-    """
-    input_cost = (input_tokens / 1_000_000) * 0.80
-    output_cost = (output_tokens / 1_000_000) * 4.00
-    return round(input_cost + output_cost, 6)
 
 
 class _HaikuRankerAdapter:
@@ -540,8 +614,8 @@ def rank_candidates_with_cascade(
 ) -> list[RankedCandidate]:
     """Entry point that uses cascade if enabled, else falls back to direct Haiku.
 
-    This is the function that replaces the existing rank_candidates call
-    when the cascade is enabled.
+    Wired from ``routers.analyze._run_rank_job`` behind
+    ``GROKBOT_JEV_RANKER_CASCADE_ENABLED`` (default off).
     """
     if not settings.grokbot_jev_ranker_cascade_enabled:
         from .ranker import rank_candidates
