@@ -79,6 +79,12 @@ class Settings(BaseSettings):
     grokbot_queue_depth_cap: int = 10
     grokbot_execute_plans: bool = False
     grokbot_record_verdicts: bool = False
+    # Player name check mode: off (skip), warn (log and continue), block (fail).
+    # Default is off (name check disabled).
+    grokbot_player_name_check: Literal["off", "warn", "block"] = "off"
+    # Path to a local file with player names (one per line) to check in digests.
+    # Gitignored, kept on PC. Only used when grokbot_player_name_check != off.
+    grokbot_player_names_path: str = ""
 
     # Box render: headless Linux box that renders edit plans from Drive clips.
     # HIGH RISK: These settings control cloud rendering and auto-cleanup.

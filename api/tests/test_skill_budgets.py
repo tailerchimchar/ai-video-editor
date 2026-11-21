@@ -78,13 +78,16 @@ def test_queue_format_examples_parse() -> None:
     path = GROKBOT_DIR / "queue-format.md"
     assert path.exists(), f"{path} missing"
     blocks = re.findall(r"```json\n(.*?)```", path.read_text(encoding="utf-8"), re.DOTALL)
-    kinds: set[str] = set()
+    # Only parse blocks that look like queue items (have a "kind" field), not event examples
+    queue_blocks = []
     for block in blocks:
-        data = json.loads(block)
-        # Events (video.rendered, render.failed) are not queue items; skip them
-        if "event" in data and "payload" in data:
+        try:
+            data = json.loads(block)
+            if isinstance(data, dict) and "kind" in data:
+                queue_blocks.append(block)
+        except (json.JSONDecodeError, ValueError):
             continue
-        kinds.add(parse_item(block).kind)
+    kinds = {parse_item(block).kind for block in queue_blocks}
     assert kinds == {
         "edit_plan",
         "preview_request",
