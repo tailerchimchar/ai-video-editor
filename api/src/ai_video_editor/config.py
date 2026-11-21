@@ -80,6 +80,19 @@ class Settings(BaseSettings):
     grokbot_execute_plans: bool = False
     grokbot_record_verdicts: bool = False
 
+    # Box render: headless Linux box that renders edit plans from Drive clips.
+    # HIGH RISK: These settings control cloud rendering and auto-cleanup.
+    # Off by default — set GROKBOT_BOX_RENDER_ENABLED=true on the box only.
+    # GROKBOT_BOX_SCRATCH_DIR: local temp directory for downloaded clips and
+    # intermediate render outputs. Cleaned ONLY after successful upload.
+    # GROKBOT_BOX_FINISHED_FOLDER: Drive subfolder for uploaded finished videos.
+    grokbot_box_render_enabled: bool = False
+    grokbot_box_scratch_dir: Path | None = None
+    grokbot_box_finished_folder: str = "finished"
+    grokbot_box_lock_file: str = "/tmp/ai-video-editor-box-render.lock"
+    grokbot_box_download_timeout: float = 300.0
+    grokbot_box_render_timeout: float = 600.0
+
     # Riot API candidate source (League). Free dev key from
     # developer.riotgames.com. Source stays inert until all three are set.
     riot_api_key: str = ""

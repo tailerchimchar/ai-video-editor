@@ -157,14 +157,30 @@ def test_deferred_kinds_are_ledgered_not_executed(h):
         env("edit_plan", compilation_id="c", base_version="v", plan={"format": "short"}),
         env("verdict", game="league", clip_ref="c", verdict="payoff", rule="r"),
         env("deploy", tag="v1.2.3"),
+        env(
+            "render_request",
+            asset_id="asset-001",
+            edit_plan_id="plan-001",
+            edit_plan_version="1",
+            game="league",
+            clips=[
+                {
+                    "clip_ref": "1",
+                    "drive_id": "FAKE-drive-clip-0001",
+                    "start_s": 0.0,
+                    "end_s": 10.0,
+                }
+            ],
+            concat_order=["1"],
+        ),
     ]
     for i in items:
         h.repo.add(i)
-    assert h.runner.tick() == ["deferred"] * 3
+    assert h.runner.tick() == ["deferred"] * 4
     oc = h.runner.ledger.outcomes()
     assert all(oc[i["id"]] == "deferred" for i in items)
     assert h.api.calls == []
-    assert names(h).count("queue.deferred") == 3
+    assert names(h).count("queue.deferred") == 4
 
 
 def test_heartbeat_payload_and_cadence(h):

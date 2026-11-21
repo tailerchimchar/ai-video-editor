@@ -177,8 +177,69 @@ class WakeItem(Envelope):
     kind: Literal["wake"]
 
 
+_MAX_RENDER_CLIPS = 20
+_MAX_CLIP_WINDOW_S = 180.0
+
+
+class RenderClip(_Strict):
+    """One clip in a render_request, identified by Drive file id."""
+
+    clip_ref: str = Field(pattern=r"^[1-9][0-9]{0,3}$")
+    drive_id: str = Field(pattern=r"^[A-Za-z0-9_-]{10,128}$")
+    start_s: float = 0.0
+    end_s: float = 0.0
+
+    @model_validator(mode="after")
+    def _check_window(self) -> RenderClip:
+        if not 0 <= self.start_s < self.end_s:
+            raise ValueError("need 0 <= start_s < end_s")
+        if self.end_s - self.start_s > _MAX_CLIP_WINDOW_S:
+            raise ValueError(f"clip window longer than {_MAX_CLIP_WINDOW_S:.0f} seconds")
+        return self
+
+
+class RenderRequestItem(Envelope):
+    """Box render job: render an edit plan from Drive clips.
+
+    Written by the Editor. The box downloads clips by drive_id, renders
+    both 9:16 and 16:9 outputs, uploads to Drive, and emits video.rendered.
+    """
+
+    kind: Literal["render_request"]
+    asset_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    edit_plan_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    edit_plan_version: str = Field(pattern=r"^[A-Za-z0-9_.-]{1,32}$")
+    game: str = Field(pattern=r"^[a-z][a-z0-9_]{0,31}$")
+    clips: list[RenderClip] = Field(min_length=1, max_length=_MAX_RENDER_CLIPS)
+    concat_order: list[str] = Field(min_length=1, max_length=_MAX_RENDER_CLIPS)
+    music_song_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,64}$")
+
+    @field_validator("game")
+    @classmethod
+    def _known_game(cls, v: str) -> str:
+        if v not in _KNOWN_GAMES:
+            raise ValueError(f"unknown game; expected one of {sorted(_KNOWN_GAMES)}")
+        return v
+
+    @model_validator(mode="after")
+    def _check_clips(self) -> RenderRequestItem:
+        refs = [c.clip_ref for c in self.clips]
+        if len(refs) != len(set(refs)):
+            raise ValueError("duplicate clip_ref")
+        for ref in self.concat_order:
+            if ref not in refs:
+                raise ValueError(f"concat_order references unknown clip_ref: {ref}")
+        return self
+
+
 QueueItem = Annotated[
-    EditPlanItem | PreviewRequestItem | VerdictItem | DeployItem | SleepItem | WakeItem,
+    EditPlanItem
+    | PreviewRequestItem
+    | VerdictItem
+    | DeployItem
+    | SleepItem
+    | WakeItem
+    | RenderRequestItem,
     Field(discriminator="kind"),
 ]
 
