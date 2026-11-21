@@ -386,6 +386,11 @@ def run_box_render(
         asset_id=render_input.asset_id,
     )
 
+    if not settings.grokbot_box_render_enabled:
+        result.error = "box render disabled"
+        _emit_failure(emit_fn, result, "disabled")
+        return result
+
     _lock = lock or RenderLock()
     if not _lock.acquire():
         result.error = "render job already running (locked)"

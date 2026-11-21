@@ -2240,8 +2240,14 @@ def submit_box_render(
         body["music_song_id"] = music_song_id
     with _client() as c:
         r = c.post(f"{API}/grokbot/render", json=body)
-        r.raise_for_status()
-        return r.json()
+        if r.is_success:
+            return r.json()
+        try:
+            payload = r.json()
+        except Exception:
+            payload = {"detail": r.text}
+        detail = payload.get("detail", payload) if isinstance(payload, dict) else payload
+        return {"error": detail, "status_code": r.status_code}
 
 
 def main() -> None:

@@ -45,6 +45,9 @@ async def submit_render(req: SubmitRenderRequest) -> dict:
     renders both 9:16 and 16:9 outputs, uploads to Drive, and emits
     video.rendered.
     """
+    if not settings.grokbot_box_render_enabled:
+        raise HTTPException(503, "box render disabled")
+
     if not settings.grokbot_queue_repo_dir:
         raise HTTPException(503, "queue repo not configured")
 
