@@ -213,6 +213,7 @@ async def zoom(req: ZoomRequest):
             factor=req.factor,
             roi=req.roi,
             aspect=req.aspect,
+            scale_to_1080p=settings.zoom_scale_to_1080p_enabled,
         )
 
     _track(_run_edit_job(job_id, edit_id, asset, "zoom", params, out_path, work))

@@ -70,6 +70,23 @@ def aspect_filter(aspect: str) -> str:
     return ""  # 16:9 / passthrough
 
 
+def zoom_upscale_filter(*, scale_to_1080p: bool, aspect: str) -> str:
+    """Post-crop scale fragment for zoom. Empty string = skip upscale.
+
+    Legacy (flag off): always `scale=iw*2:ih*2`. That only lands on
+    1920x1080 when factor is 2.0 with a center crop of a 1080p source —
+    factor 1.5 yields 2560x1440, so later fixed-fontsize captions look
+    tiny. Flag on: scale the cropped frame to height 1080 (width
+    auto, lanczos). For `9:16`, return "" — `aspect_filter` already
+    scales to 720x1280.
+    """
+    if not scale_to_1080p:
+        return "scale=iw*2:ih*2"
+    if aspect == "9:16":
+        return ""
+    return "scale=-2:1080:flags=lanczos"
+
+
 # Base 9:16 output resolution — TikTok / Reels / Shorts canonical.
 _SHORT_WIDTH = 720
 _SHORT_HEIGHT = 1280
@@ -544,9 +561,13 @@ def apply_zoom(
     factor: float,
     roi: str | dict,
     aspect: str,
+    scale_to_1080p: bool = False,
 ) -> tuple[bool, str | None]:
     w, h, x, y = resolve_roi(roi, factor)
-    chain = [f"crop={w}:{h}:{x}:{y}", "scale=iw*2:ih*2"]  # upscale post-crop
+    chain = [f"crop={w}:{h}:{x}:{y}"]
+    up = zoom_upscale_filter(scale_to_1080p=scale_to_1080p, aspect=aspect)
+    if up:
+        chain.append(up)
     tail = aspect_filter(aspect)
     if tail:
         chain.append(tail)

@@ -30,7 +30,7 @@ from typing import Literal
 
 from .compile_cleanup import safe_cleanup_for_render
 from .config import settings
-from .edits import aspect_filter, caption_filters, resolve_roi
+from .edits import aspect_filter, caption_filters, resolve_roi, zoom_upscale_filter
 from .thumbnail import (
     cleanup_orphan_clip_thumbnails,
     safe_extract_clip_thumbnails,
@@ -270,7 +270,12 @@ def _label_filter(number: int) -> str:
 
 
 def _build_clip_filterchain(
-    clip: dict, aspect: str, fade_seconds: float, label_number: int | None = None
+    clip: dict,
+    aspect: str,
+    fade_seconds: float,
+    label_number: int | None = None,
+    *,
+    scale_to_1080p: bool = False,
 ) -> str:
     """Compose the per-clip ffmpeg filtergraph.
 
@@ -289,7 +294,9 @@ def _build_clip_filterchain(
         if kind == "zoom":
             w, h, x, y = resolve_roi(eff.get("roi", "center"), eff.get("factor", 2.0))
             chain.append(f"crop={w}:{h}:{x}:{y}")
-            chain.append("scale=iw*2:ih*2")  # upscale post-crop
+            up = zoom_upscale_filter(scale_to_1080p=scale_to_1080p, aspect=aspect)
+            if up:
+                chain.append(up)
         elif kind == "focus":
             cx = f"iw*{eff.get('x', 0.5)}"
             cy = f"ih*{eff.get('y', 0.5)}"
@@ -387,7 +394,13 @@ def _render_clip_part(
         "-t",
         str(duration),
         "-vf",
-        _build_clip_filterchain(clip, aspect, fade_seconds, label_number),
+        _build_clip_filterchain(
+            clip,
+            aspect,
+            fade_seconds,
+            label_number,
+            scale_to_1080p=settings.zoom_scale_to_1080p_enabled,
+        ),
         "-c:v",
         settings.ffmpeg_video_codec,
         *codec_opts,
