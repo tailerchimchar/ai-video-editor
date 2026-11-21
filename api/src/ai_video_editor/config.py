@@ -79,6 +79,11 @@ class Settings(BaseSettings):
     grokbot_queue_depth_cap: int = 10
     grokbot_execute_plans: bool = False
     grokbot_record_verdicts: bool = False
+    # Jev clip in/out (ffmpeg signals + Jev criteria). Default off.
+    # When enabled, replaces Haiku-suggested cut windows at highlight
+    # time. Shadow mode keeps the existing cut and logs a per-clip delta.
+    grokbot_jev_clip_cut_enabled: bool = False
+    grokbot_jev_clip_cut_shadow: bool = False
 
     # Riot API candidate source (League). Free dev key from
     # developer.riotgames.com. Source stays inert until all three are set.

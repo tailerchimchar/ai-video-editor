@@ -1,0 +1,13 @@
+# Captured stderr from ffmpeg 6.1.1: lavfi testsrc+sine, silencedetect+ebur128 null sink. No silence_* lines (continuous sine).
+[Parsed_ebur128_1 @ 0x56074774cbc0] t: 0.0999773  TARGET:-23 LUFS    M:-120.7 S:-120.7     I: -70.0 LUFS       LRA:   0.0 LU  FTPK: -17.8 dBFS  TPK: -17.8 dBFS
+[Parsed_ebur128_1 @ 0x56074774cbc0] t: 0.199977   TARGET:-23 LUFS    M:-120.7 S:-120.7     I: -70.0 LUFS       LRA:   0.0 LU  FTPK: -17.7 dBFS  TPK: -17.7 dBFS
+[Parsed_ebur128_1 @ 0x56074774cbc0] t: 0.299977   TARGET:-23 LUFS    M:-120.7 S:-120.7     I: -70.0 LUFS       LRA:   0.0 LU  FTPK: -17.7 dBFS  TPK: -17.7 dBFS
+[Parsed_ebur128_1 @ 0x56074774cbc0] t: 0.399977   TARGET:-23 LUFS    M: -21.8 S:-120.7     I: -21.8 LUFS       LRA:   0.0 LU  FTPK: -17.9 dBFS  TPK: -17.7 dBFS
+[Parsed_ebur128_1 @ 0x56074774cbc0] t: 0.499977   TARGET:-23 LUFS    M: -21.7 S:-120.7     I: -21.8 LUFS       LRA:   0.0 LU  FTPK: -17.9 dBFS  TPK: -17.7 dBFS
+[Parsed_ebur128_1 @ 0x56074774cbc0] t: 0.599977   TARGET:-23 LUFS    M: -21.8 S:-120.7     I: -21.8 LUFS       LRA:   0.0 LU  FTPK: -17.7 dBFS  TPK: -17.7 dBFS
+[Parsed_ebur128_1 @ 0x56074774cbc0] t: 0.699977   TARGET:-23 LUFS    M: -21.7 S:-120.7     I: -21.8 LUFS       LRA:   0.0 LU  FTPK: -17.8 dBFS  TPK: -17.7 dBFS
+[Parsed_ebur128_1 @ 0x56074774cbc0] t: 0.799977   TARGET:-23 LUFS    M: -21.7 S:-120.7     I: -21.8 LUFS       LRA:   0.0 LU  FTPK: -17.9 dBFS  TPK: -17.7 dBFS
+[Parsed_ebur128_1 @ 0x56074774cbc0] t: 0.899977   TARGET:-23 LUFS    M: -21.7 S:-120.7     I: -21.8 LUFS       LRA:   0.0 LU  FTPK: -17.9 dBFS  TPK: -17.7 dBFS
+[Parsed_ebur128_1 @ 0x56074774cbc0] t: 0.999977   TARGET:-23 LUFS    M: -21.7 S:-120.7     I: -21.8 LUFS       LRA:   0.0 LU  FTPK: -17.9 dBFS  TPK: -17.7 dBFS
+[Parsed_ebur128_1 @ 0x56074774cbc0] t: 1.09998    TARGET:-23 LUFS    M: -21.7 S:-120.7     I: -21.7 LUFS       LRA:   0.0 LU  FTPK: -17.7 dBFS  TPK: -17.7 dBFS
+[Parsed_ebur128_1 @ 0x56074774cbc0] t: 1.19998    TARGET:-23 LUFS    M: -21.7 S:-120.7     I: -21.7 LUFS       LRA:   0.0 LU  FTPK: -18.0 dBFS  TPK: -17.7 dBFS
