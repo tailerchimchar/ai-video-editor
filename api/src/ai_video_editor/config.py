@@ -80,6 +80,25 @@ class Settings(BaseSettings):
     grokbot_execute_plans: bool = False
     grokbot_record_verdicts: bool = False
 
+    # --- Jev ranker cascade ---
+    # Put Jev in front of Haiku as a confidence filter. Confident rejects
+    # skip Haiku; confident keeps still go to Haiku for timing (Haiku may
+    # still drop them); unsure / non-jev answers go to Haiku for full
+    # ranking. Requires DECISIONS_BACKEND that resolves to jev for
+    # confident routing. Disabled by default so existing behavior is
+    # unchanged until the owner enables it.
+    grokbot_jev_ranker_cascade_enabled: bool = False
+    # Confidence thresholds for the Jev cascade. A candidate is "confident
+    # keep" when Jev says keep with probability >= this threshold (and
+    # likewise for reject). Candidates below threshold are unsure and go
+    # to Haiku. The 0.8 defaults are conservative: Jev must be very sure
+    # before we skip Haiku on rejects. NOTE: funny threshold mismatch -
+    # the ranker uses 0.6-0.7 for funny_score routing while bucketing
+    # uses 0.8. We do not change existing thresholds here; this is
+    # documented.
+    grokbot_jev_keep_threshold: float = 0.8
+    grokbot_jev_reject_threshold: float = 0.8
+
     # Riot API candidate source (League). Free dev key from
     # developer.riotgames.com. Source stays inert until all three are set.
     riot_api_key: str = ""

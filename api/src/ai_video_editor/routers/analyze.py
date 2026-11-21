@@ -27,7 +27,7 @@ from ..jobs import finish_job
 from ..models import HighlightCandidate, RankResponse
 from ..rag import index_asset_transcript
 from ..rag import search as rag_search
-from ..ranker import rank_candidates
+from ..ranker_cascade import rank_candidates_with_cascade
 
 router = APIRouter(tags=["analyze"])
 
@@ -177,7 +177,13 @@ async def _run_rank_job(job_id: str, asset: dict) -> None:
                 continue
             candidates.append(d)
 
-        ranked = await asyncio.to_thread(rank_candidates, asset.get("game"), candidates)
+        ranked = await asyncio.to_thread(
+            rank_candidates_with_cascade,
+            asset.get("game"),
+            candidates,
+            video_id=asset["id"],
+            run_id=job_id,
+        )
 
         rankings_dir = settings.workspace_dir / "rankings"
         rankings_dir.mkdir(parents=True, exist_ok=True)
