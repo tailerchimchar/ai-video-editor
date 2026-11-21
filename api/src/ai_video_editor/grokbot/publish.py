@@ -17,8 +17,10 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import re
 import sys
 from collections.abc import Callable
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .. import notify
@@ -42,6 +44,15 @@ def _default_ask_many() -> Callable | None:
     from ..decisions import ask_many
 
     return ask_many
+
+
+_DATE_PREFIX = re.compile(r"^(\d{4}-\d{2}-\d{2})")
+
+
+def _round_date(round_name: str) -> str:
+    """Drive day folder for a round: its YYYY-MM-DD prefix, else today (UTC)."""
+    m = _DATE_PREFIX.match(round_name)
+    return m.group(1) if m else datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
 def _clip_path(base_dir: Path, file: str) -> Path:
@@ -132,12 +143,14 @@ def publish_round(
             logger.warning("publish: %s is outside the allowed roots, not uploaded", path)
             skipped += 1
             path = None
-        clip.drive = _upload(uploader, path, path.name, "clips") if path else None
+        clip.drive = _upload(uploader, path, path.name, f"clips/{round_dir.name}") if path else None
         clip_ids[clip.ref] = clip.drive
 
     local = round_dir / "digest.json"
     local.write_text(digest.model_dump_json(indent=2), encoding="utf-8")
-    digest_id = _upload(uploader, local, f"{round_dir.name}-digest.json", "digests")
+    digest_id = _upload(
+        uploader, local, f"{round_dir.name}-digest.json", f"digests/{_round_date(round_dir.name)}"
+    )
 
     payload = {
         "round": round_dir.name,

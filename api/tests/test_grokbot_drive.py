@@ -95,6 +95,39 @@ def test_subfolder_created_once_and_reused(tmp_path):
     assert "'ROOT' in parents" in lists[0].url.params["q"]
 
 
+def test_nested_subfolder_path_creates_each_level_under_its_parent(tmp_path):
+    f = tmp_path / "a.mp4"
+    f.write_bytes(b"v")
+    calls: list[httpx.Request] = []
+    counter = iter(["SUB1", "SUB2"])
+
+    def handler(request):
+        calls.append(request)
+        if _is_token(request):
+            return httpx.Response(200, json={"access_token": "AT", "expires_in": 3600})
+        if request.method == "GET":
+            return httpx.Response(200, json={"files": []})
+        if "uploadType=multipart" in str(request.url):
+            return httpx.Response(200, json={"id": "f1"})
+        return httpx.Response(200, json={"id": next(counter)})
+
+    up = _uploader(handler)
+    up.upload(f, name="a", subfolder="clips/2026-11-20_zeri")
+    up.upload(f, name="b", subfolder="clips/2026-11-20_zeri")
+    creates = [
+        json.loads(c.content)
+        for c in calls
+        if c.method == "POST" and c.url.path == "/drive/v3/files"
+    ]
+    assert creates == [
+        {"name": "clips", "mimeType": FOLDER_MIME, "parents": ["ROOT"]},
+        {"name": "2026-11-20_zeri", "mimeType": FOLDER_MIME, "parents": ["SUB1"]},
+    ]
+    uploads = [c for c in calls if "uploadType=multipart" in str(c.url)]
+    assert len(uploads) == 2
+    assert b'"parents": ["SUB2"]' in uploads[0].content
+
+
 def test_prune_deletes_only_older_files():
     calls: list[httpx.Request] = []
 

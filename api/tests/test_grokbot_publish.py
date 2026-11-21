@@ -55,10 +55,10 @@ def test_publish_uploads_digest_and_clips_and_emits(round_dir):
     payload, events, up = run(round_dir)
     assert sorted(up.uploads) == sorted(
         [
-            ("01_kill_14m32s.mp4", "clips"),
-            ("02_kill_21m05s.mp4", "clips"),
-            ("03_kill_30m10s.mp4", "clips"),
-            ("2026-11-20_zeri-digest.json", "digests"),
+            ("01_kill_14m32s.mp4", "clips/2026-11-20_zeri"),
+            ("02_kill_21m05s.mp4", "clips/2026-11-20_zeri"),
+            ("03_kill_30m10s.mp4", "clips/2026-11-20_zeri"),
+            ("2026-11-20_zeri-digest.json", "digests/2026-11-20"),
         ]
     )
     assert [e.event for e in events] == ["round.published"]
@@ -70,11 +70,11 @@ def test_publish_uploads_digest_and_clips_and_emits(round_dir):
         "compilation_id": "comp-1",
         "compilation_version": "7",
         "drive": {
-            "digest": "digests:2026-11-20_zeri-digest.json",
+            "digest": "digests/2026-11-20:2026-11-20_zeri-digest.json",
             "clips": {
-                "14m32s": "clips:01_kill_14m32s.mp4",
-                "21m05s": "clips:02_kill_21m05s.mp4",
-                "30m10s": "clips:03_kill_30m10s.mp4",
+                "14m32s": "clips/2026-11-20_zeri:01_kill_14m32s.mp4",
+                "21m05s": "clips/2026-11-20_zeri:02_kill_21m05s.mp4",
+                "30m10s": "clips/2026-11-20_zeri:03_kill_30m10s.mp4",
             },
         },
         "clips": 3,
@@ -88,9 +88,9 @@ def test_saved_digest_carries_ids_and_never_leaks(round_dir):
     assert saved.compilation_id == "comp-1" and saved.compilation_version == "7"
     assert saved.asset_id == "asset-9"
     assert [c.drive for c in saved.clips] == [
-        "clips:01_kill_14m32s.mp4",
-        "clips:02_kill_21m05s.mp4",
-        "clips:03_kill_30m10s.mp4",
+        "clips/2026-11-20_zeri:01_kill_14m32s.mp4",
+        "clips/2026-11-20_zeri:02_kill_21m05s.mp4",
+        "clips/2026-11-20_zeri:03_kill_30m10s.mp4",
     ]
     assert dg.digest_leaks(saved, round_dir / "transcript.json") == []
 
@@ -115,8 +115,8 @@ def test_absolute_clip_paths_are_used_as_is(round_dir, tmp_path):
     clips[0]["file"] = str(elsewhere)
     (round_dir / "clips.json").write_text(json.dumps(clips))
     payload, _, up = run(round_dir)
-    assert ("09_kill_05m00s.mp4", "clips") in up.uploads
-    assert payload["drive"]["clips"]["05m00s"] == "clips:09_kill_05m00s.mp4"
+    assert ("09_kill_05m00s.mp4", "clips/2026-11-20_zeri") in up.uploads
+    assert payload["drive"]["clips"]["05m00s"] == "clips/2026-11-20_zeri:09_kill_05m00s.mp4"
 
 
 def test_clips_dir_resolves_relative_clip_files(round_dir, tmp_path):
@@ -127,8 +127,8 @@ def test_clips_dir_resolves_relative_clip_files(round_dir, tmp_path):
         (clips_dir / name).write_bytes(b"x")
         (round_dir / name).unlink(missing_ok=True)
     payload, _, up = run(round_dir, clips_dir=clips_dir)
-    assert ("01_kill_14m32s.mp4", "clips") in up.uploads
-    assert payload["drive"]["clips"]["14m32s"] == "clips:01_kill_14m32s.mp4"
+    assert ("01_kill_14m32s.mp4", "clips/2026-11-20_zeri") in up.uploads
+    assert payload["drive"]["clips"]["14m32s"] == "clips/2026-11-20_zeri:01_kill_14m32s.mp4"
 
 
 def test_no_api_no_uploader_still_saves_and_emits(round_dir):
@@ -205,7 +205,7 @@ def test_absolute_clip_outside_roots_is_skipped(round_dir, tmp_path_factory, mon
     outside.write_bytes(b"private")
     _point_first_clip_at(round_dir, str(outside))
     payload, _, up = run(round_dir)
-    assert ("09_kill_05m00s.mp4", "clips") not in up.uploads
+    assert ("09_kill_05m00s.mp4", "clips/2026-11-20_zeri") not in up.uploads
     assert payload["drive"]["clips"]["05m00s"] is None
     assert payload["skipped_outside_roots"] == 1
 
@@ -218,9 +218,9 @@ def test_dotdot_relative_clip_escaping_roots_is_skipped(round_dir, monkeypatch):
     escaped.write_bytes(b"private")
     _point_first_clip_at(round_dir, "../09_kill_05m00s.mp4")
     payload, _, up = run(round_dir)
-    assert ("09_kill_05m00s.mp4", "clips") not in up.uploads
+    assert ("09_kill_05m00s.mp4", "clips/2026-11-20_zeri") not in up.uploads
     assert payload["skipped_outside_roots"] == 1
-    assert ("02_kill_21m05s.mp4", "clips") in up.uploads
+    assert ("02_kill_21m05s.mp4", "clips/2026-11-20_zeri") in up.uploads
 
 
 def test_retention_days_must_be_at_least_one():

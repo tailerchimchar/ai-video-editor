@@ -120,11 +120,22 @@ class DriveUploader:
         return {"Authorization": f"Bearer {self._access_token()}"}
 
     # -- folders ------------------------------------------------------
-    def _subfolder_id(self, name: str) -> str:
-        if name in self._subfolders:
-            return self._subfolders[name]
+    def _subfolder_id(self, path: str) -> str:
+        """Folder id for `a/b/c` under the root, creating each level once."""
+        parts = [seg for seg in path.split("/") if seg]
+        if not parts:
+            return self._folder_id
+        parent, key = self._folder_id, ""
+        for seg in parts:
+            key = f"{key}/{seg}" if key else seg
+            if key not in self._subfolders:
+                self._subfolders[key] = self._child_folder_id(parent, seg)
+            parent = self._subfolders[key]
+        return parent
+
+    def _child_folder_id(self, parent: str, name: str) -> str:
         q = (
-            f"'{_q_escape(self._folder_id)}' in parents and mimeType='{FOLDER_MIME}' "
+            f"'{_q_escape(parent)}' in parents and mimeType='{FOLDER_MIME}' "
             f"and name='{_q_escape(name)}' and trashed=false"
         )
         resp = _check(
@@ -135,13 +146,8 @@ class DriveUploader:
         )
         files = resp.json().get("files", [])
         if files:
-            folder_id = files[0]["id"]
-        else:
-            folder_id = create_folder(
-                self._access_token(), name, self._folder_id, client=self._client
-            )
-        self._subfolders[name] = folder_id
-        return folder_id
+            return files[0]["id"]
+        return create_folder(self._access_token(), name, parent, client=self._client)
 
     # -- upload -------------------------------------------------------
     def _multipart(self, metadata: dict, content: bytes, content_type: str) -> str:
