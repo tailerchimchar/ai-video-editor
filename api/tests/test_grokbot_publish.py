@@ -119,6 +119,18 @@ def test_absolute_clip_paths_are_used_as_is(round_dir, tmp_path):
     assert payload["drive"]["clips"]["05m00s"] == "clips:09_kill_05m00s.mp4"
 
 
+def test_clips_dir_resolves_relative_clip_files(round_dir, tmp_path):
+    """clips.json names bare files; they live in the highlights session folder."""
+    clips_dir = tmp_path / "highlights" / "sess"
+    clips_dir.mkdir(parents=True)
+    for name in ("01_kill_14m32s.mp4", "02_kill_21m05s.mp4", "03_kill_30m10s.mp4"):
+        (clips_dir / name).write_bytes(b"x")
+        (round_dir / name).unlink(missing_ok=True)
+    payload, _, up = run(round_dir, clips_dir=clips_dir)
+    assert ("01_kill_14m32s.mp4", "clips") in up.uploads
+    assert payload["drive"]["clips"]["14m32s"] == "clips:01_kill_14m32s.mp4"
+
+
 def test_no_api_no_uploader_still_saves_and_emits(round_dir):
     payload, events, _ = run(round_dir, api=None, compilation_id=None, uploader=None)
     assert payload["compilation_version"] is None

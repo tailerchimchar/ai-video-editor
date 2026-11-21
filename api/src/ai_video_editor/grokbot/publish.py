@@ -44,9 +44,9 @@ def _default_ask_many() -> Callable | None:
     return ask_many
 
 
-def _clip_path(round_dir: Path, file: str) -> Path:
+def _clip_path(base_dir: Path, file: str) -> Path:
     p = Path(file)
-    return p if p.is_absolute() else round_dir / p
+    return p if p.is_absolute() else base_dir / p
 
 
 def _upload(uploader: Uploader | None, path: Path, name: str, subfolder: str) -> str | None:
@@ -62,8 +62,13 @@ def _upload(uploader: Uploader | None, path: Path, name: str, subfolder: str) ->
         return None
 
 
-def _clip_files(round_dir: Path) -> dict[str, Path]:
-    """`ref -> clip file` from clips.json (the same refs the digest uses)."""
+def _clip_files(round_dir: Path, clips_dir: Path | None = None) -> dict[str, Path]:
+    """`ref -> clip file` from clips.json (the same refs the digest uses).
+
+    Relative `file` entries resolve against `clips_dir` (the highlights
+    session folder the clips were cut into) or, when not given, the round dir.
+    """
+    base = clips_dir or round_dir
     try:
         clips = json.loads((round_dir / "clips.json").read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
@@ -73,7 +78,7 @@ def _clip_files(round_dir: Path) -> dict[str, Path]:
     for clip in clips if isinstance(clips, list) else []:
         file = clip.get("file") if isinstance(clip, dict) else None
         if isinstance(file, str) and file:
-            out[_ref_from_file(file)] = _clip_path(round_dir, file)
+            out[_ref_from_file(file)] = _clip_path(base, file)
     return out
 
 
@@ -87,6 +92,7 @@ def publish_round(
     ask_many: Callable | bool | None = None,
     emit: Callable[[Event], None] = notify.emit,
     asset_id: str | None = None,
+    clips_dir: Path | None = None,
 ) -> dict:
     """Build, gate, upload and announce one round. Returns the event payload.
 
@@ -115,7 +121,7 @@ def publish_round(
         if leaks:
             raise DigestLeakError(f"digest leaks {len(leaks)} transcript fragment(s)")
 
-    files = _clip_files(round_dir)
+    files = _clip_files(round_dir, clips_dir)
     roots = (settings.workspace_dir, settings.outplayed_media_dir)
     clip_ids: dict[str, str | None] = {}
     skipped = 0
@@ -157,6 +163,12 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--compilation-id", default=None)
     parser.add_argument("--asset-id", default=None)
     parser.add_argument("--no-jev", action="store_true", help="skip the Jev annotation")
+    parser.add_argument(
+        "--clips-dir",
+        type=Path,
+        default=None,
+        help="folder holding the clip files named in clips.json (default: the round dir)",
+    )
     args = parser.parse_args(argv)
 
     if not (args.round_dir / "clips.json").is_file():
@@ -176,6 +188,7 @@ def main(argv: list[str] | None = None) -> None:
             api=api,
             uploader=uploader_from_settings(),
             ask_many=False if args.no_jev else None,
+            clips_dir=args.clips_dir,
         )
     except DigestLeakError as e:
         print(f"refused: {e}", file=sys.stderr)
