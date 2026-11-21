@@ -82,6 +82,28 @@ def test_annotate_with_jev_uses_ask_many(fixture_round):
     assert out.clips[0].panel["include_p"] == 0.9
 
 
+def test_annotate_with_jev_one_request_for_all_clips(fixture_round):
+    """All format and include questions should be batched into one single request."""
+    d = dg.build_digest(fixture_round, game="lol")
+
+    ask_many_calls = []
+
+    def tracking_ask_many(items):
+        ask_many_calls.append(items)
+        return [
+            Answer(value=Format.funny, probability=0.8, backend="jev")
+            if "Format" in type(q).__name__ or hasattr(q, "options")
+            else Answer(value=True, probability=0.9, backend="jev")
+            for q, _ in items
+        ]
+
+    dg.annotate_with_jev(d, ask_many=tracking_ask_many)
+
+    assert len(ask_many_calls) == 1
+    total_questions = len(ask_many_calls[0])
+    assert total_questions == 2 * len(d.clips)
+
+
 def test_digest_leaks_catches_fragment(fixture_round):
     d = dg.build_digest(fixture_round, game="lol")
     d.clips[0].voice = "he said: kited the wave perf, wow"  # 15-char fragment "kited the wave "
