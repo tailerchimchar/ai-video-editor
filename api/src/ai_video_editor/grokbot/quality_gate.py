@@ -19,10 +19,14 @@ Dependency injection for testability: tests use fakes, no real model calls.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeout
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
@@ -36,6 +40,87 @@ if TYPE_CHECKING:
     from ..vlm.backends.base import VLMBackend
 
 _log = logging.getLogger(__name__)
+
+_CRITERION_FENCE_OPEN = "<<<criterion>>>"
+_CRITERION_FENCE_CLOSE = "<<<end_criterion>>>"
+
+
+def _fenced_criterion_question(text: str) -> str:
+    """Ask about a criterion without leaving its text unfenced in the prompt."""
+    return (
+        "Does this video meet the criterion between the markers? "
+        f"{_CRITERION_FENCE_OPEN}{text}{_CRITERION_FENCE_CLOSE} "
+        "Answer based only on the provided state."
+    )
+
+
+def _gate_state_dir() -> Path:
+    path = Path(settings.workspace_dir) / "quality_gate"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _daily_cap_path() -> Path:
+    return _gate_state_dir() / "daily_cap.json"
+
+
+def _retry_state_path(edit_plan_id: str) -> Path:
+    # edit_plan_id is already pattern-limited when coming from the queue.
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", edit_plan_id)[:64]
+    return _gate_state_dir() / f"retry_{safe}.json"
+
+
+def load_retry_state(edit_plan_id: str) -> tuple[dict[str, int], set[str]]:
+    """Load persisted retry counts and already-passed ids for a plan."""
+    path = _retry_state_path(edit_plan_id)
+    if not path.is_file():
+        return {}, set()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        counts = {str(k): int(v) for k, v in (data.get("retry_counts") or {}).items()}
+        passed = {str(x) for x in (data.get("already_passed") or [])}
+        return counts, passed
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return {}, set()
+
+
+def save_retry_state(
+    edit_plan_id: str,
+    *,
+    retry_counts: dict[str, int],
+    already_passed: set[str],
+) -> None:
+    path = _retry_state_path(edit_plan_id)
+    payload = {
+        "retry_counts": retry_counts,
+        "already_passed": sorted(already_passed),
+    }
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def reserve_daily_cap() -> bool:
+    """Reserve one UTC-day vision slot. False when the daily cap is reached.
+
+    Cap <= 0 means the gate is disabled (caller should skip before calling).
+    """
+    cap = settings.grokbot_quality_gate_daily_cap
+    if cap <= 0:
+        return False
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    path = _daily_cap_path()
+    data = {"day": today, "count": 0}
+    if path.is_file():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            if loaded.get("day") == today:
+                data = {"day": today, "count": int(loaded.get("count", 0))}
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            pass
+    if data["count"] >= cap:
+        return False
+    data["count"] += 1
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return True
 
 
 class Verdict(str, Enum):
@@ -187,25 +272,14 @@ class DefaultJevScorer:
         from ..decisions import ask
         from ..decisions.models import BoolQuestion
 
-        if criterion.audio_led:
-            state = {
-                "criterion": criterion.text,
-                "digest_moment_labels": metadata.digest_moment_labels,
-                "captions": metadata.captions,
-                "duration_seconds": metadata.duration_seconds,
-            }
-        else:
-            state = {
-                "criterion": criterion.text,
-                "vision_description": vision_description,
-                "digest_moment_labels": metadata.digest_moment_labels,
-                "captions": metadata.captions,
-                "duration_seconds": metadata.duration_seconds,
-                "aspect_ratio": metadata.aspect_ratio,
-            }
-
-        prompt = f"Does this video meet the criterion: '{criterion.text}'?"
-        question = BoolQuestion(prompt=prompt)
+        state = {
+            "vision_description": "" if criterion.audio_led else vision_description,
+            "digest_moment_labels": metadata.digest_moment_labels,
+            "captions": metadata.captions,
+            "duration_seconds": metadata.duration_seconds,
+            "aspect_ratio": metadata.aspect_ratio,
+        }
+        question = BoolQuestion(prompt=_fenced_criterion_question(criterion.text))
 
         start = time.perf_counter()
         try:
@@ -307,27 +381,26 @@ class BatchedJevScorer:
         if not to_ask:
             return results
 
+        # One shared state for all visual criteria so Jev groups into one
+        # request; criterion text lives only in the fenced question.
+        shared_state = {
+            "vision_description": vision_description,
+            "digest_moment_labels": metadata.digest_moment_labels,
+            "captions": metadata.captions,
+            "duration_seconds": metadata.duration_seconds,
+            "aspect_ratio": metadata.aspect_ratio,
+        }
+        audio_state = {
+            "vision_description": "",
+            "digest_moment_labels": metadata.digest_moment_labels,
+            "captions": metadata.captions,
+            "duration_seconds": metadata.duration_seconds,
+            "aspect_ratio": metadata.aspect_ratio,
+        }
         items = []
         for _, criterion in to_ask:
-            if criterion.audio_led:
-                state = {
-                    "criterion": criterion.text,
-                    "vision_description": "",
-                    "digest_moment_labels": metadata.digest_moment_labels,
-                    "captions": metadata.captions,
-                    "duration_seconds": metadata.duration_seconds,
-                }
-            else:
-                state = {
-                    "criterion": criterion.text,
-                    "vision_description": vision_description,
-                    "digest_moment_labels": metadata.digest_moment_labels,
-                    "captions": metadata.captions,
-                    "duration_seconds": metadata.duration_seconds,
-                    "aspect_ratio": metadata.aspect_ratio,
-                }
-            prompt = f"Does this video meet the criterion: '{criterion.text}'?"
-            items.append((BoolQuestion(prompt=prompt), state))
+            state = audio_state if criterion.audio_led else shared_state
+            items.append((BoolQuestion(prompt=_fenced_criterion_question(criterion.text)), state))
 
         start = time.perf_counter()
         try:
@@ -416,11 +489,19 @@ def check_timing_criteria(criterion_id: str, metadata: RenderMetadata) -> Criter
     Returns CriterionResult if the criterion_id matches a timing pattern,
     otherwise None (indicating the criterion should go to Jev).
     """
-    # Hook within first N seconds
+    # Hook within first N seconds (requires has_hook on output/source windows)
     if match := _TIMING_PATTERNS["hook_within"].match(criterion_id):
         threshold = int(match.group(1))
+        windows = metadata.clip_windows
+        if not windows or not any("has_hook" in w for w in windows):
+            return CriterionResult(
+                criterion_id=criterion_id,
+                verdict=Verdict.UNSURE,
+                confidence=0.0,
+                reason="timing check: missing has_hook on clip_windows",
+            )
         has_hook = any(
-            w.get("has_hook") and w.get("start_s", 0) <= threshold for w in metadata.clip_windows
+            w.get("has_hook") and float(w.get("start_s", 0)) <= threshold for w in windows
         )
         found_msg = "found" if has_hook else "not found"
         return CriterionResult(
@@ -430,20 +511,28 @@ def check_timing_criteria(criterion_id: str, metadata: RenderMetadata) -> Criter
             reason=f"timing check: hook {found_msg} in first {threshold}s",
         )
 
-    # No dead air over N seconds
+    # No dead air over N seconds — only on output timeline fields
     if match := _TIMING_PATTERNS["no_dead_air_over"].match(criterion_id):
         threshold = int(match.group(1))
-        windows = sorted(metadata.clip_windows, key=lambda w: w.get("start_s", 0))
+        windows = metadata.clip_windows
+        if not windows or not all("output_start_s" in w and "output_end_s" in w for w in windows):
+            return CriterionResult(
+                criterion_id=criterion_id,
+                verdict=Verdict.UNSURE,
+                confidence=0.0,
+                reason="timing check: missing output timeline for dead-air",
+            )
+        ordered = sorted(windows, key=lambda w: float(w.get("output_start_s", 0)))
         max_gap = 0.0
-        for i in range(1, len(windows)):
-            gap = windows[i].get("start_s", 0) - windows[i - 1].get("end_s", 0)
+        for i in range(1, len(ordered)):
+            gap = float(ordered[i]["output_start_s"]) - float(ordered[i - 1]["output_end_s"])
             max_gap = max(max_gap, gap)
         has_dead_air = max_gap > threshold
         return CriterionResult(
             criterion_id=criterion_id,
             verdict=Verdict.FAIL if has_dead_air else Verdict.PASS,
             confidence=1.0,
-            reason=f"timing check: max gap {max_gap:.1f}s, threshold {threshold}s",
+            reason=f"timing check: max output gap {max_gap:.1f}s, threshold {threshold}s",
         )
 
     # Duration under N seconds
@@ -625,10 +714,18 @@ def run_quality_gate(
                         )
                     )
             else:
-                # 3. Vision pass
-                if time.monotonic() - start_time > timeout:
+                # 3. Vision pass (bounded by remaining gate deadline)
+                remaining = timeout - (time.monotonic() - start_time)
+                if remaining <= 0:
                     return GateResult(
                         passed=True, skipped=True, skip_reason="timeout before vision"
+                    ), []
+
+                if not reserve_daily_cap():
+                    return GateResult(
+                        passed=True,
+                        skipped=True,
+                        skip_reason="daily cap reached",
                     ), []
 
                 vision_start = time.monotonic()
@@ -638,31 +735,59 @@ def run_quality_gate(
                     n_frames=len(frames),
                     game=metadata.game or "unknown",
                 )
-                description, usage_info = vision_client.describe_video(
-                    frames,
-                    system_prompt=_VISION_SYSTEM_PROMPT,
-                    user_prompt=user_prompt,
-                )
+
+                def _vision_call():
+                    return vision_client.describe_video(
+                        frames,
+                        system_prompt=_VISION_SYSTEM_PROMPT,
+                        user_prompt=user_prompt,
+                    )
+
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    fut = pool.submit(_vision_call)
+                    try:
+                        description, usage_info = fut.result(timeout=remaining)
+                    except FuturesTimeout:
+                        return GateResult(
+                            passed=True,
+                            skipped=True,
+                            skip_reason="timeout during vision",
+                            timings={"total_ms": int((time.monotonic() - start_time) * 1000)},
+                        ), []
+
                 result.vision_description = description
                 result.cost_estimate = usage_info
                 result.timings["vision_ms"] = int((time.monotonic() - vision_start) * 1000)
 
                 # 4. Score all Jev criteria in one batched request
-                if time.monotonic() - start_time > timeout:
+                remaining = timeout - (time.monotonic() - start_time)
+                if remaining <= 0:
                     result.skipped = True
                     result.skip_reason = "timeout before Jev scoring"
                 else:
                     scoring_start = time.monotonic()
-                    # Note: already_passed should be set by caller if criteria passed previously.
-                    # We don't track pass/fail history here, so pass empty set.
-                    jev_results = batched_scorer.score_all(
-                        jev_criteria,
-                        description,
-                        metadata,
-                    )
-                    for criterion, cr in zip(jev_criteria, jev_results, strict=True):
-                        cr.retry_count = retry_counts.get(criterion.id, 0)
-                        result.criteria_results.append(cr)
+
+                    def _score_call():
+                        return batched_scorer.score_all(
+                            jev_criteria,
+                            description,
+                            metadata,
+                            already_passed=already_passed,
+                        )
+
+                    with ThreadPoolExecutor(max_workers=1) as pool:
+                        fut = pool.submit(_score_call)
+                        try:
+                            jev_results = fut.result(timeout=remaining)
+                        except FuturesTimeout:
+                            result.skipped = True
+                            result.skip_reason = "timeout during Jev scoring"
+                            jev_results = None
+
+                    if jev_results is not None:
+                        for criterion, cr in zip(jev_criteria, jev_results, strict=True):
+                            cr.retry_count = retry_counts.get(criterion.id, 0)
+                            result.criteria_results.append(cr)
                     result.timings["scoring_ms"] = int((time.monotonic() - scoring_start) * 1000)
 
         # 5. Process results and generate revision requests

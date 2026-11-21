@@ -600,9 +600,9 @@ def run_box_render(
         up_secs = result.timings["upload_seconds"]
         _log.info("uploaded %d outputs in %.1fs", len(result.outputs), up_secs)
 
-        # Quality gate: optional post-render check
+        # Quality gate: optional post-render check (None when flag off / no criteria)
         gate_result, revision_requests = _run_quality_gate(render_input, result, scratch_dir)
-        result.quality_gate = gate_result.model_dump() if gate_result else {}
+        result.quality_gate = gate_result.model_dump() if gate_result is not None else {}
 
         result.ok = True
         result.timings["total_seconds"] = round(time.monotonic() - start_time, 2)
@@ -646,21 +646,53 @@ def run_render_request(
     )
 
 
+def _output_clip_windows(trims: list[dict], concat_order: list[str]) -> list[dict]:
+    """Build output-timeline windows (back-to-back concat) from source trims."""
+    by_id = {t.get("clip_id"): t for t in trims}
+    ordered = [by_id[cid] for cid in concat_order if cid in by_id] or list(trims)
+    windows: list[dict] = []
+    cursor = 0.0
+    for trim in ordered:
+        start_s = float(trim.get("start_s", 0))
+        end_s = float(trim.get("end_s", 0))
+        duration = max(0.0, end_s - start_s)
+        window = {
+            "clip_id": trim.get("clip_id"),
+            "start_s": start_s,
+            "end_s": end_s,
+            "output_start_s": cursor,
+            "output_end_s": cursor + duration,
+        }
+        if "has_hook" in trim:
+            window["has_hook"] = trim["has_hook"]
+        windows.append(window)
+        cursor += duration
+    return windows
+
+
 def _run_quality_gate(
     render_input: RenderInput,
     result: RenderResult,
     scratch_dir: Path,
 ):
-    """Run the quality gate if criteria are present. Returns (GateResult, revisions)."""
-    from ..edit_plan import QualityCriterion
-    from .quality_gate import GateResult, RenderMetadata, run_quality_gate
+    """Run the quality gate if enabled and criteria exist.
 
+    Returns ``(None, [])`` when the flag is off or there are no criteria so
+    ``video.rendered`` stays byte-identical. Otherwise returns
+    ``(GateResult | None-on-hard-skip, revisions)``.
+    """
+    from .quality_gate import (
+        GateResult,
+        RenderMetadata,
+        load_retry_state,
+        run_quality_gate,
+        save_retry_state,
+    )
+
+    if not settings.grokbot_quality_gate_enabled:
+        return None, []
     if not render_input.quality_criteria:
-        return GateResult(passed=True, skipped=True, skip_reason="no criteria"), []
-
-    criteria = [
-        QualityCriterion(**c) if isinstance(c, dict) else c for c in render_input.quality_criteria
-    ]
+        return None, []
 
     primary_output = next(
         (o for o in result.outputs if o.aspect == "9:16"),
@@ -670,31 +702,57 @@ def _run_quality_gate(
         _log.warning("quality_gate: no primary output to check")
         return GateResult(passed=True, skipped=True, skip_reason="no output"), []
 
-    metadata = RenderMetadata(
-        duration_seconds=primary_output.duration_seconds,
-        aspect_ratio=primary_output.aspect,
-        clip_windows=[
-            {"clip_id": t.get("clip_id"), "start_s": t.get("start_s"), "end_s": t.get("end_s")}
-            for t in render_input.trims
-        ],
-        captions=render_input.captions,
-        digest_moment_labels=render_input.digest_moment_labels,
-        game=render_input.game,
-    )
-
     gate_frames_dir = scratch_dir / "gate_frames"
     gate_frames_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        return run_quality_gate(
+        from ..edit_plan import QualityCriterion
+
+        criteria = [
+            QualityCriterion(**c) if isinstance(c, dict) else c
+            for c in render_input.quality_criteria
+        ]
+        retry_counts, already_passed = load_retry_state(render_input.edit_plan_id)
+        metadata = RenderMetadata(
+            duration_seconds=primary_output.duration_seconds,
+            aspect_ratio=primary_output.aspect,
+            clip_windows=_output_clip_windows(render_input.trims, render_input.concat_order),
+            captions=render_input.captions,
+            digest_moment_labels=render_input.digest_moment_labels,
+            game=render_input.game,
+        )
+        gate_result, revisions = run_quality_gate(
             primary_output.local_path,
             criteria,
             metadata,
             gate_frames_dir,
+            retry_counts=retry_counts,
+            already_passed=already_passed,
         )
+
+        # Persist retry/pass state for the next render of this plan.
+        new_counts = dict(retry_counts)
+        new_passed = set(already_passed)
+        for cr in gate_result.criteria_results:
+            if cr.verdict.value == "pass":
+                new_passed.add(cr.criterion_id)
+            elif cr.verdict.value == "fail":
+                new_counts[cr.criterion_id] = cr.retry_count + (
+                    1 if any(r.criterion_id == cr.criterion_id for r in revisions) else 0
+                )
+        for req in revisions:
+            new_counts[req.criterion_id] = max(
+                new_counts.get(req.criterion_id, 0), req.retry_number
+            )
+        save_retry_state(
+            render_input.edit_plan_id,
+            retry_counts=new_counts,
+            already_passed=new_passed,
+        )
+        return gate_result, revisions
     except Exception as exc:
         _log.exception("quality_gate error: %s", exc)
-        return GateResult(passed=True, skipped=True, skip_reason=f"error: {exc}"), []
+        return GateResult(passed=True, skipped=True, skip_reason=f"error: {type(exc).__name__}"), []
 
 
 def _emit_revision_request(emit_fn, result: RenderResult, request) -> None:
@@ -735,7 +793,7 @@ def _emit_success(emit_fn, result: RenderResult, gate_result=None) -> None:
         "outputs": outputs_payload,
         "timings": result.timings,
     }
-    if gate_result:
+    if gate_result is not None:
         payload["quality_gate"] = gate_result.model_dump()
 
     emit_fn(Event(event="video.rendered", payload=payload))

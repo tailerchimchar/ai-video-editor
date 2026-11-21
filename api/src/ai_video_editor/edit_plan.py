@@ -74,8 +74,8 @@ class QualityCriterion(BaseModel):
     on frames alone).
     """
 
-    id: str
-    text: str
+    id: str = Field(pattern=r"^[a-z0-9_]{1,64}$", max_length=64)
+    text: str = Field(min_length=1, max_length=300)
     audio_led: bool = False
 
 
@@ -88,7 +88,7 @@ class EditPlan(BaseModel):
     cards: list[PlanCard] = Field(default_factory=list)
     sfx: list[PlanSfx] = Field(default_factory=list)
     rejected: list[Rejected] = Field(default_factory=list)
-    quality_criteria: list[QualityCriterion] = Field(default_factory=list)
+    quality_criteria: list[QualityCriterion] = Field(default_factory=list, max_length=10)
 
 
 def discover_sfx_names() -> set[str]:
@@ -176,7 +176,13 @@ class PlanNotExecutableError(RuntimeError):
 
 
 def plan_hash(plan: EditPlan) -> str:
-    return hashlib.sha256(plan.model_dump_json().encode("utf-8")).hexdigest()
+    """Hash the plan. Empty ``quality_criteria`` is omitted so pre-field
+    plans keep a stable hash across the upgrade."""
+    if not plan.quality_criteria:
+        payload = plan.model_dump_json(exclude={"quality_criteria"})
+    else:
+        payload = plan.model_dump_json()
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def load_progress(folder: Path) -> PlanProgress | None:

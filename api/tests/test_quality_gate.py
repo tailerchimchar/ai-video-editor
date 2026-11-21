@@ -712,19 +712,49 @@ class TestTimingChecks:
         assert result.verdict in (Verdict.PASS, Verdict.FAIL)
 
     def test_check_dead_air_over_n_seconds(self):
-        """Dead air check is computed from metadata, not Jev."""
+        """Dead air uses output timeline gaps, not source trim windows."""
+        from ai_video_editor.grokbot.quality_gate import check_timing_criteria
+
+        meta = RenderMetadata(
+            duration_seconds=30.0,
+            clip_windows=[
+                {"start_s": 0.0, "end_s": 5.0, "output_start_s": 0.0, "output_end_s": 5.0},
+                {
+                    "start_s": 15.0,
+                    "end_s": 20.0,
+                    "output_start_s": 15.0,
+                    "output_end_s": 20.0,
+                },  # 10s output gap
+            ],
+        )
+        result = check_timing_criteria("no_dead_air_over_5s", meta)
+        assert result is not None
+        assert result.verdict == Verdict.FAIL
+
+    def test_dead_air_unsure_without_output_timeline(self):
         from ai_video_editor.grokbot.quality_gate import check_timing_criteria
 
         meta = RenderMetadata(
             duration_seconds=30.0,
             clip_windows=[
                 {"start_s": 0.0, "end_s": 5.0},
-                {"start_s": 15.0, "end_s": 20.0},  # 10s gap = dead air
+                {"start_s": 15.0, "end_s": 20.0},
             ],
         )
         result = check_timing_criteria("no_dead_air_over_5s", meta)
         assert result is not None
-        assert result.verdict == Verdict.FAIL
+        assert result.verdict == Verdict.UNSURE
+
+    def test_hook_unsure_without_has_hook(self):
+        from ai_video_editor.grokbot.quality_gate import check_timing_criteria
+
+        meta = RenderMetadata(
+            duration_seconds=30.0,
+            clip_windows=[{"start_s": 0.0, "end_s": 5.0}],
+        )
+        result = check_timing_criteria("hook_within_3s", meta)
+        assert result is not None
+        assert result.verdict == Verdict.UNSURE
 
     def test_check_duration_limit(self):
         """Duration limit is computed from metadata, not Jev."""
@@ -838,3 +868,117 @@ class TestQualityCriterion:
             ],
         )
         assert len(plan_with_criteria.quality_criteria) == 1
+
+    def test_rejects_hostile_id_and_long_text(self):
+        import pytest
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            QualityCriterion(id="Bad-Id", text="ok")
+        with pytest.raises(ValidationError):
+            QualityCriterion(id="ok_id", text="x" * 301)
+
+
+class TestPlanHashStability:
+    def test_empty_quality_criteria_excluded_from_hash(self):
+        from ai_video_editor.edit_plan import EditPlan, plan_hash
+
+        without_field = EditPlan(format="short")
+        # Simulate a pre-upgrade dump that never had the field
+        legacy = EditPlan.model_validate({"format": "short"})
+        assert plan_hash(without_field) == plan_hash(legacy)
+        with_empty = EditPlan(format="short", quality_criteria=[])
+        assert plan_hash(with_empty) == plan_hash(without_field)
+        with_criteria = EditPlan(
+            format="short",
+            quality_criteria=[QualityCriterion(id="c1", text="hook")],
+        )
+        assert plan_hash(with_criteria) != plan_hash(without_field)
+
+
+class TestDailyCapAndRetryState:
+    def test_reserve_daily_cap_enforced(self, tmp_path, monkeypatch):
+        from ai_video_editor import config
+        from ai_video_editor.grokbot import quality_gate as qg
+
+        monkeypatch.setattr(config.settings, "workspace_dir", tmp_path)
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_daily_cap", 2)
+        assert qg.reserve_daily_cap() is True
+        assert qg.reserve_daily_cap() is True
+        assert qg.reserve_daily_cap() is False
+
+    def test_retry_state_roundtrip(self, tmp_path, monkeypatch):
+        from ai_video_editor import config
+        from ai_video_editor.grokbot.quality_gate import load_retry_state, save_retry_state
+
+        monkeypatch.setattr(config.settings, "workspace_dir", tmp_path)
+        save_retry_state("plan-1", retry_counts={"c1": 2}, already_passed={"c2"})
+        counts, passed = load_retry_state("plan-1")
+        assert counts == {"c1": 2}
+        assert passed == {"c2"}
+
+
+class TestSharedJevState:
+    def test_batched_scorer_uses_one_shared_state(self, monkeypatch):
+        """All visual criteria share one state so Jev groups into one transport call."""
+        from ai_video_editor.decisions.backends.jev import _group_by_state
+        from ai_video_editor.decisions.models import Answer
+        from ai_video_editor.grokbot.quality_gate import BatchedJevScorer
+
+        ask_many_calls: list = []
+
+        def mock_ask_many(items):
+            ask_many_calls.append(items)
+            return [Answer(value=True, probability=0.9, backend="jev") for _ in items]
+
+        monkeypatch.setattr("ai_video_editor.decisions.ask_many", mock_ask_many)
+        results = BatchedJevScorer().score_all(
+            [
+                QualityCriterion(id="c1", text="Shows a kill"),
+                QualityCriterion(id="c2", text="Good pacing"),
+            ],
+            vision_description="A multikill",
+            metadata=RenderMetadata(duration_seconds=30.0, aspect_ratio="9:16"),
+        )
+        assert len(ask_many_calls) == 1
+        assert len(_group_by_state(ask_many_calls[0])) == 1
+        assert "criterion" not in ask_many_calls[0][0][1]
+        assert all(r.verdict == Verdict.PASS for r in results)
+
+
+class TestFlagOffPayload:
+    def test_run_quality_gate_helper_returns_none_when_disabled(self, tmp_path, monkeypatch):
+        from ai_video_editor import config
+        from ai_video_editor.grokbot.box_render import (
+            RenderInput,
+            RenderOutput,
+            RenderResult,
+            _run_quality_gate,
+        )
+
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_enabled", False)
+        result = RenderResult(
+            ok=True,
+            edit_plan_id="plan-1",
+            edit_plan_version="1",
+            asset_id="a1",
+            outputs=[
+                RenderOutput(aspect="9:16", local_path=tmp_path / "o.mp4", duration_seconds=1.0)
+            ],
+        )
+        (tmp_path / "o.mp4").write_bytes(b"x")
+        gate, revs = _run_quality_gate(
+            RenderInput(
+                edit_plan_id="plan-1",
+                edit_plan_version="1",
+                asset_id="a1",
+                clips=[],
+                trims=[{"clip_id": "1", "start_s": 0, "end_s": 1}],
+                concat_order=["1"],
+                quality_criteria=[{"id": "c1", "text": "ok", "audio_led": False}],
+            ),
+            result,
+            tmp_path,
+        )
+        assert gate is None
+        assert revs == []
