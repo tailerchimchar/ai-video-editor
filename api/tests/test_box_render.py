@@ -237,6 +237,34 @@ class FakeUploader:
 
 
 class TestRunBoxRenderE2E:
+    @pytest.fixture(autouse=True)
+    def _enable_box_render(self, monkeypatch):
+        monkeypatch.setattr(settings, "grokbot_box_render_enabled", True)
+
+    def test_refuses_when_flag_off(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(settings, "grokbot_box_render_enabled", False)
+        events: list = []
+        uploader = FakeUploader()
+        render_input = RenderInput(
+            edit_plan_id="plan-disabled",
+            edit_plan_version="1",
+            asset_id="asset-disabled",
+            clips=[{"drive_id": "d1", "clip_ref": "1"}],
+            trims=[{"clip_id": "1", "start_s": 0, "end_s": 1}],
+            concat_order=["1"],
+        )
+        result = run_box_render(
+            uploader,
+            render_input,
+            emit_fn=lambda e: events.append(e),
+            lock=RenderLock(str(tmp_path / "test.lock")),
+        )
+        assert not result.ok
+        assert result.error == "box render disabled"
+        failed = [e for e in events if e.event == "render.failed"]
+        assert len(failed) == 1
+        assert failed[0].payload["stage"] == "disabled"
+
     def test_emits_video_rendered_on_success(self, tmp_path, test_clip):
         events: list = []
         uploader = FakeUploader()
@@ -527,3 +555,50 @@ class TestRenderRequestItem:
         with pytest.raises(QueueRejected) as exc:
             parse_item(item_json)
         assert "unknown clip_ref" in str(exc.value)
+
+
+# --- Flag / endpoint tests ---
+
+
+_RENDER_BODY = {
+    "asset_id": "asset-001",
+    "edit_plan_id": "plan-001",
+    "edit_plan_version": "1",
+    "game": "league",
+    "clips": [
+        {"clip_ref": "1", "drive_id": "d1", "start_s": 0.0, "end_s": 10.0},
+    ],
+    "concat_order": ["1"],
+}
+
+
+def test_box_render_flag_defaults_off(tmp_path):
+    from ai_video_editor.config import Settings
+
+    loaded = Settings(
+        outplayed_media_dir=tmp_path,
+        workspace_dir=tmp_path,
+        _env_file=None,
+    )
+    assert loaded.grokbot_box_render_enabled is False
+
+
+def test_submit_render_returns_503_when_flag_off(client, monkeypatch):
+    monkeypatch.setattr(settings, "grokbot_box_render_enabled", False)
+    r = client.post("/api/v1/grokbot/render", json=_RENDER_BODY)
+    assert r.status_code == 503
+    assert r.json()["detail"] == "box render disabled"
+
+
+def test_submit_render_queues_when_flag_on(client, monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "grokbot_box_render_enabled", True)
+    queue_root = tmp_path / "queue-repo"
+    (queue_root / "queue").mkdir(parents=True)
+    monkeypatch.setattr(settings, "grokbot_queue_repo_dir", queue_root)
+
+    r = client.post("/api/v1/grokbot/render", json=_RENDER_BODY)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "queued"
+    assert "id" in body
+    assert (queue_root / "queue" / f"{body['id']}.json").is_file()

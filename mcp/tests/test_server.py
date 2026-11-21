@@ -169,3 +169,48 @@ def test_watch_montage_posts_custom_name_body():
     assert body["custom_name"] == "Valorant_best_of_v1"
     assert body["save_markdown"] is True
     assert out["critique"]["overall_verdict"] == "needs_edits"
+
+
+def test_submit_box_render_posts_to_backend():
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["method"] = request.method
+        seen["url"] = str(request.url)
+        seen["body"] = request.read().decode()
+        return httpx.Response(200, json={"id": "item-1", "status": "queued"})
+
+    with _patch_client(handler):
+        out = server.submit_box_render(
+            asset_id="asset-1",
+            edit_plan_id="plan-1",
+            edit_plan_version="1",
+            game="league",
+            clips=[{"clip_ref": "1", "drive_id": "d1", "start_s": 0.0, "end_s": 10.0}],
+            concat_order=["1"],
+        )
+
+    import json as _json
+    assert seen["method"] == "POST"
+    assert seen["url"].endswith("/api/v1/grokbot/render")
+    body = _json.loads(seen["body"])
+    assert body["asset_id"] == "asset-1"
+    assert body["game"] == "league"
+    assert out == {"id": "item-1", "status": "queued"}
+
+
+def test_submit_box_render_surfaces_disabled_response():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, json={"detail": "box render disabled"})
+
+    with _patch_client(handler):
+        out = server.submit_box_render(
+            asset_id="asset-1",
+            edit_plan_id="plan-1",
+            edit_plan_version="1",
+            game="league",
+            clips=[{"clip_ref": "1", "drive_id": "d1", "start_s": 0.0, "end_s": 10.0}],
+            concat_order=["1"],
+        )
+
+    assert out == {"error": "box render disabled", "status_code": 503}
