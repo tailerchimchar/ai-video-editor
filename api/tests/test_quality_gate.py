@@ -947,11 +947,59 @@ class TestJevFramesFlagsDefaultOff:
 
         assert frames_scorer.calls == []
         assert result.vision_description == "Kill at 5s for PlayerOne_placeholder"
-        assert result.timings.get("scoring_path") == "haiku_description"
+        # scoring_path is only set when a frames experiment flag is on
+        assert "scoring_path" not in result.timings
         assert result.criteria_results[0].reason == "haiku path"
 
 
 class TestJevFramesEnabled:
+    def test_enabled_without_typesafe_key_falls_back_to_haiku(
+        self, test_video, scratch_dir, monkeypatch
+    ):
+        """Enabled mode with no TYPESAFE key must fall back to Haiku, not skip."""
+        from ai_video_editor import config
+        from ai_video_editor.grokbot.quality_gate import FramesJevScorer
+
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_enabled", True)
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_daily_cap", 100)
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_jev_frames_enabled", True)
+        monkeypatch.setattr(config.settings, "typesafe_api_key", None)
+
+        fake_vision = FakeVisionClient(description="fallback description")
+
+        class FakeBatched:
+            def score_all(self, criteria, vision_description, metadata, *, already_passed=None):
+                assert vision_description == "fallback description"
+                return [
+                    CriterionResult(
+                        criterion_id=c.id,
+                        verdict=Verdict.PASS,
+                        confidence=0.9,
+                        reason="haiku fallback",
+                    )
+                    for c in criteria
+                ]
+
+        with patch(
+            "ai_video_editor.grokbot.quality_gate._sample_frames",
+            return_value=[scratch_dir / "frame_001.jpg"],
+        ):
+            _synthetic_frame(scratch_dir / "frame_001.jpg")
+            result, _ = run_quality_gate(
+                test_video,
+                [QualityCriterion(id="c1", text="Shows a kill")],
+                RenderMetadata(duration_seconds=10.0),
+                scratch_dir,
+                vision_client=fake_vision,
+                batched_scorer=FakeBatched(),
+                frames_scorer=FramesJevScorer(),
+            )
+
+        assert not result.skipped
+        assert result.timings.get("scoring_path") == "haiku_description"
+        assert result.criteria_results[0].reason == "haiku fallback"
+        assert len(fake_vision.calls) == 1
+
     def test_frames_enabled_skips_haiku_and_uses_frames_scorer(
         self, test_video, scratch_dir, monkeypatch
     ):
@@ -1043,6 +1091,97 @@ class TestJevFramesEnabled:
 
 
 class TestJevFramesShadow:
+    def test_shadow_without_typesafe_key_keeps_haiku_verdict(
+        self, test_video, scratch_dir, monkeypatch
+    ):
+        """Missing TYPESAFE_API_KEY must not skip the gate in shadow mode.
+
+        FramesJevScorer resolves the real transport; a missing key must become
+        an error bundle so Haiku remains authoritative.
+        """
+        from ai_video_editor import config
+        from ai_video_editor.grokbot.quality_gate import FramesJevScorer
+
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_enabled", True)
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_daily_cap", 100)
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_jev_frames_shadow", True)
+        monkeypatch.setattr(config.settings, "typesafe_api_key", None)
+
+        fake_vision = FakeVisionClient(description="haiku saw a kill")
+
+        class FakeBatched:
+            def score_all(self, criteria, vision_description, metadata, *, already_passed=None):
+                return [
+                    CriterionResult(
+                        criterion_id=c.id,
+                        verdict=Verdict.PASS,
+                        confidence=0.95,
+                        reason="haiku authority",
+                    )
+                    for c in criteria
+                ]
+
+        with patch(
+            "ai_video_editor.grokbot.quality_gate._sample_frames",
+            return_value=[scratch_dir / "frame_001.jpg"],
+        ):
+            _synthetic_frame(scratch_dir / "frame_001.jpg")
+            result, revisions = run_quality_gate(
+                test_video,
+                [QualityCriterion(id="c1", text="Shows a kill")],
+                RenderMetadata(duration_seconds=10.0),
+                scratch_dir,
+                vision_client=fake_vision,
+                batched_scorer=FakeBatched(),
+                frames_scorer=FramesJevScorer(),  # real scorer, no key
+            )
+
+        assert not result.skipped
+        assert result.passed
+        assert revisions == []
+        assert result.criteria_results[0].verdict == Verdict.PASS
+        assert result.criteria_results[0].reason == "haiku authority"
+        assert len(fake_vision.calls) == 1
+
+    def test_shadow_skips_frames_call_when_haiku_path_already_skipped(
+        self, test_video, scratch_dir, monkeypatch
+    ):
+        """After a Haiku-path skip/timeout, shadow must not spend a Jev image call."""
+        from ai_video_editor import config
+
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_enabled", True)
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_daily_cap", 100)
+        monkeypatch.setattr(config.settings, "grokbot_quality_gate_jev_frames_shadow", True)
+
+        frames_scorer = FakeFramesScorer()
+
+        def haiku_marks_skipped(*, result, **_kwargs):
+            result.skipped = True
+            result.skip_reason = "timeout before Jev scoring"
+            return [], 0
+
+        with (
+            patch(
+                "ai_video_editor.grokbot.quality_gate._sample_frames",
+                return_value=[scratch_dir / "frame_001.jpg"],
+            ),
+            patch(
+                "ai_video_editor.grokbot.quality_gate._score_haiku_path",
+                side_effect=haiku_marks_skipped,
+            ),
+        ):
+            (scratch_dir / "frame_001.jpg").write_bytes(b"\x00")
+            result, _ = run_quality_gate(
+                test_video,
+                [QualityCriterion(id="c1", text="Shows a kill")],
+                RenderMetadata(duration_seconds=10.0),
+                scratch_dir,
+                frames_scorer=frames_scorer,
+            )
+
+        assert result.skipped
+        assert frames_scorer.calls == []
+
     def test_shadow_keeps_haiku_verdict_and_logs_agreement(
         self, test_video, scratch_dir, monkeypatch, caplog
     ):

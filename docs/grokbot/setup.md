@@ -119,7 +119,7 @@ It builds the name-free digest, refuses it if any transcript text slipped in, up
 
 ## 11. Quality gate: frames-to-Jev experiment (optional)
 
-Off by default. Tests whether Jev can score quality-gate criteria from sampled frames directly, replacing the Haiku vision description. Image support needs `TypeSafe-Danger-Zone-Images: true` and a top-level `assets` map (PNG/JPEG, 280–1568 px per side).
+Off by default. Tests whether Jev can score quality-gate criteria from sampled frames directly, replacing the Haiku vision description. Image support needs `TypeSafe-Danger-Zone-Images: true` and a top-level `assets` map (PNG/JPEG, 280–1568 px per side). Reference: https://docs.typesafe.ai/images (request shape and limits only; confirm current vendor terms before enabling).
 
 | Variable | Default | What it does |
 |---|---|---|
@@ -127,9 +127,18 @@ Off by default. Tests whether Jev can score quality-gate criteria from sampled f
 | `GROKBOT_QUALITY_GATE_JEV_FRAMES_ENABLED` | `false` | send frames to Jev; skip Haiku description |
 | `GROKBOT_QUALITY_GATE_JEV_FRAMES_SHADOW` | `false` | run both paths; keep Haiku as the real verdict |
 
+### TypeSafe Danger-Zone images (read before enabling)
+
+Sending the `TypeSafe-Danger-Zone-Images: true` header opts this process into TypeSafe's **experimental** image path. From their docs (as of the experiment):
+
+- **Billing:** each image counts as **input tokens**, billed at the same per-token input price as text. `usage.input_tokens` includes image tokens. TypeSafe has **not published** how many tokens an image uses — treat cost as unverified until you measure it in shadow logs.
+- **Retention / training / logging:** TypeSafe's public images page does **not** state how long frames are kept, whether they are used for training, or what is logged. Do **not** enable either frames flag until you have read TypeSafe's current terms / console policy and are fine with rendered gameplay frames leaving the machine.
+- **What leaves the machine when enabled:** up to 6 JPEG frames from the **rendered** output (re-encoded q90, fitted to 280–1568 px), plus clip JSON (duration, aspect, digest labels, plan-paraphrase captions, game, clip windows) and criterion texts. No transcripts, no audio, no file paths. Frames can show HUD / killfeed / on-screen names if the render did not crop them — privacy baseline remains docs/specs/spec-grokbot-team.md §10 until Noodlz confirms a frames exception.
+- **Cap / latency:** each frames request spends **one** `TYPESAFE_MAX_CALLS` slot (shared with format classification, prefilter, digest). Shadow mode therefore uses **+1 Jev call per gate run** on top of the text batch, and adds frames latency serially. Frames are **not** called after the gate has already skipped (e.g. Haiku timeout).
+
 ### 20-render comparison
 
-1. Keep `GROKBOT_QUALITY_GATE_ENABLED=true` and set `GROKBOT_QUALITY_GATE_JEV_FRAMES_SHADOW=true` (leave `…_JEV_FRAMES_ENABLED=false`).
+1. Keep `GROKBOT_QUALITY_GATE_ENABLED=true` and set `GROKBOT_QUALITY_GATE_JEV_FRAMES_SHADOW=true` (leave `…_JEV_FRAMES_ENABLED=false`). Budget ~20 extra Jev calls from `TYPESAFE_MAX_CALLS`.
 2. Render ~20 box outputs that hit the gate (same criteria as production).
 3. Grep logs for `quality_gate_jev_frames_shadow`. Each line has:
    - `agreement` — per-criterion id → whether frames matched Haiku

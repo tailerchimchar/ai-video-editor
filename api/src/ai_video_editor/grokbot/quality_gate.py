@@ -854,9 +854,12 @@ class FramesJevScorer:
                 error=prepared_error,
             )
 
-        transport = self._get_transport()
         start = time.perf_counter()
         try:
+            # Resolve transport inside the try so a missing TYPESAFE_API_KEY
+            # becomes an error bundle (Haiku fallback / shadow keeps Haiku),
+            # never an uncaught raise that skips the whole gate.
+            transport = self._get_transport()
             from ..anthropic_surface import SpendCapError, reserve_call
 
             try:
@@ -1162,7 +1165,9 @@ def run_quality_gate(
                         already_passed=already_passed,
                     )
 
-                if (use_frames or shadow) and not (result.skipped and not shadow):
+                # Never spend a frames Jev call after the gate has already
+                # been skipped (e.g. Haiku-path timeout), including shadow.
+                if (use_frames or shadow) and not result.skipped:
                     frames_bundle = frames_scorer.score_all(
                         jev_criteria,
                         frames,
@@ -1216,10 +1221,23 @@ def run_quality_gate(
                 else:
                     chosen = haiku_results
 
-                result.timings["scoring_path"] = (
-                    "jev_frames" if used_frames_primary else "haiku_description"
-                )
-                if len(chosen) == len(jev_criteria):
+                if use_frames or shadow:
+                    result.timings["scoring_path"] = (
+                        "jev_frames" if used_frames_primary else "haiku_description"
+                    )
+                if len(chosen) != len(jev_criteria):
+                    if chosen:
+                        result.skipped = True
+                        result.skip_reason = (
+                            result.skip_reason
+                            or "scoring result count mismatch; refusing partial pass"
+                        )
+                    elif result.skipped:
+                        pass
+                    else:
+                        result.skipped = True
+                        result.skip_reason = result.skip_reason or "no scoring results"
+                else:
                     for criterion, cr in zip(jev_criteria, chosen, strict=True):
                         cr.retry_count = retry_counts.get(criterion.id, 0)
                         result.criteria_results.append(cr)
