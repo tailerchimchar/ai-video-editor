@@ -111,7 +111,7 @@ On day one only previews, sleep and wake are executed. Edit plans, verdicts and 
 After each panel round, run this from the `api` folder (the API must be running when you pass a compilation id):
 
 ```
-uv run grokbot-publish-round <round folder> --game league [--compilation-id <id>] [--asset-id <id>] [--no-jev]
+uv run grokbot-publish-round <round folder> --game league --clips-dir "<highlights session folder>" [--compilation-id <id>] [--asset-id <id>] [--no-jev]
 ```
 
-It builds the name-free digest, refuses it if any transcript text slipped in, uploads the clips to Drive `clips/` and the digest to `digests/`, saves `digest.json` in the round folder, and sends the Lead a `round.published` event with the ids the Editor needs.
+`--clips-dir` is the `highlights\<game>\<session>` folder the clips were cut into; `clips.json` names bare files that live there, not in the round folder. It builds the name-free digest, refuses it if any transcript text slipped in, uploads the clips to Drive `clips/` and the digest to `digests/`, saves `digest.json` in the round folder, and sends the Lead a `round.published` event with the ids the Editor needs.
