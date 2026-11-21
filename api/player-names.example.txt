@@ -1,0 +1,20 @@
+# Player names to check in digests (one per line, case-insensitive).
+# Copy this to player-names.txt and add your names. That file is gitignored.
+#
+# Blank lines and lines starting with # are comments and are ignored.
+#
+# This file is OPTIONAL unless GROKBOT_PLAYER_NAME_CHECK=block.
+#
+# Modes (set via GROKBOT_PLAYER_NAME_CHECK):
+#   off (default): skip the check entirely, file not required
+#   warn: check if file exists, log warning with match count, publish anyway
+#   block: block on name match (exit 3) or missing/unreadable file (exit 5)
+#
+# These names are checked against all digest text fields (voice, copy, panel).
+# In block mode, a match blocks publishing before any upload.
+#
+# Invented placeholder examples (replace with real names):
+Quillfeather
+Mumblewick
+Zorblax
+Wobble
