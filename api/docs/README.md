@@ -14,6 +14,7 @@ then dive in:
 | [api.md](api.md) | Full HTTP endpoint reference (Phase 1 + 2) |
 | [candidate-sources.md](candidate-sources.md) | How each candidate source works |
 | [cost-and-tracing.md](cost-and-tracing.md) | Anthropic spend model, guards, Langfuse |
+| [jev-clip-cut.md](jev-clip-cut.md) | Optional ffmpeg+Jev clip in/out (flags, shadow run) |
 | [mcp.md](mcp.md) | MCP server — drive the pipeline from Claude |
 | [editing-tools.md](editing-tools.md) | Editing tools catalogue + per-game profiles |
 | [roadmap.md](roadmap.md) | RAG + reranker, Postgres, Overwolf |

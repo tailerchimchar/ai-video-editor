@@ -62,3 +62,11 @@ Credentials come from `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` /
 `LANGFUSE_BASE_URL`. If keys are absent, tracing silently disables —
 it never takes down the API. Spans are flushed on shutdown (the process
 is long-lived; background jobs finish between requests).
+
+## Optional: Jev clip cut
+
+`GROKBOT_JEV_CLIP_CUT_ENABLED` / `_SHADOW` (default off) can replace or
+compare Haiku-set cut windows using local ffmpeg signals + one Jev batch
+per clip. See [jev-clip-cut.md](jev-clip-cut.md) for the log lines and a
+~20-clip shadow recipe. ffmpeg is $0; Jev input tokens appear on the
+`jev_clip_cut run` summary line.
