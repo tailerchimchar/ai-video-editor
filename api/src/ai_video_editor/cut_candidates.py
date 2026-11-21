@@ -71,6 +71,10 @@ def _clamp_window(
     end = min(duration, end) if duration > 0 else end
     if end - start < min_len:
         end = min(duration if duration > 0 else start + min_len, start + min_len)
+    # Past-EOF / inverted windows stay degenerate (end <= start) so callers
+    # can drop them — never invent end < start after a min_len bump.
+    if end < start:
+        return round(start, 2), round(start, 2)
     return round(start, 2), round(end, 2)
 
 
@@ -191,17 +195,26 @@ def propose_cut_options(
     duration_seconds: float,
     word_spans: list[WordSpan] | None = None,
     max_options: int = 5,
+    seed_start: float | None = None,
+    seed_end: float | None = None,
 ) -> list[CutOption]:
     """Build 3-5 (start, end) candidates snapped to quiet / scene cues.
 
-    Always includes the plain event+/-padding window. Assist/death search
+    Always includes a base window. When ``seed_start``/``seed_end`` are set
+    (legacy ``cut_window`` / cluster first→last kill span), that seed is the
+    base and every option is expanded to cover it — never narrower than the
+    legacy union. Otherwise the base is event±padding. Assist/death search
     a wider neighborhood for snap points (Overwolf drift).
     """
     pre, post = _pre_post(event_type)
     search_pre, search_post = _search_radius(event_type, pre, post)
     file_dur = duration_seconds
 
-    base_start, base_end = _clamp_window(event_time - pre, event_time + post, duration=file_dur)
+    pad_start, pad_end = _clamp_window(event_time - pre, event_time + post, duration=file_dur)
+    if seed_start is not None and seed_end is not None and float(seed_end) > float(seed_start):
+        base_start, base_end = _clamp_window(float(seed_start), float(seed_end), duration=file_dur)
+    else:
+        base_start, base_end = pad_start, pad_end
 
     options: list[CutOption] = []
 
@@ -212,6 +225,12 @@ def propose_cut_options(
         if not (start <= event_time <= end):
             return
         s, e = _clamp_window(start, end, duration=file_dur)
+        # Never shrink below the seed/legacy union (Rampage / multi-kill).
+        s = min(s, base_start)
+        e = max(e, base_end)
+        s, e = _clamp_window(s, e, duration=file_dur)
+        if e <= s:
+            return
         facts = compute_facts(s, e, event_time, signals, word_spans)
         options.append(CutOption(start=s, end=e, facts=facts, label=label))
 

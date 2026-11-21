@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from ai_video_editor.config import settings
 from ai_video_editor.cut_signals import (
     CutSignals,
     LoudnessStep,
@@ -36,6 +37,9 @@ _SAMPLE_SCENE = """
 frame:12    pts:12000   pts_time:7.5
 lavfi.scene_score=0.55
 """
+
+# Captured from ffmpeg 6.1.1 on lavfi testsrc+sine (see fixtures/).
+_FFMPEG6_EBUR_FIXTURE = Path(__file__).parent / "fixtures" / "ffmpeg6_ebur128_sine.stderr.txt"
 
 
 def test_parse_silence_spans_and_loudness_steps():
@@ -104,12 +108,28 @@ def test_extract_rejects_degenerate_window():
     assert ms == 0.0
 
 
+def test_parse_captured_ffmpeg6_ebur128_sine_fixture():
+    """Parser accepts real ffmpeg 6 ebur128 lines (incl. M:-120.7 form)."""
+    text = _FFMPEG6_EBUR_FIXTURE.read_text(encoding="utf-8")
+    # Strip comment header lines.
+    body = "\n".join(line for line in text.splitlines() if line and not line.startswith("#"))
+    sig = parse_ffmpeg_stderr(body)
+    assert len(sig.loudness) > 0
+    # Continuous sine capture has no silencedetect spans.
+    assert sig.quiet_spans == []
+    # After the ebur128 ramp-up, momentary loudness is far above the floor.
+    mid = [s.loudness for s in sig.loudness if s.time >= 0.4]
+    assert mid and max(mid) > -30.0
+
+
 def test_ffmpeg_generated_testsrc_sine_signals(tmp_path: Path):
     """Real ffmpeg on synthetic testsrc+sine — no integration marker on master."""
     out = tmp_path / "synthetic.mp4"
+    ffmpeg = settings.ffmpeg_path
     cmd = [
-        "ffmpeg",
+        ffmpeg,
         "-y",
+        "-nostdin",
         "-f",
         "lavfi",
         "-i",
@@ -128,7 +148,13 @@ def test_ffmpeg_generated_testsrc_sine_signals(tmp_path: Path):
         str(out),
     ]
     try:
-        built = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        built = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            stdin=subprocess.DEVNULL,
+        )
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pytest.skip("ffmpeg unavailable")
     if built.returncode != 0:
@@ -136,6 +162,9 @@ def test_ffmpeg_generated_testsrc_sine_signals(tmp_path: Path):
 
     sig, ms = extract_cut_signals(str(out), (0.0, 3.0))
     assert ms > 0.0
-    # Sine is continuous — may or may not yield silence; loudness steps should.
     assert isinstance(sig, CutSignals)
-    assert len(sig.loudness) >= 1 or len(sig.quiet_spans) >= 0
+    # Continuous 440 Hz sine must yield loudness steps and must not look silent.
+    assert len(sig.loudness) > 0
+    assert sig.quiet_spans == []
+    mid = [s.loudness for s in sig.loudness if s.time >= 0.4]
+    assert mid and max(mid) > -30.0

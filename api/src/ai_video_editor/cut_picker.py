@@ -315,20 +315,12 @@ def _pick_cuts_one_batch(
 ) -> tuple[list[CutPick], int]:
     """One System One request for every option of every job. Raises on error.
 
+    Even a single job uses this path (does not swallow ask errors into a
+    padding fallback) so ``_batch_jev_clip_cuts`` can keep legacy windows.
     Returns `(picks, jev_request_count)` where request_count is 1 on success.
     """
     if not clip_jobs:
         return [], 0
-    if len(clip_jobs) == 1:
-        job = clip_jobs[0]
-        pick = pick_cut(
-            job["options"],
-            event_time=job["event_time"],
-            event_type=job.get("event_type"),
-            duration_seconds=job["duration_seconds"],
-            ask_many=ask_many,
-        )
-        return [pick], 1
 
     mega_options: list[dict] = []
     items: list[tuple[TypedQuestion, dict]] = []
@@ -466,12 +458,21 @@ def prepare_clip_cut_job(
     word_spans: list[WordSpan] | None = None,
     runner: FfmpegRunner | None = None,
     search_pad: float = 12.0,
+    seed_start: float | None = None,
+    seed_end: float | None = None,
 ) -> tuple[dict, float, CutSignals]:
     """ffmpeg signals + options for one clip (no Jev). Fail-safe on signals."""
     pre_r = max(search_pad, 8.0)
+    # Widen the ffmpeg search to cover a cluster seed when present.
+    left = event_time
+    right = event_time
+    if seed_start is not None:
+        left = min(left, float(seed_start))
+    if seed_end is not None:
+        right = max(right, float(seed_end))
     window = (
-        max(0.0, event_time - pre_r),
-        min(duration_seconds, event_time + pre_r) if duration_seconds > 0 else event_time + pre_r,
+        max(0.0, left - pre_r),
+        min(duration_seconds, right + pre_r) if duration_seconds > 0 else right + pre_r,
     )
     signals, ffmpeg_ms = extract_cut_signals(path, window, runner=runner)
     options = propose_cut_options(
@@ -480,6 +481,8 @@ def prepare_clip_cut_job(
         signals,
         duration_seconds=duration_seconds,
         word_spans=word_spans,
+        seed_start=seed_start,
+        seed_end=seed_end,
     )
     job = {
         "options": options,
@@ -500,11 +503,15 @@ def resolve_clip_cut(
     ask_many: AskMany | None = None,
     runner: FfmpegRunner | None = None,
     search_pad: float = 12.0,
+    seed_start: float | None = None,
+    seed_end: float | None = None,
 ) -> tuple[CutPick, float, CutSignals]:
     """ffmpeg signals → options → Jev pick for one clip. Fail-safe.
 
     Returns `(pick, ffmpeg_ms, signals)`. On signal failure still proposes
     options from empty signals and lets the picker fall back if needed.
+    Uses ``pick_cut`` (not the batch raise path) so single-clip callers
+    still get a flagged padding window on Jev errors.
     """
     job, ffmpeg_ms, signals = prepare_clip_cut_job(
         path,
@@ -514,9 +521,17 @@ def resolve_clip_cut(
         word_spans=word_spans,
         runner=runner,
         search_pad=search_pad,
+        seed_start=seed_start,
+        seed_end=seed_end,
     )
-    picks, _n = pick_cuts_batch([job], ask_many=ask_many)
-    return picks[0], ffmpeg_ms, signals
+    pick = pick_cut(
+        job["options"],
+        event_time=job["event_time"],
+        event_type=job.get("event_type"),
+        duration_seconds=job["duration_seconds"],
+        ask_many=ask_many,
+    )
+    return pick, ffmpeg_ms, signals
 
 
 def shadow_log_line(

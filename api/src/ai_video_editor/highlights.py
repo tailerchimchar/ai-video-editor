@@ -263,6 +263,35 @@ def _jev_clip_cut_active() -> bool:
     return bool(settings.grokbot_jev_clip_cut_enabled or settings.grokbot_jev_clip_cut_shadow)
 
 
+def _jev_seed_window(
+    cand: dict, legacy_start: float, legacy_end: float, duration: float
+) -> tuple[float, float]:
+    """Seed Jev options from the legacy union, expanded by cluster kills.
+
+    Overwolf multi-kill clusters store ``first_kill_seconds`` /
+    ``last_kill_seconds`` with ``anchor_seconds`` as the midpoint. Seeding
+    from first-pre .. last+post (unioned with the legacy Rampage window)
+    keeps the whole burst in every option.
+    """
+    start, end = float(legacy_start), float(legacy_end)
+    meta = cand.get("metadata") or {}
+    first = meta.get("first_kill_seconds")
+    last = meta.get("last_kill_seconds")
+    if first is not None and last is not None:
+        override = _event_override(cand.get("event_type"))
+        pre, post = override or (
+            settings.highlight_pre_seconds,
+            settings.highlight_post_seconds,
+        )
+        start = min(start, float(first) - pre)
+        end = max(end, float(last) + post)
+        cap = float(settings.highlight_max_seconds)
+        if end - start > cap:
+            end = start + cap
+        start, end = _clamp(start, end, duration)
+    return start, end
+
+
 def _apply_pick_to_legacy(
     *,
     event: str,
@@ -292,8 +321,18 @@ def _apply_pick_to_legacy(
         stats.shadow_lines.append(line)
         _log.info("%s", line)
 
+    # UNSURE / error / rules fallback → keep the legacy Rampage union.
+    if pick.flagged:
+        return legacy_start, legacy_end
+
     if settings.grokbot_jev_clip_cut_enabled:
-        return pick.start, pick.end
+        # Belt-and-suspenders: never return narrower than the legacy union.
+        start = min(pick.start, legacy_start)
+        end = max(pick.end, legacy_end)
+        cap = float(settings.highlight_max_seconds)
+        if end - start > cap:
+            end = start + cap
+        return start, end
     return legacy_start, legacy_end
 
 
@@ -320,6 +359,12 @@ def _batch_jev_clip_cuts(
             stats.clips += 1
             stats.skipped_no_anchor += 1
             continue
+        seed_start, seed_end = _jev_seed_window(
+            entry.get("cand") or {},
+            entry["legacy_start"],
+            entry["legacy_end"],
+            duration,
+        )
         try:
             job, ffmpeg_ms, _signals = prepare_clip_cut_job(
                 path,
@@ -327,6 +372,8 @@ def _batch_jev_clip_cuts(
                 entry["event"],
                 duration,
                 runner=runner,
+                seed_start=seed_start,
+                seed_end=seed_end,
             )
         except Exception as exc:
             _log.warning("jev_clip_cut prepare failed (%s); keeping legacy", exc)

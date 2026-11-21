@@ -157,6 +157,7 @@ def default_runner(argv: list[str]) -> str:
             text=True,
             timeout=120,
             check=False,
+            stdin=subprocess.DEVNULL,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
         _log.warning("cut_signals: ffmpeg runner failed: %s", exc)
@@ -169,6 +170,7 @@ def _audio_argv(path: str, start: float, duration: float) -> list[str]:
     return [
         settings.ffmpeg_path,
         "-hide_banner",
+        "-nostdin",
         "-ss",
         str(start),
         "-t",
@@ -188,6 +190,7 @@ def _scene_argv(path: str, start: float, duration: float) -> list[str]:
     return [
         settings.ffmpeg_path,
         "-hide_banner",
+        "-nostdin",
         "-ss",
         str(start),
         "-t",

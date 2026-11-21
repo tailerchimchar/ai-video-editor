@@ -98,6 +98,38 @@ def test_fallback_padding_matches_event_overrides():
     assert s == 97.0 and e == 108.0
 
 
+def test_seed_window_never_narrower_than_legacy_union():
+    """Cluster / legacy seed must survive snaps — no midpoint truncation."""
+    sig = _signals(
+        quiet=[(88.0, 89.0), (112.0, 113.0)],
+        loud=[(100.0, -16.0)],
+        scenes=[89.0, 112.0],
+    )
+    # Ace midpoint 100 with override (5, 12) would be 95..112; legacy union
+    # spans the whole 20 s burst (first_kill-pre .. last_kill+post).
+    opts = propose_cut_options(
+        100.0,
+        "ace",
+        sig,
+        duration_seconds=200.0,
+        seed_start=90.0,
+        seed_end=120.0,
+    )
+    assert opts
+    for o in opts:
+        assert o.start <= 90.0
+        assert o.end >= 120.0
+        assert o.start <= 100.0 <= o.end
+
+
+def test_clamp_window_drops_past_eof_via_add():
+    """Options past duration must not yield end < start after clamping."""
+    from ai_video_editor.cut_candidates import _clamp_window
+
+    s, e = _clamp_window(195.0, 210.0, duration=100.0)
+    assert e >= s
+
+
 def test_duration_range_is_positive_and_bounded():
     lo, hi = duration_range("kill")
     assert 0 < lo < hi
