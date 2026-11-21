@@ -109,6 +109,12 @@ class Settings(BaseSettings):
     grokbot_quality_gate_daily_cap: int = 100
     # Timeout for the entire quality gate step (vision + Jev scoring).
     grokbot_quality_gate_timeout_seconds: float = 60.0
+    # Experiment (off by default): send sampled frames to Jev directly and
+    # skip the Haiku vision description. Requires TypeSafe image support.
+    grokbot_quality_gate_jev_frames_enabled: bool = False
+    # Shadow mode: run frames-to-Jev alongside the Haiku path; keep the Haiku
+    # verdict as the real result and log per-criterion agreement + latencies.
+    grokbot_quality_gate_jev_frames_shadow: bool = False
 
     # Riot API candidate source (League). Free dev key from
     # developer.riotgames.com. Source stays inert until all three are set.
