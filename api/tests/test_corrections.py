@@ -50,9 +50,7 @@ def test_append_and_load_roundtrip(hints_dir) -> None:
 
 def test_load_returns_newest_first(hints_dir) -> None:
     for i in range(3):
-        corrections.append_correction(
-            "valorant", feedback=f"fb{i}", rule=f"rule{i}"
-        )
+        corrections.append_correction("valorant", feedback=f"fb{i}", rule=f"rule{i}")
     got = corrections.load_recent_corrections("valorant", limit=5)
     assert [c.rule for c in got] == ["rule2", "rule1", "rule0"]
 
@@ -106,9 +104,7 @@ def test_render_corrections_section_formats_markdown() -> None:
 
 
 def test_load_game_hints_injects_corrections(hints_dir) -> None:
-    corrections.append_correction(
-        "valorant", feedback="fb", rule="THE_INJECTED_RULE"
-    )
+    corrections.append_correction("valorant", feedback="fb", rule="THE_INJECTED_RULE")
     text, resolved = prompts.load_game_hints("valorant")
     assert resolved == "valorant"
     assert "THE_INJECTED_RULE" in text
@@ -150,9 +146,7 @@ def test_http_record_correction(hints_dir, client) -> None:
 def test_http_recent_corrections(hints_dir, client) -> None:
     corrections.append_correction("valorant", feedback="a", rule="r1")
     corrections.append_correction("valorant", feedback="b", rule="r2")
-    resp = client.get(
-        "/api/v1/mentor/recent_corrections", params={"game": "valorant"}
-    )
+    resp = client.get("/api/v1/mentor/recent_corrections", params={"game": "valorant"})
     assert resp.status_code == 200
     body = resp.json()
     assert body["count"] == 2

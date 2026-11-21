@@ -89,6 +89,7 @@ def test_scan_sorts_by_mtime_desc(tmp_path, monkeypatch) -> None:
     _make_mp4(new, size_bytes=1024)
     # Force distinct mtimes
     import os
+
     now = 1_800_000_000  # arbitrary epoch
     os.utime(old, (now - 3600, now - 3600))
     os.utime(new, (now, now))
@@ -124,9 +125,9 @@ def test_filter_by_since_none_returns_all() -> None:
 def test_filter_by_since_one_day_keeps_recent() -> None:
     now = datetime(2026, 7, 7, 20, 0, 0)
     clips = [
-        _ref("today.mp4", 2, now.timestamp()),      # 2h ago — kept
-        _ref("yesterday.mp4", 20, now.timestamp()), # 20h ago — kept (<24h)
-        _ref("old.mp4", 240, now.timestamp()),      # 10 days ago — dropped
+        _ref("today.mp4", 2, now.timestamp()),  # 2h ago — kept
+        _ref("yesterday.mp4", 20, now.timestamp()),  # 20h ago — kept (<24h)
+        _ref("old.mp4", 240, now.timestamp()),  # 10 days ago — dropped
     ]
     result = _filter_by_since(clips, since_days=1, now=now)
     files = {r.path.name for r in result}
@@ -137,7 +138,7 @@ def test_filter_by_since_seven_days_boundary() -> None:
     now = datetime(2026, 7, 7, 20, 0, 0)
     clips = [
         _ref("edge_in.mp4", 24 * 6, now.timestamp()),  # 6 days ago — in
-        _ref("edge_out.mp4", 24 * 8, now.timestamp()), # 8 days ago — out
+        _ref("edge_out.mp4", 24 * 8, now.timestamp()),  # 8 days ago — out
     ]
     result = _filter_by_since(clips, since_days=7, now=now)
     files = {r.path.name for r in result}

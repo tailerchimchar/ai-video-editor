@@ -241,8 +241,11 @@ async def delete_source(asset_id: str) -> DeleteSourceResponse:
         # Containment safety: the path MUST be inside OUTPLAYED_MEDIA_DIR.
         src_root = settings.outplayed_media_dir.resolve()
         try:
-            file_path = (settings.outplayed_media_dir.parent / asset["path"]).resolve() \
-                if not os.path.isabs(asset["path"]) else os.path.realpath(asset["path"])
+            file_path = (
+                (settings.outplayed_media_dir.parent / asset["path"]).resolve()
+                if not os.path.isabs(asset["path"])
+                else os.path.realpath(asset["path"])
+            )
             file_path = os.fspath(file_path)
         except Exception as exc:
             raise HTTPException(400, f"Could not resolve asset path: {exc}") from None
@@ -336,9 +339,7 @@ async def _run_ingest_url_job(job_id: str, url: str, game: str) -> None:
     """Download VOD via yt-dlp, register the asset, mark the job done."""
     db = await get_db()
     try:
-        await db.execute(
-            "UPDATE jobs SET status = 'running' WHERE id = ?", (job_id,)
-        )
+        await db.execute("UPDATE jobs SET status = 'running' WHERE id = ?", (job_id,))
         await db.commit()
 
         argv = _resolve_yt_dlp_invocation()
@@ -364,9 +365,12 @@ async def _run_ingest_url_job(job_id: str, url: str, game: str) -> None:
         # post-processing moves — that's what we want to register in the DB.
         cmd = [
             *argv,
-            "-f", "best",
-            "-o", out_template,
-            "--print", "after_move:filepath",
+            "-f",
+            "best",
+            "-o",
+            out_template,
+            "--print",
+            "after_move:filepath",
             "--no-progress",
             url,
         ]
@@ -400,9 +404,7 @@ async def _run_ingest_url_job(job_id: str, url: str, game: str) -> None:
         # cleanup tool (#2) can distinguish from manually-placed files.
         filename = os.path.basename(path)
         # If somehow scan already grabbed it, just update; otherwise insert.
-        existing = await db.execute_fetchall(
-            "SELECT id FROM assets WHERE path = ?", (path,)
-        )
+        existing = await db.execute_fetchall("SELECT id FROM assets WHERE path = ?", (path,))
         try:
             dur = await asyncio.to_thread(get_duration_seconds, path)
         except Exception:
@@ -413,9 +415,7 @@ async def _run_ingest_url_job(job_id: str, url: str, game: str) -> None:
         if existing:
             asset_id = dict(existing[0])["id"]
             await db.execute(
-                "UPDATE assets "
-                "SET source_origin = 'downloaded', duration_seconds = ? "
-                "WHERE id = ?",
+                "UPDATE assets SET source_origin = 'downloaded', duration_seconds = ? WHERE id = ?",
                 (dur, asset_id),
             )
         else:
@@ -448,9 +448,7 @@ async def _run_split_job(job_id: str, asset: dict) -> None:
     each child as a new asset linked to the parent."""
     db = await get_db()
     try:
-        await db.execute(
-            "UPDATE jobs SET status = 'running' WHERE id = ?", (job_id,)
-        )
+        await db.execute("UPDATE jobs SET status = 'running' WHERE id = ?", (job_id,))
         await db.commit()
 
         video_path = asset["path"]

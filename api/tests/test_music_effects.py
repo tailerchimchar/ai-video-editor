@@ -22,9 +22,7 @@ def test_flash_with_no_beats_is_passthrough() -> None:
 def test_flash_produces_enable_expr_per_beat() -> None:
     """Each beat should show up in the `between(t,B,B+D)` expression."""
     beats = (1.0, 2.5, 4.0)
-    out = build_beat_effect_filter(
-        "flash", "in", "out", beats, intensity=0.4, duration_seconds=0.1
-    )
+    out = build_beat_effect_filter("flash", "in", "out", beats, intensity=0.4, duration_seconds=0.1)
     for beat in beats:
         assert f"{beat:.4f}" in out
     assert "eq=brightness=0.400" in out
@@ -33,18 +31,14 @@ def test_flash_produces_enable_expr_per_beat() -> None:
 
 def test_flash_zero_intensity_is_passthrough() -> None:
     """Intensity 0 = no visible effect → return null passthrough."""
-    out = build_beat_effect_filter(
-        "flash", "in", "out", (1.0, 2.0), intensity=0.0
-    )
+    out = build_beat_effect_filter("flash", "in", "out", (1.0, 2.0), intensity=0.0)
     assert "null" in out
     assert "eq=" not in out
 
 
 def test_flash_intensity_clamped_to_1() -> None:
     """Intensity > 1 should clamp — no NaN / weird ffmpeg errors."""
-    out = build_beat_effect_filter(
-        "flash", "in", "out", (1.0,), intensity=5.0
-    )
+    out = build_beat_effect_filter("flash", "in", "out", (1.0,), intensity=5.0)
     assert "brightness=1.000" in out
 
 

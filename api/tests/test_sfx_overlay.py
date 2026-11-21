@@ -16,13 +16,28 @@ from ai_video_editor.main import app
 def _make_dummy_mp4(path: Path, seconds: int = 5) -> None:
     subprocess.run(
         [
-            settings.ffmpeg_path, "-y", "-hide_banner", "-loglevel", "error",
-            "-f", "lavfi", "-i", f"color=c=black:s=64x64:r=10:d={seconds}",
-            "-f", "lavfi", "-i", f"anullsrc=r=8000:cl=mono:d={seconds}",
-            "-shortest", "-c:v", "libx264", "-c:a", "aac",
+            settings.ffmpeg_path,
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            f"color=c=black:s=64x64:r=10:d={seconds}",
+            "-f",
+            "lavfi",
+            "-i",
+            f"anullsrc=r=8000:cl=mono:d={seconds}",
+            "-shortest",
+            "-c:v",
+            "libx264",
+            "-c:a",
+            "aac",
             str(path),
         ],
-        check=True, capture_output=True,
+        check=True,
+        capture_output=True,
     )
 
 
@@ -30,11 +45,19 @@ def _make_dummy_wav(path: Path, seconds: float = 0.3) -> None:
     """Short tone -- fine as a fake vine-boom for tests."""
     subprocess.run(
         [
-            settings.ffmpeg_path, "-y", "-hide_banner", "-loglevel", "error",
-            "-f", "lavfi", "-i", f"sine=frequency=100:duration={seconds}",
+            settings.ffmpeg_path,
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            f"sine=frequency=100:duration={seconds}",
             str(path),
         ],
-        check=True, capture_output=True,
+        check=True,
+        capture_output=True,
     )
 
 
@@ -124,7 +147,8 @@ def test_apply_sfx_pure_filter_shape(tmp_path) -> None:
     out = tmp_path / "out.mp4"
 
     ok, err = apply_sfx(
-        str(src), str(out),
+        str(src),
+        str(out),
         sfx=[
             {"sfx_path": str(sfx), "at_seconds": 1.0, "volume": 1.0},
             {"sfx_path": str(sfx), "at_seconds": 2.0, "volume": 0.5},

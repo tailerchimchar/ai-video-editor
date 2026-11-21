@@ -1,4 +1,5 @@
 """finish_job: the single job-completion helper that also emits job.done."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -29,7 +30,10 @@ async def test_finish_job_updates_row_and_emits(monkeypatch):
     events = _capture(monkeypatch)
     db = await _db()
     await jobs.finish_job(
-        db, "j1", output_path="3/5 -> out", job_type="highlights",
+        db,
+        "j1",
+        output_path="3/5 -> out",
+        job_type="highlights",
         result={"clips_written": 3, "clips_total": 5, "folder": "out"},
     )
     row = (await db.execute_fetchall("SELECT status, output_path, completed_at FROM jobs"))[0]
@@ -57,19 +61,31 @@ async def test_finish_job_error_path_emits_failed(monkeypatch):
 
 
 def test_summarize_strips_free_text():
-    out = jobs.summarize({
-        "folder": "f", "shorts_written": 1, "reason": "secret", "vo_prompt": "p",
-        "transcript": ["x"],
-        "shorts": [{"file": "a.mp4", "bucket": "b", "title": "t",
-                    "vlm_verdict": "ok", "reason": "r"}],
-        "clips": [{"file": "c.mp4", "event": "kill", "start_seconds": 1,
-                   "end_seconds": 2, "vlm_verdict": "ok", "reason": "r"}],
-    })
+    out = jobs.summarize(
+        {
+            "folder": "f",
+            "shorts_written": 1,
+            "reason": "secret",
+            "vo_prompt": "p",
+            "transcript": ["x"],
+            "shorts": [
+                {"file": "a.mp4", "bucket": "b", "title": "t", "vlm_verdict": "ok", "reason": "r"}
+            ],
+            "clips": [
+                {
+                    "file": "c.mp4",
+                    "event": "kill",
+                    "start_seconds": 1,
+                    "end_seconds": 2,
+                    "vlm_verdict": "ok",
+                    "reason": "r",
+                }
+            ],
+        }
+    )
     assert "reason" not in out and "vo_prompt" not in out and "transcript" not in out
     assert out["shorts"] == [{"file": "a.mp4", "bucket": "b", "title": "t", "vlm_verdict": "ok"}]
-    assert set(out["clips"][0]) == {
-        "file", "event", "start_seconds", "end_seconds", "vlm_verdict"
-    }
+    assert set(out["clips"][0]) == {"file", "event", "start_seconds", "end_seconds", "vlm_verdict"}
     assert jobs.summarize(None) == {}
 
 

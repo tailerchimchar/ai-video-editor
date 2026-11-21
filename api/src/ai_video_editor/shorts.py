@@ -62,8 +62,8 @@ _log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------
 
 # Phase cutoffs (per the plan file: 0-15 laning, 15-25 mid, 25+ late).
-_LANING_END_SECONDS = 900.0   # 15 min
-_MID_END_SECONDS = 1500.0     # 25 min
+_LANING_END_SECONDS = 900.0  # 15 min
+_MID_END_SECONDS = 1500.0  # 25 min
 
 # Adjacency rules for multikill / teamfight detection.
 _MULTIKILL_ADJACENCY_SECONDS = 30.0
@@ -379,11 +379,7 @@ def categorize_clips(
             out[Topic.outplay].append(c)
 
     # Emit legacy slugs in BUCKET_ORDER; empty buckets are dropped.
-    return {
-        slug: out[LEGACY_ALIASES[slug]]
-        for slug in BUCKET_ORDER
-        if out[LEGACY_ALIASES[slug]]
-    }
+    return {slug: out[LEGACY_ALIASES[slug]] for slug in BUCKET_ORDER if out[LEGACY_ALIASES[slug]]}
 
 
 # ---------------------------------------------------------------------
@@ -433,17 +429,13 @@ def _plan_priority(
 
     Pure. Deterministic given the same clips.
     """
-    if bucket == "laning_phase" and any(
-        _is_kill_event(c.event_type) for c in clips
-    ):
+    if bucket == "laning_phase" and any(_is_kill_event(c.event_type) for c in clips):
         return _PRIORITY_LANING_KILL
     if bucket == "multikill":
         size = multikill_group_size if multikill_group_size is not None else len(clips)
         if size >= 3:
             return _PRIORITY_MULTIKILL_3PLUS
-    if bucket == "teamfight" and any(
-        _TURNAROUND_PATTERN.search(c.reason) for c in clips
-    ):
+    if bucket == "teamfight" and any(_TURNAROUND_PATTERN.search(c.reason) for c in clips):
         return _PRIORITY_TEAMFIGHT_TURN
     return _PRIORITY_DEFAULT
 
@@ -488,18 +480,12 @@ def plan_shorts(
 
     Pure; no I/O.
     """
-    hype_threshold = (
-        settings.shorts_hype_threshold if hype_threshold is None else hype_threshold
-    )
+    hype_threshold = settings.shorts_hype_threshold if hype_threshold is None else hype_threshold
     adjacency_seconds = (
-        settings.shorts_adjacency_seconds
-        if adjacency_seconds is None
-        else adjacency_seconds
+        settings.shorts_adjacency_seconds if adjacency_seconds is None else adjacency_seconds
     )
     max_clips_per_short = (
-        settings.shorts_max_clips_per_short
-        if max_clips_per_short is None
-        else max_clips_per_short
+        settings.shorts_max_clips_per_short if max_clips_per_short is None else max_clips_per_short
     )
 
     kept = [c for c in clips if c.hype_score >= hype_threshold]
@@ -516,14 +502,10 @@ def plan_shorts(
 
     plans: list[ShortPlan] = []
     for bucket, bucket_clips in buckets.items():
-        bucket_clips = sorted(
-            set(bucket_clips), key=lambda c: (c.anchor_seconds, c.file)
-        )
+        bucket_clips = sorted(set(bucket_clips), key=lambda c: (c.anchor_seconds, c.file))
         # For multikill VO plans, each single-clip plan needs to know the
         # size of its parent adjacency group. Precompute once per bucket.
-        mk_sizes = (
-            _multikill_group_sizes(bucket_clips) if bucket == "multikill" else {}
-        )
+        mk_sizes = _multikill_group_sizes(bucket_clips) if bucket == "multikill" else {}
         if mode == "voiceover":
             for c in bucket_clips:
                 tup = (c,)
@@ -561,9 +543,7 @@ def plan_shorts(
     # Montage stays chronological — its output is per-adjacency-cluster
     # and reordering by priority would fragment the game's narrative flow.
     if mode == "voiceover":
-        plans.sort(
-            key=lambda p: (-p.priority, p.clips[0].anchor_seconds, p.clips[0].file)
-        )
+        plans.sort(key=lambda p: (-p.priority, p.clips[0].anchor_seconds, p.clips[0].file))
     else:
         plans.sort(key=lambda p: (p.clips[0].anchor_seconds, p.clips[0].file))
 
@@ -592,9 +572,7 @@ def short_filename(plan: ShortPlan) -> str:
     """
     mmss = plan.clips[0].mmss
     high = (
-        "HIGH_"
-        if plan.bucket == "multikill" and plan.priority >= _PRIORITY_MULTIKILL_3PLUS
-        else ""
+        "HIGH_" if plan.bucket == "multikill" and plan.priority >= _PRIORITY_MULTIKILL_3PLUS else ""
     )
     return f"short_{plan.index:02d}_{high}{_bucket_slug(plan.bucket)}_{mmss}.mp4"
 
@@ -625,9 +603,7 @@ _LAYOUT_BUILDERS: dict[str, tuple[callable, tuple[str, ...]]] = {  # type: ignor
 }
 
 
-def _indexed_layout_chain(
-    layout: str, i: int, *, game: str | None = None
-) -> str:
+def _indexed_layout_chain(layout: str, i: int, *, game: str | None = None) -> str:
     """Return the per-clip filter chain for `layout` with all internal
     labels suffixed by `i` so multiple clips can be concatenated.
 
@@ -640,8 +616,7 @@ def _indexed_layout_chain(
 
     if layout not in _LAYOUT_BUILDERS:
         raise ValueError(
-            f"unknown shorts layout {layout!r}; "
-            f"expected one of {sorted(_LAYOUT_BUILDERS)}"
+            f"unknown shorts layout {layout!r}; expected one of {sorted(_LAYOUT_BUILDERS)}"
         )
     if layout == "cropped_hud":
         chain = cropped_hud_9x16(game=game).replace("[0:v]", f"[{i}:v]")
@@ -763,8 +738,7 @@ def _flash_times(
     """
     if source not in _FLASH_SOURCES:
         raise ValueError(
-            f"unknown beat_flash_source {source!r}; "
-            f"expected one of {sorted(_FLASH_SOURCES)}"
+            f"unknown beat_flash_source {source!r}; expected one of {sorted(_FLASH_SOURCES)}"
         )
     if source == "kills":
         return tuple(t for t in _kill_times_in_montage(plan) if t <= max_t)
@@ -934,9 +908,7 @@ def render_short(
         input_args.extend(["-i", music_path])
         music_input_index = len(plan.clips)
 
-    beat_flash_resolved = (
-        settings.shorts_beat_flash_enabled if beat_flash is None else beat_flash
-    )
+    beat_flash_resolved = settings.shorts_beat_flash_enabled if beat_flash is None else beat_flash
     beat_flash_filter = _compute_beat_flash_filter(
         plan,
         music_path if mode == "montage" else None,
@@ -978,11 +950,7 @@ def render_short(
         "-b:a",
         "128k",
         "-t",
-        str(
-            max_seconds
-            if max_seconds is not None
-            else settings.shorts_max_duration_seconds
-        ),
+        str(max_seconds if max_seconds is not None else settings.shorts_max_duration_seconds),
         str(out_path),
     ]
 
@@ -1052,14 +1020,11 @@ def _write_index_md(
         if plan.priority > 0:
             high = (
                 " HIGH"
-                if plan.bucket == "multikill"
-                and plan.priority >= _PRIORITY_MULTIKILL_3PLUS
+                if plan.bucket == "multikill" and plan.priority >= _PRIORITY_MULTIKILL_3PLUS
                 else ""
             )
             lines.append(f"Priority: {plan.priority}{high}")
-        clip_summary = ", ".join(
-            f"{c.mmss} ({c.event_type})" for c in plan.clips
-        )
+        clip_summary = ", ".join(f"{c.mmss} ({c.event_type})" for c in plan.clips)
         lines.append(f"Clips ({len(plan.clips)}): {clip_summary}")
         lines.append(f"Title overlay: {plan.title}")
         lines.append(f"VO prompt: {plan.vo_prompt}")
@@ -1110,8 +1075,7 @@ def build_shorts(
         return {
             "ok": False,
             "error": (
-                "highlights folder not found for this asset — run "
-                "analyze_asset(cut=True) first"
+                "highlights folder not found for this asset — run analyze_asset(cut=True) first"
             ),
             "shorts": [],
         }
@@ -1155,11 +1119,7 @@ def build_shorts(
 
     # Refine loop cap: 0 disables auto-fix entirely (single render + check
     # semantics preserved when config toggle is off).
-    max_iter = (
-        settings.shorts_max_review_iter
-        if settings.shorts_auto_fix_enabled
-        else 0
-    )
+    max_iter = settings.shorts_max_review_iter if settings.shorts_auto_fix_enabled else 0
 
     results: list[RenderResult] = []
     for plan in plans:
@@ -1202,17 +1162,14 @@ def build_shorts(
                 "clip_count": len(r.plan.clips),
                 "priority": r.plan.priority,
                 "is_high_priority": (
-                    r.plan.bucket == "multikill"
-                    and r.plan.priority >= _PRIORITY_MULTIKILL_3PLUS
+                    r.plan.bucket == "multikill" and r.plan.priority >= _PRIORITY_MULTIKILL_3PLUS
                 ),
                 "ok": r.ok,
                 "error": r.error,
                 "vlm_verdict": r.vlm_verdict,
                 "vlm_why": r.vlm_why,
                 "refine_iterations": (r.extras or {}).get("refine_iterations", 0),
-                "refinements_applied": (r.extras or {}).get(
-                    "refinements_applied"
-                ) or [],
+                "refinements_applied": (r.extras or {}).get("refinements_applied") or [],
                 "refine_stopped": (r.extras or {}).get("refine_stopped"),
             }
             for r in results
@@ -1223,9 +1180,7 @@ def build_shorts(
 # Which VLM `CompilationFix.fix` types this pipeline can act on. Other
 # fixes (apply_zoom, apply_focus, remove_clip) require multi-clip
 # awareness the MVP doesn't have — logged as unapplied when they arrive.
-_WINDOW_FIX_TYPES = frozenset(
-    {"extend_before", "extend_after", "trim_start", "trim_end"}
-)
+_WINDOW_FIX_TYPES = frozenset({"extend_before", "extend_after", "trim_start", "trim_end"})
 
 
 def _apply_window_fix_to_clip(
@@ -1331,9 +1286,7 @@ def _apply_window_fixes(
         # right thing for custom / cross-asset / outplayed compiles
         # where the plan spans multiple source files.
         src = asset_path if asset_path else str(c.path)
-        new_clip = _apply_window_fix_to_clip(
-            c, fix, src, out_dir, iteration
-        )
+        new_clip = _apply_window_fix_to_clip(c, fix, src, out_dir, iteration)
         if new_clip is None:
             continue
         clip_list[idx] = new_clip
@@ -1371,9 +1324,7 @@ def _render_and_watch_refine(
     music_out = music_path if mode == "montage" else None
 
     clip_names = [c.file for c in plan.clips]
-    clip_durations = [
-        max(0.0, c.end_seconds - c.start_seconds) for c in plan.clips
-    ]
+    clip_durations = [max(0.0, c.end_seconds - c.start_seconds) for c in plan.clips]
 
     # Bag mutable state for the callback closures. `current_plan` gets
     # rebuilt from the ORIGINAL plan's clips using kept-indices, so a
@@ -1389,9 +1340,14 @@ def _render_and_watch_refine(
                 clips=tuple(original_clips[i] for i in kept_indices),
             )
         ok, err = render_short(
-            current, out_path, mode=mode, music_path=music_path,
-            layout=layout, beat_flash=beat_flash,
-            beat_flash_source=beat_flash_source, game=game_hint,
+            current,
+            out_path,
+            mode=mode,
+            music_path=music_path,
+            layout=layout,
+            beat_flash=beat_flash,
+            beat_flash_source=beat_flash_source,
+            game=game_hint,
             max_seconds=max_seconds,
         )
         return ok, err, out_path
@@ -1399,7 +1355,10 @@ def _render_and_watch_refine(
     if not run_vlm_check or not settings.vlm_enabled:
         ok, err, _ = _do_render(None)
         return RenderResult(
-            plan=plan, out_path=out_path, ok=ok, error=err,
+            plan=plan,
+            out_path=out_path,
+            ok=ok,
+            error=err,
             music_path=music_out,
             extras={"refine_iterations": 0, "watch_refine": True},
         )
@@ -1414,7 +1373,9 @@ def _render_and_watch_refine(
 
     if not loop_result.ok:
         return RenderResult(
-            plan=plan, out_path=out_path, ok=False,
+            plan=plan,
+            out_path=out_path,
+            ok=False,
             error=loop_result.render_error,
             music_path=music_out,
             extras={
@@ -1544,9 +1505,7 @@ def _render_and_refine(
             )
 
         last_verdict = "pass" if review.is_cohesive else "needs_review"
-        last_why = (
-            "; ".join(f.issue for f in review.fixes[:2]) if review.fixes else None
-        )
+        last_why = "; ".join(f.issue for f in review.fixes[:2]) if review.fixes else None
 
         if review.is_cohesive:
             return RenderResult(
@@ -1624,9 +1583,7 @@ def _render_and_refine(
             )
         refinements_applied.append(
             f"iter{iteration + 1}: "
-            + ", ".join(
-                f"{f.fix}({f.fix_seconds}s)@{f.clip_ref}" for f in window_fixes
-            )
+            + ", ".join(f"{f.fix}({f.fix_seconds}s)@{f.clip_ref}" for f in window_fixes)
         )
         current_plan = ShortPlan(
             bucket=current_plan.bucket,
@@ -1638,9 +1595,7 @@ def _render_and_refine(
         )
 
     # Shouldn't reach here (loop always returns) — belt & suspenders.
-    return RenderResult(
-        plan=current_plan, out_path=out_path, ok=True, music_path=music_out
-    )
+    return RenderResult(plan=current_plan, out_path=out_path, ok=True, music_path=music_out)
 
 
 def _run_vlm_review(plan: ShortPlan, short_path: Path, game: str | None):
@@ -1715,9 +1670,9 @@ def preview_buckets(asset: dict, candidates: list[dict]) -> dict:
 _SESSION_DATE_PREFIX = re.compile(r"^(\d{2})-(\d{2})-(\d{4})")
 
 _CROSS_ASSET_WINDOWS: dict[str, int | None] = {
-    "day": 1,        # today and yesterday
-    "week": 7,       # last 7 days
-    "all": None,     # no filter
+    "day": 1,  # today and yesterday
+    "week": 7,  # last 7 days
+    "all": None,  # no filter
 }
 
 _CROSS_ASSET_TITLES: dict[str, str] = {
@@ -1763,9 +1718,7 @@ def _highlights_root(game: str) -> Path:
     return settings.workspace_dir / "highlights" / _safe(game)
 
 
-def _scan_sessions(
-    game: str, window: str, *, today: date
-) -> list[SessionRef]:
+def _scan_sessions(game: str, window: str, *, today: date) -> list[SessionRef]:
     """Walk `WORKSPACE/highlights/<game>/*/`, parse dates, filter by window.
 
     Windows:
@@ -1778,8 +1731,7 @@ def _scan_sessions(
     """
     if window not in _CROSS_ASSET_WINDOWS:
         raise ValueError(
-            f"unknown window {window!r}; expected one of "
-            f"{sorted(_CROSS_ASSET_WINDOWS)}"
+            f"unknown window {window!r}; expected one of {sorted(_CROSS_ASSET_WINDOWS)}"
         )
     root = _highlights_root(game)
     if not root.is_dir():
@@ -1846,9 +1798,7 @@ def _gather_cross_asset_multikills(
     return out
 
 
-def _rank_cross_asset_clips(
-    clips: list[_CrossAssetClip], max_clips: int
-) -> list[_CrossAssetClip]:
+def _rank_cross_asset_clips(clips: list[_CrossAssetClip], max_clips: int) -> list[_CrossAssetClip]:
     """Rank by (group_size DESC, hype_score DESC, session_date DESC,
     file ASC) and cap at `max_clips`. Fully deterministic."""
     ordered = sorted(
@@ -1931,9 +1881,7 @@ def preview_cross_asset_montage(
     Pure I/O (folder walk + JSON reads); no ffmpeg.
     """
     resolved_today = today or date.today()
-    max_c = (
-        settings.shorts_cross_asset_max_clips if max_clips is None else max_clips
-    )
+    max_c = settings.shorts_cross_asset_max_clips if max_clips is None else max_clips
     try:
         sessions = _scan_sessions(game, window, today=resolved_today)
     except ValueError as exc:
@@ -1946,8 +1894,7 @@ def preview_cross_asset_montage(
         "window": window,
         "today": resolved_today.isoformat(),
         "sessions_scanned": [
-            {"date": s.date.isoformat(), "folder": s.folder.name}
-            for s in sessions
+            {"date": s.date.isoformat(), "folder": s.folder.name} for s in sessions
         ],
         "sessions_scanned_count": len(sessions),
         "candidates_total": len(all_clips),
@@ -1991,9 +1938,7 @@ def build_cross_asset_montage(
     Returns a summary dict shaped like `build_shorts`.
     """
     resolved_today = today or date.today()
-    max_c = (
-        settings.shorts_cross_asset_max_clips if max_clips is None else max_clips
-    )
+    max_c = settings.shorts_cross_asset_max_clips if max_clips is None else max_clips
 
     try:
         sessions = _scan_sessions(game, window, today=resolved_today)
@@ -2039,9 +1984,7 @@ def build_cross_asset_montage(
         }
 
     # Resolve music path (same rule as build_shorts)
-    resolved_music: str | None = (
-        music_path or settings.shorts_default_music_path or None
-    )
+    resolved_music: str | None = music_path or settings.shorts_default_music_path or None
     if resolved_music and not Path(resolved_music).is_file():
         _log.warning(
             "cross-asset music path %r not found — proceeding without music",
@@ -2052,9 +1995,7 @@ def build_cross_asset_montage(
     # Build the plan. Priority = MULTIKILL_3PLUS if any 3+ group is in it.
     tup = tuple(r.clip for r in ranked)
     max_group = max(r.group_size for r in ranked)
-    plan_priority = (
-        _PRIORITY_MULTIKILL_3PLUS if max_group >= 3 else _PRIORITY_DEFAULT
-    )
+    plan_priority = _PRIORITY_MULTIKILL_3PLUS if max_group >= 3 else _PRIORITY_DEFAULT
     plan = ShortPlan(
         bucket=_CROSS_ASSET_BUCKET,
         clips=tup,
@@ -2121,9 +2062,7 @@ def build_cross_asset_montage(
                 "title": plan.title,
                 "clip_count": len(plan.clips),
                 "priority": plan.priority,
-                "is_high_priority": (
-                    plan.priority >= _PRIORITY_MULTIKILL_3PLUS
-                ),
+                "is_high_priority": (plan.priority >= _PRIORITY_MULTIKILL_3PLUS),
                 "ok": result.ok,
                 "error": result.error,
                 "vlm_verdict": result.vlm_verdict,
@@ -2211,9 +2150,7 @@ def _scan_outplayed_clips(
         if not (0 < duration <= max_d):
             continue
         candidates.append(
-            OutplayedClipRef(
-                path=p, duration_seconds=duration, mtime_epoch=st.st_mtime
-            )
+            OutplayedClipRef(path=p, duration_seconds=duration, mtime_epoch=st.st_mtime)
         )
     candidates.sort(key=lambda c: (-c.mtime_epoch, c.path.as_posix()))
     return candidates
@@ -2252,17 +2189,13 @@ def _analyze_and_window(
 
     In the fallback case the clip renders un-trimmed (current behavior).
     """
-    enabled = (
-        settings.shorts_use_clip_analyzer if use_analyzer is None else use_analyzer
-    )
+    enabled = settings.shorts_use_clip_analyzer if use_analyzer is None else use_analyzer
     if not enabled:
         return 0.0, duration, None, None
     try:
         from .vlm.clip_analyzer import analyze_source_clip
 
-        analysis = analyze_source_clip(
-            path, game=game, clip_duration_seconds=duration
-        )
+        analysis = analyze_source_clip(path, game=game, clip_duration_seconds=duration)
     except Exception as exc:
         _log.warning("clip analyzer crashed (non-fatal): %s", exc)
         return 0.0, duration, None, None
@@ -2307,9 +2240,7 @@ def _analyze_pool(
     analysis metadata (from the sidecar cache when possible)."""
     from .vlm.clip_analyzer import analyze_source_clip
 
-    enabled = (
-        settings.shorts_use_clip_analyzer if use_analyzer is None else use_analyzer
-    )
+    enabled = settings.shorts_use_clip_analyzer if use_analyzer is None else use_analyzer
     out: list[_AnalyzedOutplayedClip] = []
     for ref in refs:
         analysis = None
@@ -2321,9 +2252,7 @@ def _analyze_pool(
                     clip_duration_seconds=ref.duration_seconds,
                 )
             except Exception as exc:
-                _log.warning(
-                    "pool analyze crashed on %s (non-fatal): %s", ref.path.name, exc
-                )
+                _log.warning("pool analyze crashed on %s (non-fatal): %s", ref.path.name, exc)
         if analysis is None:
             # No analyzer verdict — treat as an unranked "kill" so it
             # can still make the cut when the analyzer is disabled.
@@ -2344,9 +2273,7 @@ def _analyze_pool(
                 analysis_payoff_type=analysis.payoff_type,
                 analysis_confidence=analysis.confidence,
                 analysis_description=analysis.description,
-                payoff_score=_PAYOFF_TYPE_SCORE.get(
-                    analysis.payoff_type, 0
-                ),
+                payoff_score=_PAYOFF_TYPE_SCORE.get(analysis.payoff_type, 0),
                 analysis=analysis,
             )
         )
@@ -2371,11 +2298,7 @@ def _rank_analyzed_pool(
     Anything that survives + tops the ranked list up to `limit` is
     returned as `kept`.
     """
-    floor = (
-        settings.vlm_clip_analyzer_min_confidence
-        if min_confidence is None
-        else min_confidence
-    )
+    floor = settings.vlm_clip_analyzer_min_confidence if min_confidence is None else min_confidence
     kept_pool: list[_AnalyzedOutplayedClip] = []
     dropped: list[_AnalyzedOutplayedClip] = []
     for a in analyzed:
@@ -2451,9 +2374,7 @@ def _player_name_for(game: str | None) -> str:
     return name
 
 
-def _run_killfeed_verifier(
-    ref_path: Path, duration: float, game: str | None
-):
+def _run_killfeed_verifier(ref_path: Path, duration: float, game: str | None):
     """Wrapper that returns None when the verifier is off / unavailable
     (any failure). Never raises."""
     player = _player_name_for(game)
@@ -2462,9 +2383,7 @@ def _run_killfeed_verifier(
     try:
         from .killfeed import detect_killfeed_kills
 
-        return detect_killfeed_kills(
-            ref_path, duration, player_name=player, game=game
-        )
+        return detect_killfeed_kills(ref_path, duration, player_name=player, game=game)
     except Exception as exc:
         _log.info("killfeed verifier crashed (non-fatal): %s", exc)
         return None
@@ -2557,10 +2476,7 @@ def _ref_to_short_clips_from_analysis(
             if verdict.matched_kill_time is not None
             else "[unverified — no OCR]"
         )
-        reason = (
-            f"payoff {i}/{len(moments)} [{m.payoff_type}] "
-            f"{badge} — {m.description}"
-        )
+        reason = f"payoff {i}/{len(moments)} [{m.payoff_type}] {badge} — {m.description}"
         clips.append(
             ShortClip(
                 file=ref.path.name,
@@ -2625,28 +2541,20 @@ def _write_outplayed_index_md(
     lines.append(f"# Outplayed best-of for {game}")
     lines.append(f"Generated: {datetime.now(timezone.utc).isoformat()}")
     lines.append(f"Today: {today.isoformat()}")
-    lines.append(
-        f"Since: {'last ' + str(since_days) + ' days' if since_days else 'all-time'}"
-    )
+    lines.append(f"Since: {'last ' + str(since_days) + ' days' if since_days else 'all-time'}")
     lines.append(f"Clips scanned: {len(scanned)}")
     lines.append("")
     lines.append(f"## Picked clips ({len(picked)})")
-    kept_map = (
-        {k.ref.path.as_posix(): k for k in (kept_analyzed or [])}
-    )
+    kept_map = {k.ref.path.as_posix(): k for k in (kept_analyzed or [])}
     for i, ref in enumerate(picked, 1):
         mtime = datetime.fromtimestamp(ref.mtime_epoch).strftime("%Y-%m-%d %H:%M")
         session = ref.path.parent.name
         analyzed = kept_map.get(ref.path.as_posix())
         badge = ""
         if analyzed:
-            badge = (
-                f"  [{analyzed.analysis_payoff_type} "
-                f"conf={analyzed.analysis_confidence:.2f}]"
-            )
+            badge = f"  [{analyzed.analysis_payoff_type} conf={analyzed.analysis_confidence:.2f}]"
         lines.append(
-            f"{i:02d}. {mtime}  {ref.duration_seconds:.1f}s  "
-            f"{session}/{ref.path.name}{badge}"
+            f"{i:02d}. {mtime}  {ref.duration_seconds:.1f}s  {session}/{ref.path.name}{badge}"
         )
         if analyzed and analyzed.analysis_description:
             lines.append(f"    {analyzed.analysis_description}")
@@ -2682,9 +2590,7 @@ def preview_outplayed_montage(
 ) -> dict:
     """Dry-run: scan Outplayed clips + return what would be picked,
     without rendering. Cheap (ffprobe only; no ffmpeg)."""
-    lim = (
-        settings.shorts_cross_asset_max_clips if limit is None else limit
-    )
+    lim = settings.shorts_cross_asset_max_clips if limit is None else limit
     scanned = _scan_outplayed_clips(game)
     filtered = _filter_by_since(scanned, since_days, now)
     picked = filtered[:lim]
@@ -2700,9 +2606,7 @@ def preview_outplayed_montage(
                 "path": ref.path.as_posix(),
                 "session": ref.path.parent.name,
                 "duration_seconds": ref.duration_seconds,
-                "mtime": datetime.fromtimestamp(
-                    ref.mtime_epoch
-                ).isoformat(),
+                "mtime": datetime.fromtimestamp(ref.mtime_epoch).isoformat(),
             }
             for ref in picked
         ],
@@ -2751,9 +2655,7 @@ def build_outplayed_montage(
     best_of_<YYYY-MM-DD>.mp4` + `index.md`.
     """
     resolved_today = today or date.today()
-    lim = (
-        settings.shorts_cross_asset_max_clips if limit is None else limit
-    )
+    lim = settings.shorts_cross_asset_max_clips if limit is None else limit
 
     scanned = _scan_outplayed_clips(game)
     if not scanned:
@@ -2786,8 +2688,7 @@ def build_outplayed_montage(
             "ok": True,
             "shorts_written": 0,
             "reason": (
-                f"no clips in since_days={since_days} window "
-                f"({len(scanned)} scanned total)"
+                f"no clips in since_days={since_days} window ({len(scanned)} scanned total)"
             ),
             "folder": out_folder.as_posix(),
             "clips_scanned": len(scanned),
@@ -2798,11 +2699,7 @@ def build_outplayed_montage(
     # downtime clips and rank the rest by payoff quality. Pool size
     # defaults to 3x limit — trades a bit more VLM cost (cached after
     # first pass) for meaningfully better clip selection.
-    pool_size = (
-        analyze_pool_size
-        if analyze_pool_size is not None
-        else max(lim * 3, lim + 5)
-    )
+    pool_size = analyze_pool_size if analyze_pool_size is not None else max(lim * 3, lim + 5)
     pool = filtered[:pool_size]
     analyzed = _analyze_pool(pool, game=game, use_analyzer=use_clip_analyzer)
     kept, dropped = _rank_analyzed_pool(analyzed, limit=lim)
@@ -2842,8 +2739,7 @@ def build_outplayed_montage(
             "ok": True,
             "shorts_written": 0,
             "reason": (
-                f"no valid payoff clips in analyzed pool "
-                f"({len(pool)} analyzed, all dropped)"
+                f"no valid payoff clips in analyzed pool ({len(pool)} analyzed, all dropped)"
             ),
             "folder": out_folder.as_posix(),
             "clips_scanned": len(scanned),
@@ -2852,9 +2748,7 @@ def build_outplayed_montage(
         }
 
     # Resolve music (same rule as build_shorts)
-    resolved_music: str | None = (
-        music_path or settings.shorts_default_music_path or None
-    )
+    resolved_music: str | None = music_path or settings.shorts_default_music_path or None
     if resolved_music and not Path(resolved_music).is_file():
         _log.warning(
             "outplayed music path %r not found — proceeding without music",
@@ -2868,9 +2762,7 @@ def build_outplayed_montage(
     # ShortClips (verifier drops unverified moments).
     sub_clips: list[ShortClip] = []
     for k in kept:
-        sub_clips.extend(
-            _ref_to_short_clips_from_analysis(k.ref, k.analysis, game=game)
-        )
+        sub_clips.extend(_ref_to_short_clips_from_analysis(k.ref, k.analysis, game=game))
     tup = tuple(sub_clips)
     plan = ShortPlan(
         bucket=_OUTPLAYED_BUCKET,
@@ -2945,8 +2837,7 @@ def build_outplayed_montage(
                         "confidence": k.analysis_confidence,
                         "additional_moments": (
                             len(k.analysis.additional_moments)
-                            if k.analysis is not None
-                            and hasattr(k.analysis, "additional_moments")
+                            if k.analysis is not None and hasattr(k.analysis, "additional_moments")
                             else 0
                         ),
                     }
@@ -3041,11 +2932,7 @@ def list_highlights_sessions(game: str | None = None) -> dict:
     root = settings.workspace_dir / "highlights"
     if not root.is_dir():
         return {"games": []}
-    target_dirs = (
-        [root / _safe(game)]
-        if game
-        else sorted(p for p in root.iterdir() if p.is_dir())
-    )
+    target_dirs = [root / _safe(game)] if game else sorted(p for p in root.iterdir() if p.is_dir())
     games: list[dict] = []
     for game_dir in target_dirs:
         if not game_dir.is_dir():
@@ -3074,9 +2961,7 @@ def list_highlights_sessions(game: str | None = None) -> dict:
     return {"games": games}
 
 
-def list_highlights_clips(
-    session_folder: str, *, game: str | None = None
-) -> dict:
+def list_highlights_clips(session_folder: str, *, game: str | None = None) -> dict:
     """Enumerate clips inside one analyzed highlights session folder.
 
     `session_folder` is the folder name (e.g. `07-04-2026_15h15`).
@@ -3088,11 +2973,7 @@ def list_highlights_clips(
     root = settings.workspace_dir / "highlights"
     if not root.is_dir():
         return {"ok": False, "error": "no highlights folder in workspace"}
-    game_dirs = (
-        [root / _safe(game)]
-        if game
-        else [p for p in root.iterdir() if p.is_dir()]
-    )
+    game_dirs = [root / _safe(game)] if game else [p for p in root.iterdir() if p.is_dir()]
     for game_dir in game_dirs:
         target = game_dir / session_folder
         if target.is_dir():
@@ -3244,10 +3125,7 @@ def build_custom_montage(
     if not resolved:
         return {
             "ok": False,
-            "error": (
-                f"none of the {len(clip_paths)} clip_paths resolved to "
-                "readable video files"
-            ),
+            "error": (f"none of the {len(clip_paths)} clip_paths resolved to readable video files"),
             "skipped": skipped,
             "shorts_written": 0,
             "shorts": [],
@@ -3297,9 +3175,7 @@ def build_custom_montage(
         index=1,
     )
 
-    resolved_music: str | None = (
-        music_path or settings.shorts_default_music_path or None
-    )
+    resolved_music: str | None = music_path or settings.shorts_default_music_path or None
     if resolved_music and not Path(resolved_music).is_file():
         _log.warning(
             "custom compile: music path %r not found — proceeding without",
@@ -3342,11 +3218,7 @@ def build_custom_montage(
             asset=fake_asset,
             music_path=resolved_music,
             run_vlm_check=run_vlm_check,
-            max_iter=(
-                settings.shorts_max_review_iter
-                if settings.shorts_auto_fix_enabled
-                else 0
-            ),
+            max_iter=(settings.shorts_max_review_iter if settings.shorts_auto_fix_enabled else 0),
             layout=layout,
             beat_flash=beat_flash,
             beat_flash_source=beat_flash_source,
@@ -3380,10 +3252,7 @@ def build_custom_montage(
                 "error": result.error,
                 "vlm_verdict": result.vlm_verdict,
                 "vlm_why": result.vlm_why,
-                "sources": [
-                    {"path": p.as_posix(), "duration_seconds": d}
-                    for p, d in resolved
-                ],
+                "sources": [{"path": p.as_posix(), "duration_seconds": d} for p, d in resolved],
             }
         ],
     }

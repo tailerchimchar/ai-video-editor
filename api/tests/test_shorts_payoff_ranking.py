@@ -56,9 +56,7 @@ def test_drop_below_confidence_floor() -> None:
         _a("unsure_kill.mp4", "kill", confidence=0.3),
         _a("confident.mp4", "kill", confidence=0.8),
     ]
-    kept, _ = _rank_analyzed_pool(
-        analyzed, limit=5, min_confidence=0.5
-    )
+    kept, _ = _rank_analyzed_pool(analyzed, limit=5, min_confidence=0.5)
     files = {k.ref.path.name for k in kept}
     assert files == {"confident.mp4"}
 
@@ -105,9 +103,7 @@ def test_ranking_is_deterministic() -> None:
     ]
     r1 = _rank_analyzed_pool(analyzed, limit=3)
     r2 = _rank_analyzed_pool(analyzed, limit=3)
-    assert [k.ref.path.name for k in r1[0]] == [
-        k.ref.path.name for k in r2[0]
-    ]
+    assert [k.ref.path.name for k in r1[0]] == [k.ref.path.name for k in r2[0]]
 
 
 def test_limit_caps_kept_pool() -> None:

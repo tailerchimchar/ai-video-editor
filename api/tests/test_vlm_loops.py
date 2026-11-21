@@ -61,9 +61,7 @@ def _patch_trim_ok(created_files: list[Path]):
 
 
 def _patch_get_duration(seconds: float = 60.0):
-    return patch(
-        "ai_video_editor.vlm.loops.get_duration_seconds", return_value=seconds
-    )
+    return patch("ai_video_editor.vlm.loops.get_duration_seconds", return_value=seconds)
 
 
 # ---------------------------------------------------------------------
@@ -76,9 +74,7 @@ def test_apply_window_fix_extend_before() -> None:
         start=10.0,
         end=20.0,
         duration=60.0,
-        verdict=ClipVerdict(
-            verdict="fixable", why="x", fix="extend_before", fix_seconds=2.0
-        ),
+        verdict=ClipVerdict(verdict="fixable", why="x", fix="extend_before", fix_seconds=2.0),
     )
     assert start == 8.0
     assert end == 20.0
@@ -89,9 +85,7 @@ def test_apply_window_fix_extend_after_bounded_by_duration() -> None:
         start=50.0,
         end=59.0,
         duration=60.0,
-        verdict=ClipVerdict(
-            verdict="fixable", why="x", fix="extend_after", fix_seconds=5.0
-        ),
+        verdict=ClipVerdict(verdict="fixable", why="x", fix="extend_after", fix_seconds=5.0),
     )
     assert end == 60.0  # not 64
     assert start == 50.0
@@ -102,9 +96,7 @@ def test_apply_window_fix_extend_before_bounded_by_zero() -> None:
         start=1.0,
         end=10.0,
         duration=60.0,
-        verdict=ClipVerdict(
-            verdict="fixable", why="x", fix="extend_before", fix_seconds=5.0
-        ),
+        verdict=ClipVerdict(verdict="fixable", why="x", fix="extend_before", fix_seconds=5.0),
     )
     assert start == 0.0
 
@@ -114,9 +106,7 @@ def test_apply_window_fix_trim_end_stays_positive_length() -> None:
         start=10.0,
         end=12.0,
         duration=60.0,
-        verdict=ClipVerdict(
-            verdict="fixable", why="x", fix="trim_end", fix_seconds=5.0
-        ),
+        verdict=ClipVerdict(verdict="fixable", why="x", fix="trim_end", fix_seconds=5.0),
     )
     # end can't be pulled below start + 0.5
     assert end == 10.5
@@ -189,9 +179,7 @@ def test_validate_and_cut_false_positive_drops_clip(tmp_path: Path) -> None:
 
 def test_validate_and_cut_fixable_shifts_window_then_passes(tmp_path: Path) -> None:
     verdicts = [
-        ClipVerdict(
-            verdict="fixable", why="no setup", fix="extend_before", fix_seconds=2.0
-        ),
+        ClipVerdict(verdict="fixable", why="no setup", fix="extend_before", fix_seconds=2.0),
         ClipVerdict(verdict="pass", why="better now"),
     ]
     out = tmp_path / "clip.mp4"
@@ -224,9 +212,7 @@ def test_validate_and_cut_fixable_shifts_window_then_passes(tmp_path: Path) -> N
 def test_validate_and_cut_cap_reached_keeps_clip(tmp_path: Path) -> None:
     # All fixable, so we hit the cap
     verdicts = [
-        ClipVerdict(
-            verdict="fixable", why="still bad", fix="extend_after", fix_seconds=1.0
-        )
+        ClipVerdict(verdict="fixable", why="still bad", fix="extend_after", fix_seconds=1.0)
     ] * 5
     out = tmp_path / "clip.mp4"
     created: list[Path] = []
@@ -255,12 +241,8 @@ def test_validate_and_cut_cap_reached_keeps_clip(tmp_path: Path) -> None:
 
 def test_validate_and_cut_records_full_history(tmp_path: Path) -> None:
     verdicts = [
-        ClipVerdict(
-            verdict="fixable", why="tighten start", fix="trim_start", fix_seconds=1.0
-        ),
-        ClipVerdict(
-            verdict="fixable", why="more setup", fix="extend_before", fix_seconds=2.0
-        ),
+        ClipVerdict(verdict="fixable", why="tighten start", fix="trim_start", fix_seconds=1.0),
+        ClipVerdict(verdict="fixable", why="more setup", fix="extend_before", fix_seconds=2.0),
         ClipVerdict(verdict="pass", why="ok"),
     ]
     out = tmp_path / "clip.mp4"
@@ -297,8 +279,9 @@ def test_validate_and_cut_trim_failure_returns_skip(tmp_path: Path) -> None:
         return False, "ffmpeg died"
 
     backend = _StubBackend([])
-    with _patch_get_duration(60), patch(
-        "ai_video_editor.vlm.loops.trim_clip", side_effect=_fake_trim
+    with (
+        _patch_get_duration(60),
+        patch("ai_video_editor.vlm.loops.trim_clip", side_effect=_fake_trim),
     ):
         result = validate_and_cut(
             source_path="fake.mp4",
@@ -335,9 +318,10 @@ def test_review_and_apply_compilation_cohesive_exits_first_pass(
     def _fake_review(*_a, **_kw):
         return CompilationReview(is_cohesive=True, fixes=[])
 
-    with patch(
-        "ai_video_editor.vlm.loops.validate_compilation", side_effect=_fake_review
-    ), _patch_get_duration(120):
+    with (
+        patch("ai_video_editor.vlm.loops.validate_compilation", side_effect=_fake_review),
+        _patch_get_duration(120),
+    ):
         result = loops.review_and_apply_compilation(
             compilation_id="comp-1",
             compilation_path=comp_file,
@@ -366,9 +350,10 @@ def test_review_and_apply_compilation_review_only_returns_fixes_unapplied(
     def _fake_review(*_a, **_kw):
         return CompilationReview(is_cohesive=False, fixes=[fix])
 
-    with patch(
-        "ai_video_editor.vlm.loops.validate_compilation", side_effect=_fake_review
-    ), _patch_get_duration(120):
+    with (
+        patch("ai_video_editor.vlm.loops.validate_compilation", side_effect=_fake_review),
+        _patch_get_duration(120),
+    ):
         result = loops.review_and_apply_compilation(
             compilation_id="comp-1",
             compilation_path=comp_file,
@@ -410,9 +395,10 @@ def test_review_and_apply_compilation_calls_apply_fixes_fn(
         apply_calls.append((comp_id, fixes))
         return {"applied": fixes, "unapplied": [], "clip_count": 4}
 
-    with patch(
-        "ai_video_editor.vlm.loops.validate_compilation", side_effect=_fake_review
-    ), _patch_get_duration(120):
+    with (
+        patch("ai_video_editor.vlm.loops.validate_compilation", side_effect=_fake_review),
+        _patch_get_duration(120),
+    ):
         result = loops.review_and_apply_compilation(
             compilation_id="comp-1",
             compilation_path=comp_file,

@@ -121,14 +121,14 @@ def test_cli_without_flag_prints_and_writes_nothing(tmp_path, monkeypatch, capsy
 def test_plan_formats_come_from_the_taxonomy():
     from ai_video_editor.taxonomy import PLAN_FORMAT_BY_FORMAT, Format
 
-    assert PLAN_FORMAT_BY_FORMAT == {
+    assert {
         Format.hype: "hype_montage",
         Format.story: "story_short",
         Format.voice_over: "vo_short",
         Format.funny: "funny_short",
         Format.arc_montage: "arc_montage",
-    }
-    assert registry.FORMATS == tuple(PLAN_FORMAT_BY_FORMAT.values())
+    } == PLAN_FORMAT_BY_FORMAT
+    assert tuple(PLAN_FORMAT_BY_FORMAT.values()) == registry.FORMATS
 
 
 def test_every_format_is_listed_as_a_valid_plan_format():

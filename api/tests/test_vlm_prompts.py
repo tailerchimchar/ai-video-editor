@@ -47,9 +47,7 @@ def test_clip_verdict_fixable_shape() -> None:
 
 
 def test_clip_verdict_false_positive_shape() -> None:
-    v = ClipVerdict.model_validate(
-        {"verdict": "false_positive", "why": "no fight, just chatter"}
-    )
+    v = ClipVerdict.model_validate({"verdict": "false_positive", "why": "no fight, just chatter"})
     assert v.verdict == "false_positive"
     assert v.fix is None
 
@@ -78,9 +76,7 @@ def test_clip_verdict_bounds_fix_seconds() -> None:
 
 
 def test_compilation_review_cohesive_empty_fixes() -> None:
-    review = CompilationReview.model_validate(
-        {"is_cohesive": True, "fixes": []}
-    )
+    review = CompilationReview.model_validate({"is_cohesive": True, "fixes": []})
     assert review.is_cohesive is True
     assert review.fixes == []
 

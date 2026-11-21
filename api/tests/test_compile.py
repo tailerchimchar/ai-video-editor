@@ -98,14 +98,14 @@ def test_plan_clips_narrative_three_sections():
     in time order."""
     # Simulate a 6500-second recording (similar to a real scrim VOD).
     rankings = [
-        _r(100, 0.5),    # intro candidate
-        _r(300, 0.9),    # intro candidate (higher hype → kept)
-        _r(550, 0.7),    # intro candidate
-        _r(2000, 0.6),   # main
-        _r(3000, 0.4),   # main
-        _r(4000, 0.8),   # main
-        _r(6000, 0.3),   # outro candidate (rec_end = 6010)
-        _r(5950, 0.9),   # outro candidate (higher hype → kept)
+        _r(100, 0.5),  # intro candidate
+        _r(300, 0.9),  # intro candidate (higher hype → kept)
+        _r(550, 0.7),  # intro candidate
+        _r(2000, 0.6),  # main
+        _r(3000, 0.4),  # main
+        _r(4000, 0.8),  # main
+        _r(6000, 0.3),  # outro candidate (rec_end = 6010)
+        _r(5950, 0.9),  # outro candidate (higher hype → kept)
     ]
     out = plan_clips(rankings, order="narrative")
     # intro_max=2 → top 2 by hype from intro = (0.9 @ 300) + (0.7 @ 550),
@@ -121,13 +121,13 @@ def test_plan_clips_narrative_limit_preserves_intro_and_outro():
     """When limit is set, intro/outro slots are reserved and limit only
     truncates the main section. Structural sections always survive."""
     rankings = [
-        _r(100, 0.9),    # intro
-        _r(550, 0.5),    # intro (drops if cap=1; cap=2 keeps both)
-        _r(2000, 0.6),   # main
-        _r(3000, 0.5),   # main
-        _r(4000, 0.4),   # main
-        _r(5000, 0.3),   # main
-        _r(6450, 0.8),   # outro (rec_end = 6460)
+        _r(100, 0.9),  # intro
+        _r(550, 0.5),  # intro (drops if cap=1; cap=2 keeps both)
+        _r(2000, 0.6),  # main
+        _r(3000, 0.5),  # main
+        _r(4000, 0.4),  # main
+        _r(5000, 0.3),  # main
+        _r(6450, 0.8),  # outro (rec_end = 6460)
     ]
     out = plan_clips(rankings, order="narrative", limit=5)
     starts = [r["suggested_start_seconds"] for r in out]

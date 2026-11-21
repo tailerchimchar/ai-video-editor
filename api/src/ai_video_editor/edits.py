@@ -116,11 +116,7 @@ def _cropped_hud_lol(zoom_out: float | None) -> str:
     """LoL variant — scoreline top-right + minimap bottom-right."""
     from .config import settings
 
-    factor = (
-        float(zoom_out)
-        if zoom_out is not None
-        else float(settings.shorts_zoom_out)
-    )
+    factor = float(zoom_out) if zoom_out is not None else float(settings.shorts_zoom_out)
     crop_w = f"ih*9/16*{factor:.4f}"
 
     # Position the scoreline strip so its bottom edge sits just above
@@ -162,11 +158,7 @@ def _cropped_hud_valorant(zoom_out: float | None) -> str:
     """
     from .config import settings
 
-    factor = (
-        float(zoom_out)
-        if zoom_out is not None
-        else float(settings.shorts_zoom_out)
-    )
+    factor = float(zoom_out) if zoom_out is not None else float(settings.shorts_zoom_out)
     crop_w = f"ih*9/16*{factor:.4f}"
 
     # Killfeed strip position:
@@ -478,9 +470,7 @@ def _segment_words_with_fallback(seg: dict) -> list[dict]:
     ]
 
 
-def explode_segments_to_words(
-    segments: list[dict], *, style_preset: str = "tiktok"
-) -> list[dict]:
+def explode_segments_to_words(segments: list[dict], *, style_preset: str = "tiktok") -> list[dict]:
     """Transform a segment list into per-WORD segments with a style preset.
 
     Uses each segment's `words[]` when available (Whisper word timings),
@@ -673,24 +663,30 @@ def apply_sfx(
         vol = float(s.get("volume") or 1.0)
         label = f"[sfx{idx}]"
         # adelay=Nms|Nms delays BOTH channels; volume per SFX after that.
-        filter_parts.append(
-            f"[{idx}:a]adelay={at_ms}|{at_ms},volume={vol:.3f}{label}"
-        )
+        filter_parts.append(f"[{idx}:a]adelay={at_ms}|{at_ms},volume={vol:.3f}{label}")
         mix_ins.append(label)
     # amix -- normalize=0 preserves per-SFX levels; dropout_transition=0
     # keeps gain constant when a track ends.
     filter_parts.append(
-        f"{''.join(mix_ins)}amix=inputs={len(mix_ins)}:"
-        f"dropout_transition=0:normalize=0[aout]"
+        f"{''.join(mix_ins)}amix=inputs={len(mix_ins)}:dropout_transition=0:normalize=0[aout]"
     )
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     cmd = [
-        settings.ffmpeg_path, "-y",
+        settings.ffmpeg_path,
+        "-y",
         *inputs,
-        "-filter_complex", ";".join(filter_parts),
-        "-map", "0:v", "-map", "[aout]",
-        "-c:v", "copy",
-        "-c:a", "aac", "-b:a", "192k",
+        "-filter_complex",
+        ";".join(filter_parts),
+        "-map",
+        "0:v",
+        "-map",
+        "[aout]",
+        "-c:v",
+        "copy",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
         out_path,
     ]
     return _run_ffmpeg(cmd)

@@ -54,14 +54,14 @@ _log = logging.getLogger(__name__)
 # Deterministic ops the refine loop can perform on a sub-clip. `drop`
 # is the existing behavior; the others are M2's shift/extend surgery.
 SuggestedFix = Literal[
-    "drop",           # remove the sub-clip entirely
+    "drop",  # remove the sub-clip entirely
     "extend_before",  # push the clip's start earlier by fix_seconds
-    "extend_after",   # push the clip's end later by fix_seconds
-    "trim_start",     # trim fix_seconds off the start
-    "trim_end",       # trim fix_seconds off the end
-    "shift_left",     # shift the whole window earlier by fix_seconds
-    "shift_right",    # shift the whole window later by fix_seconds
-    "keep",           # positive flag -- do not adjust
+    "extend_after",  # push the clip's end later by fix_seconds
+    "trim_start",  # trim fix_seconds off the start
+    "trim_end",  # trim fix_seconds off the end
+    "shift_left",  # shift the whole window earlier by fix_seconds
+    "shift_right",  # shift the whole window later by fix_seconds
+    "keep",  # positive flag -- do not adjust
 ]
 
 
@@ -83,7 +83,7 @@ class MomentFlag(BaseModel):
     why: str = Field(
         description=(
             "One-sentence, specific explanation. Reference what is visible: "
-            "\"killfeed shows tpew killing HitTheQuang -- teammate frag, not user's\"."
+            '"killfeed shows tpew killing HitTheQuang -- teammate frag, not user\'s".'
         )
     )
     suggested_fix: SuggestedFix | None = Field(
@@ -118,11 +118,13 @@ class MontageCritique(BaseModel):
         )
     )
     opener_strength: int = Field(
-        ge=1, le=5,
+        ge=1,
+        le=5,
         description="1-5: how strongly the first ~5 seconds hook the viewer.",
     )
     climax_strength: int = Field(
-        ge=1, le=5,
+        ge=1,
+        le=5,
         description="1-5: how strongly the biggest moment lands.",
     )
     pacing: Literal["too_slow", "just_right", "too_fast"]
@@ -205,10 +207,17 @@ def extract_panels(
     scratch = out_dir / "_frames"
     scratch.mkdir(parents=True, exist_ok=True)
     cmd = [
-        settings.ffmpeg_path, "-y", "-hide_banner", "-loglevel", "error",
-        "-i", str(path),
-        "-vf", f"fps={fps},scale={tile_width}:-2",
-        "-q:v", "3",
+        settings.ffmpeg_path,
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        str(path),
+        "-vf",
+        f"fps={fps},scale={tile_width}:-2",
+        "-q:v",
+        "3",
         str(scratch / "f_%04d.jpg"),
     ]
     try:
@@ -225,7 +234,7 @@ def extract_panels(
     # Step 2: Pillow tiles every `cells` frames into one mosaic.
     panels: list[Panel] = []
     for i in range(0, len(frames), cells):
-        chunk = frames[i:i + cells]
+        chunk = frames[i : i + cells]
         panel_idx = len(panels) + 1
         out_path = out_dir / f"panel_{panel_idx:03d}.jpg"
         try:
@@ -427,13 +436,17 @@ def watch_montage(
     path = Path(video_path)
     if not path.is_file():
         return WatchResult(
-            critique=None, panel_count=0, total_seconds=0.0,
+            critique=None,
+            panel_count=0,
+            total_seconds=0.0,
             error=f"video not found: {path}",
         )
     key = api_key if api_key is not None else settings.anthropic_api_key
     if not key:
         return WatchResult(
-            critique=None, panel_count=0, total_seconds=0.0,
+            critique=None,
+            panel_count=0,
+            total_seconds=0.0,
             error="ANTHROPIC_API_KEY is empty",
         )
     model_id = model or settings.vlm_anthropic_model
@@ -444,13 +457,16 @@ def watch_montage(
         panels = extract_panels(path, tmp, fps=fps, grid=grid)
         if not panels:
             return WatchResult(
-                critique=None, panel_count=0, total_seconds=total,
+                critique=None,
+                panel_count=0,
+                total_seconds=total,
                 error="ffmpeg extracted 0 panels",
             )
         if len(panels) > max_panels:
             _log.info(
                 "watch_montage: capping %d panels to %d (dropping tail)",
-                len(panels), max_panels,
+                len(panels),
+                max_panels,
             )
             panels = panels[:max_panels]
 
@@ -479,9 +495,7 @@ def watch_montage(
                     },
                 }
             )
-        content.append(
-            {"type": "text", "text": _user_prompt(len(panels), total, panel_seconds)}
-        )
+        content.append({"type": "text", "text": _user_prompt(len(panels), total, panel_seconds)})
 
         client = anthropic.Anthropic(
             api_key=key,
@@ -505,14 +519,18 @@ def watch_montage(
         except anthropic.APIStatusError as exc:
             _log.warning("watch_montage: vlm call failed: %s", exc)
             return WatchResult(
-                critique=None, panel_count=len(panels), total_seconds=total,
+                critique=None,
+                panel_count=len(panels),
+                total_seconds=total,
                 error=f"anthropic api error: {exc!s}",
             )
 
         critique = resp.parsed_output
         if critique is None:
             return WatchResult(
-                critique=None, panel_count=len(panels), total_seconds=total,
+                critique=None,
+                panel_count=len(panels),
+                total_seconds=total,
                 error="parsed_output missing (parse failed)",
             )
         # Snap timestamps to panel boundaries. See _snap_to_panel above.
@@ -528,7 +546,9 @@ def watch_montage(
         critique = critique.model_copy(update={"flags": snapped_flags})
 
         return WatchResult(
-            critique=critique, panel_count=len(panels), total_seconds=total,
+            critique=critique,
+            panel_count=len(panels),
+            total_seconds=total,
         )
     finally:
         for f in tmp.glob("*"):
@@ -571,9 +591,7 @@ def render_critique_markdown(result: WatchResult) -> str:
         lines.append("|---|---|---|")
         for f in c.flags:
             why = f.why.replace("|", "\\|")
-            lines.append(
-                f"| {f.start_s:.0f}s-{f.end_s:.0f}s | `{f.category}` | {why} |"
-            )
+            lines.append(f"| {f.start_s:.0f}s-{f.end_s:.0f}s | `{f.category}` | {why} |")
     return "\n".join(lines) + "\n"
 
 

@@ -18,13 +18,28 @@ from ai_video_editor.main import app
 def _make_dummy_mp4(path: Path, seconds: int = 30) -> None:
     subprocess.run(
         [
-            settings.ffmpeg_path, "-y", "-hide_banner", "-loglevel", "error",
-            "-f", "lavfi", "-i", f"color=c=black:s=64x64:r=10:d={seconds}",
-            "-f", "lavfi", "-i", f"anullsrc=r=8000:cl=mono:d={seconds}",
-            "-shortest", "-c:v", "libx264", "-c:a", "aac",
+            settings.ffmpeg_path,
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            f"color=c=black:s=64x64:r=10:d={seconds}",
+            "-f",
+            "lavfi",
+            "-i",
+            f"anullsrc=r=8000:cl=mono:d={seconds}",
+            "-shortest",
+            "-c:v",
+            "libx264",
+            "-c:a",
+            "aac",
             str(path),
         ],
-        check=True, capture_output=True,
+        check=True,
+        capture_output=True,
     )
 
 
@@ -48,9 +63,8 @@ def test_list_kill_anchors_returns_anchors(monkeypatch, client, src_mp4) -> None
             EventAnchor(15.0, "kill", {"anchor_seconds": 15.0}),
             EventAnchor(12.5, "multi_kill_2", {"anchor_seconds": 12.5, "cluster_size": 2}),
         ]
-    monkeypatch.setattr(
-        "ai_video_editor.routers.clips.kill_anchors_for_video", fake_anchors
-    )
+
+    monkeypatch.setattr("ai_video_editor.routers.clips.kill_anchors_for_video", fake_anchors)
 
     resp = client.post(
         "/api/v1/clips/list_kill_anchors",
@@ -84,14 +98,10 @@ def test_list_kill_anchors_404_on_missing_file(client, tmp_path) -> None:
     assert resp.status_code == 404
 
 
-def test_trim_source_anchor_to_kill_snaps_window(
-    monkeypatch, client, src_mp4
-) -> None:
+def test_trim_source_anchor_to_kill_snaps_window(monkeypatch, client, src_mp4) -> None:
     monkeypatch.setattr(
         "ai_video_editor.routers.clips.kill_anchors_for_video",
-        lambda *a, **kw: [
-            EventAnchor(11.0, "kill", {"anchor_seconds": 11.0})
-        ],
+        lambda *a, **kw: [EventAnchor(11.0, "kill", {"anchor_seconds": 11.0})],
     )
 
     resp = client.post(
@@ -138,17 +148,13 @@ def test_trim_source_anchor_to_kill_falls_through_when_no_anchor(
     assert body["end_seconds"] == 15.0
 
 
-def test_trim_source_without_anchor_flag_untouched(
-    monkeypatch, client, src_mp4
-) -> None:
+def test_trim_source_without_anchor_flag_untouched(monkeypatch, client, src_mp4) -> None:
     # anchor_to_kill defaults False -> kill_anchors_for_video should NOT
     # be called (defensive: sentinel that would raise if called).
     def _raise(*a, **kw):
         raise AssertionError("should not be called when anchor_to_kill=False")
 
-    monkeypatch.setattr(
-        "ai_video_editor.routers.clips.kill_anchors_for_video", _raise
-    )
+    monkeypatch.setattr("ai_video_editor.routers.clips.kill_anchors_for_video", _raise)
 
     resp = client.post(
         "/api/v1/clips/trim_source",
@@ -162,9 +168,7 @@ def test_trim_source_without_anchor_flag_untouched(
     assert resp.json()["snapped"] is False
 
 
-def test_auto_cut_kills_writes_one_clip_per_anchor(
-    monkeypatch, client, src_mp4
-) -> None:
+def test_auto_cut_kills_writes_one_clip_per_anchor(monkeypatch, client, src_mp4) -> None:
     monkeypatch.setattr(
         "ai_video_editor.routers.clips.kill_anchors_for_video",
         lambda *a, **kw: [
@@ -184,9 +188,7 @@ def test_auto_cut_kills_writes_one_clip_per_anchor(
         assert clip["event_type"] == "kill"
 
 
-def test_auto_cut_kills_empty_when_log_missing(
-    monkeypatch, client, src_mp4
-) -> None:
+def test_auto_cut_kills_empty_when_log_missing(monkeypatch, client, src_mp4) -> None:
     monkeypatch.setattr(
         "ai_video_editor.routers.clips.kill_anchors_for_video",
         lambda *a, **kw: [],

@@ -62,8 +62,7 @@ class AnthropicBackend(VLMBackend):
             return {
                 "ok": False,
                 "reason": (
-                    "ANTHROPIC_API_KEY is empty. Set it in api/.env to "
-                    "use the hosted VLM backend."
+                    "ANTHROPIC_API_KEY is empty. Set it in api/.env to use the hosted VLM backend."
                 ),
             }
         started = time.perf_counter()

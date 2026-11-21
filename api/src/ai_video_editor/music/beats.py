@@ -159,8 +159,7 @@ def detect_beats(
         raise FileNotFoundError(f"music file not found: {path}")
     if detector not in _BEAT_DETECTORS:
         raise ValueError(
-            f"unknown beat detector {detector!r}; "
-            f"expected one of {sorted(_BEAT_DETECTORS)}"
+            f"unknown beat detector {detector!r}; expected one of {sorted(_BEAT_DETECTORS)}"
         )
 
     cache = _cache_path(path, detector)

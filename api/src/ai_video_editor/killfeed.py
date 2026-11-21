@@ -121,9 +121,10 @@ def _ocr_tesseract(png_path: Path) -> str:
         settings.tesseract_path,
         str(png_path),
         "stdout",
-        "--psm", "11",  # sparse text — find text anywhere in the image
-        "-c", "tessedit_char_whitelist="
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 _",
+        "--psm",
+        "11",  # sparse text — find text anywhere in the image
+        "-c",
+        "tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 _",
     ]
     try:
         out = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
@@ -163,25 +164,24 @@ def _resolve_backend() -> Callable[[Path], str] | None:
 # ---------------------------------------------------------------------
 
 
-def _extract_frame(
-    video_path: str, at_seconds: float, crop_expr: str, out_png: Path
-) -> bool:
+def _extract_frame(video_path: str, at_seconds: float, crop_expr: str, out_png: Path) -> bool:
     """Pull one frame at `at_seconds`, crop to killfeed LEFT half,
     upscale 3x for better OCR, write PNG."""
     cmd = [
         settings.ffmpeg_path,
         "-y",
-        "-ss", f"{max(0.0, at_seconds):.3f}",
-        "-i", video_path,
-        "-vframes", "1",
-        "-vf", f"{crop_expr},scale=iw*3:ih*3",
+        "-ss",
+        f"{max(0.0, at_seconds):.3f}",
+        "-i",
+        video_path,
+        "-vframes",
+        "1",
+        "-vf",
+        f"{crop_expr},scale=iw*3:ih*3",
         str(out_png),
     ]
     try:
-        return (
-            subprocess.run(cmd, capture_output=True, text=True, timeout=10).returncode
-            == 0
-        )
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=10).returncode == 0
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return False
 
@@ -470,9 +470,7 @@ def verify_anchor(
     real moments.
     """
     tol = (
-        settings.killfeed_snap_tolerance_seconds
-        if tolerance_seconds is None
-        else tolerance_seconds
+        settings.killfeed_snap_tolerance_seconds if tolerance_seconds is None else tolerance_seconds
     )
     _ = tol  # kept for future metadata surfacing; no longer gates drops
     if track is None:

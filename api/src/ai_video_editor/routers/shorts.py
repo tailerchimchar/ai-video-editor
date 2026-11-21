@@ -69,8 +69,7 @@ class CompileShortsBody(BaseModel):
     music_path: str | None = Field(
         default=None,
         description=(
-            "Override the config default music path for montage mode. "
-            "Ignored in voiceover mode."
+            "Override the config default music path for montage mode. Ignored in voiceover mode."
         ),
     )
     layout: str | None = Field(
@@ -118,9 +117,7 @@ async def _run_shorts_job(
     """Background worker — the actual render happens here."""
     db = await get_db()
     try:
-        await db.execute(
-            "UPDATE jobs SET status = 'running' WHERE id = ?", (job_id,)
-        )
+        await db.execute("UPDATE jobs SET status = 'running' WHERE id = ?", (job_id,))
         await db.commit()
 
         candidates = await _load_candidates(db, asset["id"])
@@ -136,9 +133,7 @@ async def _run_shorts_job(
             beat_flash_source=body.beat_flash_source,
         )
         if not result.get("ok"):
-            await finish_job(
-                db, job_id, error=str(result.get("error") or "shorts render failed")
-            )
+            await finish_job(db, job_id, error=str(result.get("error") or "shorts render failed"))
             return
         await finish_job(
             db,
@@ -170,9 +165,7 @@ async def compile_shorts(asset_id: str, body: CompileShortsBody):
 
     db = await get_db()
     try:
-        rows = await db.execute_fetchall(
-            "SELECT * FROM assets WHERE id = ?", (asset_id,)
-        )
+        rows = await db.execute_fetchall("SELECT * FROM assets WHERE id = ?", (asset_id,))
         if not rows:
             raise HTTPException(404, "Asset not found")
         asset = dict(rows[0])
@@ -199,9 +192,7 @@ async def list_shorts(asset_id: str, mode: str | None = None):
     """
     db = await get_db()
     try:
-        rows = await db.execute_fetchall(
-            "SELECT * FROM assets WHERE id = ?", (asset_id,)
-        )
+        rows = await db.execute_fetchall("SELECT * FROM assets WHERE id = ?", (asset_id,))
         if not rows:
             raise HTTPException(404, "Asset not found")
         asset = dict(rows[0])
@@ -262,9 +253,7 @@ async def _run_cross_asset_job(
     """Background worker for cross-asset montage compiles."""
     db = await get_db()
     try:
-        await db.execute(
-            "UPDATE jobs SET status = 'running' WHERE id = ?", (job_id,)
-        )
+        await db.execute("UPDATE jobs SET status = 'running' WHERE id = ?", (job_id,))
         await db.commit()
 
         result = await asyncio.to_thread(
@@ -363,9 +352,7 @@ async def download_music_endpoint(body: DownloadMusicBody):
     from ..music import download_music
 
     try:
-        path = await asyncio.to_thread(
-            download_music, body.url, name=body.name
-        )
+        path = await asyncio.to_thread(download_music, body.url, name=body.name)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:
@@ -394,9 +381,7 @@ class OutplayedMontageBody(BaseModel):
     """Payload for `POST /shorts/outplayed_montage`."""
 
     game: str = Field(..., description="Game name — e.g. 'Valorant'.")
-    limit: int | None = Field(
-        default=None, description="Max clips in the montage. Defaults to 5."
-    )
+    limit: int | None = Field(default=None, description="Max clips in the montage. Defaults to 5.")
     since_days: int | None = Field(
         default=None,
         description=(
@@ -431,9 +416,7 @@ async def _run_outplayed_job(job_id: str, body: OutplayedMontageBody) -> None:
     """Background worker for outplayed direct compile."""
     db = await get_db()
     try:
-        await db.execute(
-            "UPDATE jobs SET status = 'running' WHERE id = ?", (job_id,)
-        )
+        await db.execute("UPDATE jobs SET status = 'running' WHERE id = ?", (job_id,))
         await db.commit()
 
         result = await asyncio.to_thread(
@@ -500,13 +483,9 @@ async def list_outplayed(game: str | None = None):
 
 
 @router.get("/shorts/outplayed_montage/preview")
-async def preview_outplayed(
-    game: str, limit: int | None = None, since_days: int | None = None
-):
+async def preview_outplayed(game: str, limit: int | None = None, since_days: int | None = None):
     """Dry-run: scan Outplayed clips + show what would be picked."""
-    return preview_outplayed_montage(
-        game=game, limit=limit, since_days=since_days
-    )
+    return preview_outplayed_montage(game=game, limit=limit, since_days=since_days)
 
 
 # ---------------------------------------------------------------------
@@ -521,9 +500,7 @@ async def browse_outplayed(
     limit: int | None = None,
 ):
     """List Outplayed auto-cut clips for `game`. Read-only."""
-    return list_outplayed_clips(
-        game, since_days=since_days, limit=limit
-    )
+    return list_outplayed_clips(game, since_days=since_days, limit=limit)
 
 
 @router.get("/shorts/browse/highlights")
@@ -533,9 +510,7 @@ async def browse_highlights(game: str | None = None):
 
 
 @router.get("/shorts/browse/highlights/{session_folder}")
-async def browse_highlights_session(
-    session_folder: str, game: str | None = None
-):
+async def browse_highlights_session(session_folder: str, game: str | None = None):
     """List clips inside one analyzed highlights session folder."""
     return list_highlights_clips(session_folder, game=game)
 
@@ -588,9 +563,7 @@ async def _run_custom_job(job_id: str, body: CustomMontageBody) -> None:
     """Background worker for custom montage compile."""
     db = await get_db()
     try:
-        await db.execute(
-            "UPDATE jobs SET status = 'running' WHERE id = ?", (job_id,)
-        )
+        await db.execute("UPDATE jobs SET status = 'running' WHERE id = ?", (job_id,))
         await db.commit()
 
         result = await asyncio.to_thread(
@@ -716,9 +689,7 @@ async def watch_montage_endpoint(body: WatchMontageBody):
         "panel_count": result.panel_count,
         "total_seconds": result.total_seconds,
         "error": result.error,
-        "critique": (
-            result.critique.model_dump() if result.critique is not None else None
-        ),
+        "critique": (result.critique.model_dump() if result.critique is not None else None),
     }
     return payload
 
@@ -751,9 +722,7 @@ async def get_session_buckets(game: str, session: str):
         raise HTTPException(404, f"Session folder not found: {folder}")
     manifest = route_session_folder(folder)
     if manifest is None:
-        raise HTTPException(
-            404, f"No readable index.json in {folder}"
-        )
+        raise HTTPException(404, f"No readable index.json in {folder}")
     return asdict(manifest)
 
 
@@ -767,9 +736,7 @@ async def preview_shorts_topics(asset_id: str):
     """
     db = await get_db()
     try:
-        rows = await db.execute_fetchall(
-            "SELECT * FROM assets WHERE id = ?", (asset_id,)
-        )
+        rows = await db.execute_fetchall("SELECT * FROM assets WHERE id = ?", (asset_id,))
         if not rows:
             raise HTTPException(404, "Asset not found")
         asset = dict(rows[0])

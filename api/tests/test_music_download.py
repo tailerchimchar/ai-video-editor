@@ -50,9 +50,7 @@ def test_local_path_returns_url_verbatim(tmp_path, monkeypatch) -> None:
     assert result == src
 
 
-def test_download_music_uses_cache_on_second_call(
-    tmp_path, monkeypatch
-) -> None:
+def test_download_music_uses_cache_on_second_call(tmp_path, monkeypatch) -> None:
     """A YouTube URL that's already cached must NOT re-invoke the
     strategy. Guards against surprise network calls on re-run."""
     from ai_video_editor.config import settings
@@ -77,9 +75,7 @@ def test_download_music_uses_cache_on_second_call(
     assert calls["n"] == 0  # strategy not invoked → cache hit
 
 
-def test_download_music_names_file_by_name_kwarg(
-    tmp_path, monkeypatch
-) -> None:
+def test_download_music_names_file_by_name_kwarg(tmp_path, monkeypatch) -> None:
     from ai_video_editor.config import settings
 
     monkeypatch.setattr(settings, "workspace_dir", tmp_path)

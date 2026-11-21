@@ -206,8 +206,7 @@ def snap_clips_to_beats(
     """
     if strategy not in _SYNC_STRATEGIES:
         raise ValueError(
-            f"unknown sync strategy {strategy!r}; "
-            f"expected one of {sorted(_SYNC_STRATEGIES)}"
+            f"unknown sync strategy {strategy!r}; expected one of {sorted(_SYNC_STRATEGIES)}"
         )
     sorted_beats = tuple(sorted(beats))
     fn = _SYNC_STRATEGIES[strategy]
