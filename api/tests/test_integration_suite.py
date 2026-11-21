@@ -446,9 +446,7 @@ class TestMcpEndpointIntegration:
         monkeypatch.setattr(settings, "outplayed_media_dir", str(tmp_path / "media"))
         return TestClient(app)
 
-    def test_mcp_trim_source_to_clip_endpoint(
-        self, api_client, test_clip, tmp_path, monkeypatch
-    ):
+    def test_mcp_trim_source_to_clip_endpoint(self, api_client, test_clip, tmp_path, monkeypatch):
         """Test POST /clips/trim_source (MCP trim_source_to_clip tool).
 
         Verifies the endpoint returns {ok, output_path} and creates the file.
