@@ -516,3 +516,31 @@ def test_fetch_timeline_inputs_without_recording_is_sync_only(offset_cfg, monkey
     )
     assert tl is not None and tl.offset_s == _SYNC and tl.offset_source == "sync_only"
     assert json.loads((cdir / "meta.json").read_text())["offset_source"] == "sync_only"
+
+
+@pytest.mark.parametrize("energy_fn", ["raises", "none"])
+def test_failed_audio_decode_is_sync_only_not_audio(offset_cfg, monkeypatch, tmp_path, energy_fn):
+    import json
+
+    from ai_video_editor.league import offset as offset_mod
+    from ai_video_editor.league.riot_timeline import load_or_fetch
+
+    def boom(p, d):
+        raise RuntimeError("ffmpeg failed")
+
+    fn = boom if energy_fn == "raises" else (lambda p, d: None)
+    rec = tmp_path / "rec.mp4"
+    rec.write_bytes(b"x")
+    monkeypatch.setattr(riot_mod, "_client_factory", lambda: _client(_riot_handler([])))
+    monkeypatch.setattr(
+        offset_mod, "verify_offset", lambda *a: pytest.fail("no calibration without audio")
+    )
+    asset = {**_ASSET, "path": str(rec)}
+    cdir = tmp_path / "c"
+    tl = load_or_fetch(
+        "asset-jhin",
+        fetch=lambda: riot_mod.fetch_timeline_inputs(asset, 1000.0, energy_fn=fn),
+        cache_dir=cdir,
+    )
+    assert tl is not None and tl.offset_s == _SYNC and tl.offset_source == "sync_only"
+    assert json.loads((cdir / "meta.json").read_text())["offset_source"] == "sync_only"

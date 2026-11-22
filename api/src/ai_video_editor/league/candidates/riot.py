@@ -532,4 +532,6 @@ def _calibrate_for_asset(asset: dict, duration: float, kills: list[float], energ
     except Exception as e:  # decode failure -> same as no loudness curve
         _log.warning("Riot offset: loudness decode failed: %s", e)
         energy = None
+    if energy is None:  # no loudness curve -> nothing to calibrate against
+        return sync_only_offset()
     return calibrate_offset(kills, energy, path)
