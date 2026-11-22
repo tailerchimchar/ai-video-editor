@@ -1,0 +1,61 @@
+{
+  "specName": "spec-content-direction",
+  "timestamp": "2026-11-22T15:30:00-06:00",
+  "status": "approved",
+  "capturedAtCommit": "e6a1d1e",
+  "sourceIssue": null,
+  "previewUrl": "https://claude.ai/artifact/KuAT5xykw62RbeFNpupL8e",
+  "feedbackRounds": [],
+  "redTeamStatus": "completed",
+  "coverageMap": {
+    "Goal and audience": "done",
+    "Next rounds": "done",
+    "Long-form experiment": "done",
+    "Early game": "done",
+    "Funny rule / commentary": "done",
+    "Montage": "done",
+    "Music and publishing": "done",
+    "Scope and bots": "done"
+  },
+  "qaLog": [
+    {"area": "Pre-analysis", "question": "Analyze the codebase before interviewing?", "answer": "Yes, analyze codebase"},
+    {"area": "Goal and audience", "question": "When someone watches a Noodlz video, what should they come away with?", "answer": "A mix, and let the data decide per week", "options": ["A player getting better, on camera", "Vibes and comedy with friends", "Hype highlights, as good as they can look", "A mix, and let the data decide per week"]},
+    {"area": "Next rounds", "question": "What does a week's output look like?", "answer": "i decide which games you do for now... you can help recommend me videos with the amount of multikills we have... what do beginner youtubers do?... you make the shorts, we can try some various long games, and when we have something we're happy with we can do the automation for shorts and longs", "options": ["3 shorts + 1 long piece, every week", "Shorts weekly, long piece only when a game earns it", "Shorts only until the long-form pipeline is proven"]},
+    {"area": "Long-form experiment", "question": "Which long-video experiment goes first?", "answer": "Story of the Jhin game, 4-6 min", "options": ["Story of the Jhin game, 4-6 min", "Music montage across the Nov 20 games, 60-90 s", "Full-game commentary cut, 8-12 min"], "note": "first attempt was replaced by a pasted Lead-bot message (four pipeline ideas); re-asked"},
+    {"area": "Long-form experiment", "question": "Whose voice carries the Jhin story video?", "answer": "Live mic for the fights, recorded narration for the setup", "options": ["My live mic from the game, cleaned up", "I record a narration afterwards", "Live mic for the fights, recorded narration for the setup", "No voice: captions and title cards only"]},
+    {"area": "Long-form experiment", "question": "Hybrid is the most work; which build order?", "answer": "Live mic cut first, narration added in experiment 2", "options": ["Live mic cut first, narration added in experiment 2", "Both at once, one experiment", "Narration first, live mic later"]},
+    {"area": "Early game", "question": "What does early-game content mean to you?", "answer": "Short-form lane moments: trades and escapes... but not 20-40 s... in long videos big trades, how I played the first 2 levels, kills, deaths, gank attempts; in shorts how we trade, how we get kills, assists", "options": ["The lane as a chapter of the story video", "Short-form lane moments: trades and escapes", "Educational: 'what I was trying in lane' voice-over", "Not now"]},
+    {"area": "Funny rule / commentary", "question": "Does the funny bucket get an exception to the on-screen-event rule?", "answer": "keepers can be my comms too. even if nothing happens, if i'm describing something or have a weird reaction, it's a keeper, but lower confidence or an 'informational' bucket... this is how we spin up a story per game", "options": ["Yes, funny clips can be voice-only, with a visible reaction", "Yes, pure voice-only funny clips are fine", "No, the rule stands for every bucket"]},
+    {"area": "Montage", "question": "Where does the music montage land now?", "answer": "Run it in parallel now, it is mostly built", "options": ["Experiment 3, after the story works", "Run it in parallel now, it is mostly built", "Drop it; montages are not this channel"]},
+    {"area": "Music and publishing", "question": "Where does music come from, and who uploads?", "answer": "put some into our folder and i'll recommend some into a separate folder; fan of old EDM: 2012 (If The World Would End), Dead by Stan SB, Monody by TheFatRat, Goodbye Moonmen, Truth by Tristam, Until The World Ends by Arch Tremors; they may not be royalty free", "options": ["YouTube Audio Library tracks, I upload myself", "Any track I send, pipeline uploads to YouTube", "Pipeline picks from a licensed catalogue"], "note": "upload half unanswered; ruled: no upload code, owner posts by hand"},
+    {"area": "Scope and bots", "question": "What do the bots own once they are back on Friday?", "answer": "you and bots will be synonymous. bots have ownership and know how everything works, you in the loop: main code reviewer and coder while i'm home; when i'm out you come up with tasks and the jiras and the bots implement while i'm at work, do the editing and show me vids", "options": ["Bots get the small pipeline tasks, I keep content and new modules", "Bots own the whole backlog, I only review", "Bots stay on reviews and Drive chores only"]},
+    {"area": "Process", "question": "Red team? Preview?", "answer": "yes, attack the spec and go ahead and implement. i'm gonna nap"}
+  ],
+  "baseline": {
+    "derivedFrom": "Explore agent pre-analysis, 2026-11-22",
+    "capturedAtCommit": "e6a1d1e",
+    "claims": [
+      {"area": "Montage", "claim": "Four montage entry points all render one 9:16 short via render_short; custom_montage takes an ordered clip_paths list + music_path; layouts are blur_fill and cropped_hud only; beat snap exists but no caller enables it", "evidence": "api/src/ai_video_editor/routers/shorts.py:523-567; shorts.py:597-603,736-768,811-855"},
+      {"area": "Long-form experiment", "claim": "plan_arc exists in music/arc.py but is unwired; compilation path (compile.py) is 16:9 1920x1080 with intro/main/outro narrative plan and per-clip captions; shorts path caps 180 s / 300 s timeout / 720x1280", "evidence": "api/src/ai_video_editor/music/arc.py:195; compile.py:59-137,339-342; config.py:353; shorts.py:979"},
+      {"area": "Long-form experiment", "claim": "Transcription reads the default audio stream; no -map, no mic/game separation, no diarization, no TTS; voiceover mode only ducks and writes a prompt", "evidence": "api/src/ai_video_editor/candidates/transcribe_backends.py:129-184; shorts.py:16-18,699-700"},
+      {"area": "Early game", "claim": "OwnerFrame holds minute/gold/cs/level for the owner only; no lane state, CS diff or opponent frames", "evidence": "api/src/ai_video_editor/league/riot_timeline.py:52-56; grep cs_diff|lane_state = 0 hits"},
+      {"area": "Funny rule / commentary", "claim": "Mentor table has hype/story/voice_over/funny; arc_montage only in code; 11 league corrections dated 2026-11-22", "evidence": ".claude/skills/mentor/SKILL.md:17-37; WORKSPACE/game_hints/league_examples.jsonl"},
+      {"area": "Music and publishing", "claim": "download_music writes WORKSPACE/music; library.py expects WORKSPACE/media_library/music/library.json; one track; no licence notes; no YouTube upload code", "evidence": "api/src/ai_video_editor/music/download.py:97-122; music/library.py:3,22-23"}
+    ]
+  },
+  "driftLedger": [],
+  "redTeamFindings": [
+    {"dimension": "Failure Modes", "severity": "critical", "title": "Mic track picked by stream position, not by label", "resolution": "R1: probe by label, else VAD energy; log; fail closed", "status": "resolved"},
+    {"dimension": "Scaling Cliffs", "severity": "critical", "title": "A 4-6 min story hits the shorts caps", "resolution": "R2: compilation path, chunked, scaled timeout", "status": "resolved"},
+    {"dimension": "Operational Concerns", "severity": "major", "title": "VLM/critic cost on a 6 min cut vs the $2 asset cap", "resolution": "R3: $5 per-video budget; 0.25 fps at chapter edges", "status": "resolved"},
+    {"dimension": "Failure Modes", "severity": "major", "title": "HP-bar reader false positives", "resolution": "R4: shadow mode; 80% precision gate", "status": "resolved"},
+    {"dimension": "Security Gaps", "severity": "major", "title": "Licensed tracks reach a third party through Drive", "resolution": "R5: royalty-free/silent cuts to Drive only; gitignore audio + music dirs", "status": "resolved"},
+    {"dimension": "Contradictory Decisions", "severity": "major", "title": "Owner picks games vs data decides", "resolution": "R6: owner wins; scorecard advisory", "status": "resolved"},
+    {"dimension": "Operational Concerns", "severity": "major", "title": "Commentary bucket floods the digest", "resolution": "R7: top 5 per game, separate section", "status": "resolved"},
+    {"dimension": "Dependency Risks", "severity": "major", "title": "Bots implement modules they cannot run", "resolution": "R8: session implements media code; bots non-media; nightly reference run backlog", "status": "resolved"},
+    {"dimension": "Data Integrity", "severity": "minor", "title": "Opponent frames and lane summary naming", "resolution": "R9: champion only; index checked", "status": "resolved"},
+    {"dimension": "Wildcard", "severity": "minor", "title": "Beat snap vs the fight-window rule", "resolution": "R10: montage only, ends only", "status": "resolved"}
+  ],
+  "rulingsNote": "Red-team findings were resolved by the Claude session while the owner napped (owner: 'attack the spec and go ahead and implement. i'm gonna nap'); each is in the Decisions Log with Source: Red Team and can be overturned.",
+  "jira": {"epic": "AVE-36", "tasks": ["AVE-37", "AVE-38", "AVE-39", "AVE-40", "AVE-41", "AVE-42", "AVE-43", "AVE-44"], "plan": "docs/plans/2026-11-22-content-direction.md"}
+}
