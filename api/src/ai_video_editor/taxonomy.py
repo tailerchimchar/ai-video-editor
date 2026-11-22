@@ -46,6 +46,7 @@ class Format(StrEnum):
     voice_over = "voice_over"
     funny = "funny"
     arc_montage = "arc_montage"
+    commentary = "commentary"  # voice-only story material; never a short on its own
 
 
 PLAN_FORMAT_BY_FORMAT: dict[Format, str] = {
