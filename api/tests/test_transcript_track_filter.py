@@ -104,6 +104,11 @@ def test_window_sentiment_excludes_owner_and_slice_opts_in(client, asset):
     assert voice.transcript_slice(db_path, asset["id"], 0, 10, speaker="owner") == OWNER
 
 
+def test_transcript_slice_default_is_mixed_only(client, asset):
+    _seed(asset["id"])
+    assert voice.transcript_slice(settings.database_path, asset["id"], 0, 10) == MIXED
+
+
 def test_owner_segment_gets_sentiment(monkeypatch, tmp_path):
     """transcribe_mic enriches owner segments with the same VADER score as the mixed path."""
     from ai_video_editor.candidates import mic_track

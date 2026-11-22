@@ -86,9 +86,12 @@ def transcript_slice(
 ) -> str:
     """Transcript text overlapping [start_s, end_s], in time order; "" if none.
 
-    `speaker` (e.g. "owner") restricts to that track; None reads every row."""
+    Default (speaker=None) reads the mixed track only; `speaker="owner"` opts in
+    to the owner mic rows, which duplicate speech already in the mixed rows."""
     where, params = _OVERLAP, (video_id, end_s, start_s)
-    if speaker is not None:
+    if speaker is None:
+        where += f" AND {MIXED_TRACK_SQL}"
+    else:
         where += " AND speaker = ?"
         params += (speaker,)
     rows = _rows(db_path, f"SELECT text FROM transcripts {where} ORDER BY start_seconds", params)
