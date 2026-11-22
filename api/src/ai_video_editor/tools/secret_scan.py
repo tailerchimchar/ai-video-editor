@@ -31,9 +31,34 @@ PATTERNS: dict[str, re.Pattern] = {
     "xai": re.compile(r"xai-[A-Za-z0-9]{30,}"),
     "typesafe": re.compile(r"(?<![A-Za-z0-9])ts_[A-Za-z0-9]{24,}"),
 }
-# Any long token on a line that mentions TYPESAFE is treated as a TypeSafe key.
+# A long key-like token on a line that mentions TYPESAFE is treated as a TypeSafe key.
 _TYPESAFE_LINE = re.compile(r"(?<![A-Za-z0-9_/\\.-])[A-Za-z0-9_-]{40,}(?![A-Za-z0-9_/\\.-])")
 _TYPESAFE_WORD = re.compile(r"(?i)typesafe")
+_HEX = re.compile(r"[0-9a-fA-F]+")
+_CODE_LINE_PREFIXES = ("def ", "class ", "#")
+
+
+def _key_like(token: str) -> bool:
+    """Key material, not an identifier or a git SHA: not pure hex, and either
+    mixed case with digits, or `-`/`_`-separated with a long letters+digits segment."""
+    if _HEX.fullmatch(token):
+        return False
+    has_digit = any(c.isdigit() for c in token)
+    if has_digit and any(c.isupper() for c in token) and any(c.islower() for c in token):
+        return True
+    segments = re.split(r"[-_]", token)
+    return len(segments) > 1 and any(
+        len(seg) >= 8 and any(c.isdigit() for c in seg) and any(c.isalpha() for c in seg)
+        for seg in segments
+    )
+
+
+def _typesafe_line_hit(line: str) -> bool:
+    if not _TYPESAFE_WORD.search(line):
+        return False
+    if line.lstrip().startswith(_CODE_LINE_PREFIXES) or "test_" in line:
+        return False
+    return any(_key_like(m.group()) for m in _TYPESAFE_LINE.finditer(line))
 
 
 class Hit(NamedTuple):
@@ -49,11 +74,7 @@ def scan_text(text: str) -> list[tuple[str, int]]:
         for name, pat in PATTERNS.items():
             if pat.search(line):
                 hits.append((name, n))
-        if (
-            _TYPESAFE_WORD.search(line)
-            and _TYPESAFE_LINE.search(line)
-            and ("typesafe", n) not in hits
-        ):
+        if ("typesafe", n) not in hits and _typesafe_line_hit(line):
             hits.append(("typesafe", n))
     return hits
 
