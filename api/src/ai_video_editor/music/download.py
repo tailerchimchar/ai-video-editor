@@ -2,7 +2,8 @@
 
 `folder` is `royalty_free` (default) or `owner_recs` (label releases that
 must never reach Drive). A flat file left in `WORKSPACE/music/` from before
-the folders existed is still reused, as royalty_free, with a warning.
+the folders existed is still reused, with a warning, but it has no licence
+entry so the Drive guard counts it as unlicensed.
 
 Open/closed: `_DOWNLOAD_STRATEGIES` maps a source name to a downloader
 function. Adding SoundCloud, Bandcamp, local-upload, etc. = new
@@ -123,8 +124,9 @@ def download_music(
 ) -> Path:
     """Download `url` (YouTube or local path) to `WORKSPACE/music/<folder>/`.
 
-    `licence`, when given, is recorded in the folder's licence.json (a track
-    without an entry is invisible to `list_tracks`).
+    `licence`, when given, is recorded in the folder's licence.json. A track
+    without an entry is invisible to `list_tracks` and counted `unlicensed`
+    by the Drive guard (`library.music_folder_of`), even in royalty_free/.
 
     Returns the local mp3 path. Cached: repeat calls with the same URL
     return the existing file without re-downloading.
@@ -150,7 +152,7 @@ def download_music(
     legacy = settings.workspace_dir / "music" / f"{stem}.mp3"
     if folder == "royalty_free" and legacy.is_file() and legacy.stat().st_size > 0:
         _log.warning(
-            "music %s is a legacy flat file with no licence entry; treating as royalty_free",
+            "music %s is a legacy flat file with no licence entry; reused, unlicensed for Drive",
             legacy,
         )
         return legacy

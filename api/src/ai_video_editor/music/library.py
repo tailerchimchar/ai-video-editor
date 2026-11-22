@@ -105,17 +105,29 @@ def list_tracks(folder: str | None = None) -> list[Track]:
     return tracks
 
 
-def music_folder_of(path: str | Path) -> Folder | None:
-    """Which licensed folder `path` lives in. A legacy flat file directly in
-    `WORKSPACE/music/` counts as royalty_free; anything else is None."""
+Provenance = Literal["royalty_free", "owner_recs", "unlicensed"]
+
+
+def music_folder_of(path: str | Path) -> Provenance:
+    """Provenance of `path`, by licence entry rather than location.
+
+    `owner_recs` for any file under `music/owner_recs/` (never published);
+    `royalty_free` only for a file under `music/royalty_free/` that has a
+    licence.json entry with a licence; everything else (no entry, a legacy
+    flat file in `music/`, a path outside the music root) is `unlicensed`.
+    """
     p = Path(path)
     try:
         rel = p.resolve().relative_to(music_root().resolve())
     except ValueError:
-        return None
-    if len(rel.parts) == 1:
-        return "royalty_free"
-    return rel.parts[0] if rel.parts[0] in FOLDERS else None  # type: ignore[return-value]
+        return "unlicensed"
+    if len(rel.parts) >= 2 and rel.parts[0] == "owner_recs":
+        return "owner_recs"
+    if len(rel.parts) == 2 and rel.parts[0] == "royalty_free":
+        entry = read_licences("royalty_free").get(rel.parts[1])
+        if isinstance(entry, dict) and entry.get("licence"):
+            return "royalty_free"
+    return "unlicensed"
 
 
 def _default_library_path() -> Path:

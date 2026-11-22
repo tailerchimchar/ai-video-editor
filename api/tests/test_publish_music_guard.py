@@ -49,9 +49,16 @@ def test_royalty_free_render_uploads(tmp_path) -> None:
     assert up.calls == ["m.mp4"]
 
 
-def test_null_music_folder_uploads(tmp_path) -> None:
+def test_null_music_folder_uploads_only_without_music(tmp_path) -> None:
     up = _Up()
     assert publish._upload(up, _render(tmp_path, None), "m.mp4", "clips/x") == "id1"
+    mp4 = _render(tmp_path, None)
+    (mp4.parent / "index.json").write_text(
+        json.dumps({"music_folder": None, "music_path": "/m/song.mp3"})
+    )
+    with pytest.raises(publish.OwnerRecsMusicError, match="unknown music provenance"):
+        publish._upload(up, mp4, "m.mp4", "clips/x")
+    assert up.calls == ["m.mp4"]
 
 
 def test_shorts_tree_render_without_sidecar_is_refused(tmp_path) -> None:

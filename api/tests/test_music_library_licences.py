@@ -54,10 +54,13 @@ def test_file_without_licence_entry_is_skipped_with_warning(music_root, caplog) 
 
 
 def test_music_folder_of(music_root) -> None:
+    _put(music_root, "royalty_free", "a.mp3", _LIC)
     assert library.music_folder_of(music_root / "owner_recs" / "b.m4a") == "owner_recs"
     assert library.music_folder_of(music_root / "royalty_free" / "a.mp3") == "royalty_free"
-    assert library.music_folder_of(music_root / "legacy.mp3") == "royalty_free"
-    assert library.music_folder_of(Path("elsewhere") / "s.mp3") is None
+    # Provenance is the licence entry, not the location (R5, fail closed).
+    assert library.music_folder_of(music_root / "royalty_free" / "x.mp3") == "unlicensed"
+    assert library.music_folder_of(music_root / "legacy.mp3") == "unlicensed"
+    assert library.music_folder_of(Path("elsewhere") / "s.mp3") == "unlicensed"
 
 
 def test_download_writes_into_folder_argument(music_root, tmp_path, monkeypatch) -> None:

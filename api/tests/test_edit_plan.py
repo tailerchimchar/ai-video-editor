@@ -226,6 +226,23 @@ def test_progress_model_fields():
 # ----- HTTP endpoint -----
 
 
+def _licensed_song(name: str = "song.mp3") -> Path:
+    """A royalty_free song with a licence entry (the only music a plan may use)."""
+    import json
+
+    from ai_video_editor.config import settings
+
+    d = settings.workspace_dir / "music" / "royalty_free"
+    d.mkdir(parents=True, exist_ok=True)
+    song = d / name
+    song.write_bytes(b"")
+    lic = d / "licence.json"
+    data = json.loads(lic.read_text()) if lic.is_file() else {}
+    data[name] = {"title": "t", "source_url": None, "licence": "CC0", "note": ""}
+    lic.write_text(json.dumps(data))
+    return song
+
+
 def _http_plan(**overrides) -> dict:
     base = {
         "format": "hype_montage",
@@ -278,19 +295,30 @@ def test_plan_music_sets_music_path_on_the_spec(client, compilation, tmp_path):
     import json
 
     comp_id, folder = compilation
-    song = tmp_path / "song.mp3"
-    song.write_bytes(b"")
+    song = _licensed_song()
     plan = _http_plan(music={"song_id": str(song), "trim_to_peak": True})
     r = client.post(f"/api/v1/compilations/{comp_id}/plan", json=plan)
     assert r.status_code == 200, r.text
     spec = json.loads((folder / "spec.json").read_text(encoding="utf-8"))
     assert spec["music_path"] == song.as_posix()
+    assert spec["music_folder"] == "royalty_free"
+
+
+def test_plan_with_unlicensed_music_is_refused(client, compilation, tmp_path):
+    comp_id, folder = compilation
+    song = tmp_path / "bare.mp3"
+    song.write_bytes(b"")
+    r = client.post(
+        f"/api/v1/compilations/{comp_id}/plan", json=_http_plan(music={"song_id": str(song)})
+    )
+    assert r.status_code == 409, r.text
+    assert "unlicensed; refused" in r.text
+    assert len(read_journal(folder)) == 1
 
 
 def test_ignored_music_trim_is_reported_as_a_problem(client, compilation, tmp_path):
     comp_id, _folder = compilation
-    song = tmp_path / "song.mp3"
-    song.write_bytes(b"")
+    song = _licensed_song()
     url = f"/api/v1/compilations/{comp_id}/plan"
     trimmed = _http_plan(
         music={"song_id": str(song), "trim_to_peak": True, "trim_start_s": 4.0, "trim_end_s": 34.0}
@@ -303,8 +331,7 @@ def test_ignored_music_trim_is_reported_as_a_problem(client, compilation, tmp_pa
 
 def test_plan_without_a_music_trim_reports_no_problems(client, compilation, tmp_path):
     comp_id, _folder = compilation
-    song = tmp_path / "song.mp3"
-    song.write_bytes(b"")
+    song = _licensed_song()
     plan = _http_plan(music={"song_id": str(song)})
     r = client.post(f"/api/v1/compilations/{comp_id}/plan", json=plan)
     assert r.json()["problems"] == []
@@ -316,8 +343,7 @@ def test_plan_music_resolves_a_library_song_id(client, compilation, tmp_path):
     from ai_video_editor.music.library import Library
 
     comp_id, folder = compilation
-    song = tmp_path / "lib.mp3"
-    song.write_bytes(b"")
+    song = _licensed_song("lib.mp3")
     library_file = tmp_path / "library.json"
     library_file.write_text(
         json.dumps([{"song_id": "s-1", "audio_path": str(song), "tags": []}]), encoding="utf-8"

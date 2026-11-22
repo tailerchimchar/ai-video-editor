@@ -19,6 +19,7 @@ from typing import Protocol
 import httpx
 
 from ..config import settings
+from .paths import inside
 
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 UPLOAD_URL = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart"
@@ -30,6 +31,54 @@ _EXPIRY_MARGIN = timedelta(seconds=60)
 
 class DriveError(RuntimeError):
     """Any non-2xx answer from Google."""
+
+
+class OwnerRecsMusicError(RuntimeError):
+    """The render's music is owner_recs, unlicensed or of unknown provenance:
+    never uploaded."""
+
+
+_REFUSED_MUSIC = frozenset({"owner_recs", "unlicensed"})
+_SIDECARS = ("index.json", "spec.json")  # shorts index / compilation spec
+
+
+def _read_sidecar(path: Path) -> object:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def check_music_provenance(path: Path) -> None:
+    """R5 Drive guard, fail closed. Raises `OwnerRecsMusicError` when:
+
+    - a sibling sidecar (`index.json` or `spec.json`) says `music_folder` is
+      owner_recs or unlicensed (anywhere on disk);
+    - a sidecar records music (`music_path` set, or a `music_folder` key) whose
+      `music_folder` is not `royalty_free`: null passes only with no music;
+    - the file is under `WORKSPACE/shorts/**` and its `index.json` is missing,
+      unreadable, not a dict or lacks `music_folder`.
+
+    Files elsewhere without a music-bearing sidecar (highlights clips, digests,
+    previews) carry no music and pass.
+    """
+    path = Path(path)
+    sides = {name: _read_sidecar(path.parent / name) for name in _SIDECARS}
+    for side in sides.values():
+        if not isinstance(side, dict):
+            continue
+        folder = side.get("music_folder")
+        if folder in _REFUSED_MUSIC:
+            raise OwnerRecsMusicError(f"refused: {folder} music ({path.name})")
+        if ("music_folder" in side or side.get("music_path")) and not (
+            folder == "royalty_free" or (folder is None and not side.get("music_path"))
+        ):
+            raise OwnerRecsMusicError(f"refused: unknown music provenance ({path.name})")
+    index = sides["index.json"]
+    if inside(path, settings.workspace_dir / "shorts") and not (
+        isinstance(index, dict) and "music_folder" in index
+    ):
+        raise OwnerRecsMusicError(f"refused: unknown music provenance ({path.name})")
 
 
 class Uploader(Protocol):
@@ -201,6 +250,21 @@ class DriveUploader:
                 return deleted
 
 
+class GuardedUploader:
+    """Every Drive upload passes `check_music_provenance` first: the one choke
+    point that publish and the Grok runner both hit."""
+
+    def __init__(self, inner: Uploader) -> None:
+        self._inner = inner
+
+    def upload(self, path: Path, *, name: str, subfolder: str) -> str:
+        check_music_provenance(Path(path))
+        return self._inner.upload(path, name=name, subfolder=subfolder)
+
+    def prune(self, *, subfolder: str, older_than_days: int) -> int:
+        return self._inner.prune(subfolder=subfolder, older_than_days=older_than_days)
+
+
 def uploader_from_settings() -> Uploader | None:
     s = settings
     fields = (
@@ -211,4 +275,4 @@ def uploader_from_settings() -> Uploader | None:
     )
     if not all(fields):
         return None
-    return DriveUploader(*fields)
+    return GuardedUploader(DriveUploader(*fields))

@@ -252,7 +252,7 @@ def test_token_failure_raises_drive_error(tmp_path):
 def test_uploader_from_settings_none_when_unconfigured(monkeypatch):
     for k in ("client_id", "client_secret", "refresh_token", "folder_id"):
         monkeypatch.setattr(settings, f"grokbot_drive_{k}", "x")
-    assert isinstance(drive.uploader_from_settings(), DriveUploader)
+    assert isinstance(drive.uploader_from_settings(), drive.GuardedUploader)
     monkeypatch.setattr(settings, "grokbot_drive_refresh_token", "")
     assert drive.uploader_from_settings() is None
 

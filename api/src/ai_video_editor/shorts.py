@@ -1020,9 +1020,10 @@ def _highlights_folder_for_asset(asset: dict, candidates: list[dict]) -> Path | 
 
 
 def _write_music_provenance(folder: Path, music_path: str | None) -> None:
-    """Record which licensed music folder a render used in `index.json`
-    (`music_folder`: royalty_free / owner_recs / null when no music or an
-    unlicensed path). The Drive guard fails closed without this key."""
+    """Record the music provenance a render used in `index.json`
+    (`music_folder`: royalty_free (licence entry) / owner_recs / unlicensed,
+    or null only when there is no music). The Drive guard fails closed
+    without this key."""
     from .music.library import music_folder_of
 
     idx = folder / "index.json"
