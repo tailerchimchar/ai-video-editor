@@ -25,6 +25,7 @@ from pathlib import Path
 
 import anthropic
 
+from ...anthropic_surface import check_budget, record_spend
 from ...config import settings
 from .base import VLMBackend, VLMUnavailableError
 
@@ -40,7 +41,10 @@ class AnthropicBackend(VLMBackend):
         api_key: str | None = None,
         model: str | None = None,
         timeout_seconds: float | None = None,
+        asset_id: str | None = None,
     ) -> None:
+        # Paid calls count against this asset's dollar cap (None = no accounting).
+        self.asset_id = asset_id
         # Distinguish explicit empty-string (test-passes-no-key) from
         # unset (fall through to settings). An `or` fallback would silently
         # swap `""` for the real key.
@@ -112,6 +116,7 @@ class AnthropicBackend(VLMBackend):
             for p in frames
         ]
         content.append({"type": "text", "text": user_prompt})
+        check_budget(self.asset_id)
         try:
             resp = client.messages.create(
                 model=self.model,
@@ -134,6 +139,7 @@ class AnthropicBackend(VLMBackend):
             _log.warning("anthropic vlm call failed: %s", exc)
             raise VLMUnavailableError(f"anthropic API error: {exc!s}") from exc
         self._active_model = getattr(resp, "model", None) or self.model
+        record_spend(self.asset_id, "vlm", self.model, resp.usage)
         # Extract text from the first text block. Anthropic vision replies
         # are always a single-text-block response for our prompt shape.
         for block in resp.content:

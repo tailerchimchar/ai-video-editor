@@ -233,3 +233,13 @@ def test_retention_days_must_be_at_least_one():
     assert (
         Settings(grokbot_drive_preview_retention_days=1).grokbot_drive_preview_retention_days == 1
     )
+
+
+def test_digest_with_a_key_is_refused_before_upload(round_dir):
+    gaming = json.loads((round_dir / "gaming-expert.json").read_text())
+    gaming[0]["story_beats"] = ["oops sk-ant-" + "a1B2c3D4e5F6g7H8i9J0k1"]
+    (round_dir / "gaming-expert.json").write_text(json.dumps(gaming))
+    up = FakeUploader()
+    with pytest.raises(pub.SecretLeakError):
+        run(round_dir, uploader=up)
+    assert [u for u in up.uploads if "digest" in str(u)] == []

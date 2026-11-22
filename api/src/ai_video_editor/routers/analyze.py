@@ -177,7 +177,9 @@ async def _run_rank_job(job_id: str, asset: dict) -> None:
                 continue
             candidates.append(d)
 
-        ranked = await asyncio.to_thread(rank_candidates, asset.get("game"), candidates)
+        ranked = await asyncio.to_thread(
+            rank_candidates, asset.get("game"), candidates, asset["id"]
+        )
 
         rankings_dir = settings.workspace_dir / "rankings"
         rankings_dir.mkdir(parents=True, exist_ok=True)

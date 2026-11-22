@@ -18,9 +18,11 @@ import json
 from pydantic import BaseModel
 
 from .anthropic_surface import (
+    check_budget,
     make_client,
     observe,
     record_generation,
+    record_spend,
     reserve_call,
 )
 from .config import settings
@@ -90,12 +92,15 @@ class _RankerOutput(BaseModel):
 
 
 @observe(name="rank-highlight-candidates", as_type="generation")
-def rank_candidates(game: str | None, candidates: list[dict]) -> list[RankedCandidate]:
+def rank_candidates(
+    game: str | None, candidates: list[dict], asset_id: str | None = None
+) -> list[RankedCandidate]:
     """Rank candidates for one video. `candidates` are highlight_candidates
     rows (id, source, start/end, event_type, confidence, metadata)."""
     if not candidates:
         return []
 
+    check_budget(asset_id)
     reserve_call("rank", settings.anthropic_max_rank_calls, "ANTHROPIC_MAX_RANK_CALLS")
 
     # Volatile payload — deterministic ordering so the cached system
@@ -123,6 +128,7 @@ def rank_candidates(game: str | None, candidates: list[dict]) -> list[RankedCand
         messages=[{"role": "user", "content": payload}],
         output_format=_RankerOutput,
     )
+    record_spend(asset_id, "rank", settings.ranker_model, response.usage)
     results = response.parsed_output.results
 
     record_generation(

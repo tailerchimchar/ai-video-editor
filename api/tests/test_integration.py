@@ -77,7 +77,7 @@ def test_rank_endpoint_writes_rankings_json(client, asset, poll, monkeypatch):
 
     monkeypatch.setattr(
         "ai_video_editor.routers.analyze.rank_candidates",
-        lambda game, candidates: [
+        lambda game, candidates, asset_id=None: [
             RankedCandidate(
                 candidate_id=cand_id,
                 keep=True,
@@ -139,7 +139,7 @@ def test_rank_job_skips_prefilter_dropped_candidates(client, asset, poll, monkey
     seen = []
     monkeypatch.setattr(
         "ai_video_editor.routers.analyze.rank_candidates",
-        lambda game, candidates: seen.extend(c["id"] for c in candidates) or [],
+        lambda game, candidates, asset_id=None: seen.extend(c["id"] for c in candidates) or [],
     )
     r = client.post(f"/api/v1/assets/{asset['id']}/rank").json()
     assert poll(client, r["job_id"])["status"] == "completed"
