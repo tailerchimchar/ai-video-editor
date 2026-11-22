@@ -65,6 +65,9 @@ class RiotTimeline:
     events: list[TimelineEvent]
     owner_frames: list[OwnerFrame]
     pre_pad_s: float = DEFAULT_PRE_PAD_S
+    # How offset_s was obtained (audio | ocr | manual_override | sync_only);
+    # None when unknown. `sync_only` = uncalibrated, trust as medium at best.
+    offset_source: str | None = None
 
 
 @dataclass
@@ -183,10 +186,9 @@ def parse_timeline(
                 add("game_end", ts, [], _end_detail(ev.get("winningTeam"), owner, parts))
 
     if not any(e.kind == "game_end" for e in events):
-        info = match.get("info", {})
-        start, end = info.get("gameStartTimestamp"), info.get("gameEndTimestamp")
-        if start is not None and end is not None:
-            add("game_end", int(end) - int(start), [], _end_detail(None, owner, parts))
+        window = game_window_ms(match)
+        if window is not None:
+            add("game_end", window[1] - window[0], [], _end_detail(None, owner, parts))
 
     events.sort(key=lambda e: e.t_game_s)
     end_ev = next((e for e in events if e.kind == "game_end"), None)
@@ -198,6 +200,26 @@ def parse_timeline(
         events=events,
         owner_frames=owner_frames,
     )
+
+
+def game_window_ms(match: dict) -> tuple[int, int] | None:
+    """(start_ms, end_ms) of a MATCH-V5 match, or None without a start or
+    any end signal. Falls back to `gameDuration`, handling its historical
+    units quirk (pre-patch-11.20 in ms, later in s)."""
+    info = match.get("info", {})
+    start = info.get("gameStartTimestamp")
+    if start is None:
+        return None
+    start = int(start)
+    end = info.get("gameEndTimestamp")
+    if end is not None:
+        return start, int(end)
+    dur = info.get("gameDuration")
+    if dur is None:
+        return None
+    dur = int(dur)
+    dur_ms = dur if dur > 100_000 else dur * 1000
+    return start, start + dur_ms
 
 
 def _end_detail(winning_team, owner: int, parts: dict[int, dict]) -> dict:
@@ -250,7 +272,9 @@ def pre_pad_for_drift(drift_s: float) -> float:
 
 # --- cache ---
 
-FetchResult = tuple  # (match, timeline, match_id, confidence, offset_s[, owner_puuid])
+# (match, timeline, match_id, confidence, offset_s[, owner_puuid[, offset_source]])
+FetchResult = tuple
+SYNC_ONLY = "sync_only"
 
 
 def cache_dir_for(asset_id: str) -> Path:
@@ -266,7 +290,10 @@ def save_cache(
     confidence: str,
     offset_s: float,
     owner_puuid: str,
+    offset_source: str | None = None,
 ) -> None:
+    """Write the three cache files. `riot_id` is stored so a changed
+    RIOT_ID invalidates the entry."""
     cache_dir.mkdir(parents=True, exist_ok=True)
     (cache_dir / "match.json").write_text(json.dumps(match), encoding="utf-8")
     (cache_dir / "timeline.json").write_text(json.dumps(timeline), encoding="utf-8")
@@ -276,16 +303,21 @@ def save_cache(
         "offset_s": float(offset_s),
         "owner_puuid": owner_puuid,
         "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "offset_source": offset_source,
+        "riot_id": settings.riot_id,
     }
     (cache_dir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
 
 def load_cached(cache_dir: Path) -> tuple[dict, dict, dict] | None:
     """(match, timeline, meta) for a reusable cache entry; None when missing,
-    unreadable, or low confidence (never reused)."""
+    unreadable, low confidence (never reused), without an owner, or written
+    for a different RIOT_ID."""
     try:
         meta = json.loads((cache_dir / "meta.json").read_text(encoding="utf-8"))
         if meta.get("confidence") not in ("high", "medium"):
+            return None
+        if not meta.get("owner_puuid") or meta.get("riot_id") != settings.riot_id:
             return None
         match = json.loads((cache_dir / "match.json").read_text(encoding="utf-8"))
         timeline = json.loads((cache_dir / "timeline.json").read_text(encoding="utf-8"))
@@ -294,10 +326,17 @@ def load_cached(cache_dir: Path) -> tuple[dict, dict, dict] | None:
     return match, timeline, meta
 
 
-def record_offset(asset_id: str, offset_s: float, *, cache_dir: Path | None = None) -> None:
-    """Store the final calibrated offset in an existing cache entry so later
-    `load_or_fetch` callers get recording seconds that match the clips.
-    No-op when nothing is cached."""
+def record_offset(
+    asset_id: str,
+    offset_s: float,
+    *,
+    source: str | None = None,
+    cache_dir: Path | None = None,
+) -> None:
+    """Store the final calibrated offset (and how it was obtained) in an
+    existing cache entry, overwriting any earlier value including a
+    `sync_only` one, so later `load_or_fetch` callers get recording seconds
+    that match the clips. No-op when nothing is cached."""
     d = cache_dir or cache_dir_for(asset_id)
     path = d / "meta.json"
     try:
@@ -305,6 +344,8 @@ def record_offset(asset_id: str, offset_s: float, *, cache_dir: Path | None = No
     except (OSError, ValueError):
         return
     meta["offset_s"] = float(offset_s)
+    if source is not None:
+        meta["offset_source"] = source
     path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
 
@@ -318,6 +359,22 @@ def owner_puuid_from_riot_id(match: dict, riot_id: str) -> str | None:
     return None
 
 
+def _from_cache(cached: tuple[dict, dict, dict]) -> RiotTimeline | None:
+    match, timeline, meta = cached
+    try:
+        tl = parse_timeline(
+            match,
+            timeline,
+            owner_puuid=meta["owner_puuid"],
+            offset_s=float(meta.get("offset_s") or 0.0),
+            confidence=meta["confidence"],
+        )
+    except ValueError:
+        return None  # corrupt/foreign cache entry -> refetch
+    tl.offset_source = meta.get("offset_source")
+    return tl
+
+
 def load_or_fetch(
     asset_id: str,
     *,
@@ -327,50 +384,49 @@ def load_or_fetch(
     """Cached `RiotTimeline` for an asset, else `fetch()` and cache it.
 
     `fetch` returns `(match, timeline, match_id, confidence, offset_s)` and
-    may append `owner_puuid` as a sixth element; without it the owner is
-    found by `settings.riot_id` among the participants. Returns None when
-    the fetch fails or the owner cannot be resolved.
+    may append `owner_puuid` and `offset_source`; without an owner it is
+    found by `settings.riot_id` among the participants. A cached
+    `sync_only` offset counts as a miss for offset purposes: `fetch` is
+    tried again and the cached entry is used only if that fails. Low
+    confidence results are returned but never written. Returns None when
+    the fetch fails (and nothing usable is cached) or the owner cannot be
+    resolved.
     """
     d = cache_dir or cache_dir_for(asset_id)
     cached = load_cached(d)
-    if cached is not None:
-        match, timeline, meta = cached
-        try:
-            return parse_timeline(
-                match,
-                timeline,
-                owner_puuid=meta.get("owner_puuid") or "",
-                offset_s=float(meta.get("offset_s") or 0.0),
-                confidence=meta["confidence"],
-            )
-        except ValueError:
-            pass  # corrupt/foreign cache entry -> refetch
+    cached_tl = _from_cache(cached) if cached is not None else None
+    if cached_tl is not None and cached_tl.offset_source != SYNC_ONLY:
+        return cached_tl
 
     got = fetch()
     if got is None:
-        return None
+        return cached_tl
     match, timeline, match_id, confidence, offset_s = got[:5]
     owner = got[5] if len(got) > 5 else owner_puuid_from_riot_id(match, settings.riot_id)
+    offset_source = got[6] if len(got) > 6 else None
     if not owner:
         _log.warning("Riot timeline: owner not resolvable for asset %s", asset_id)
-        return None
+        return cached_tl
     try:
         tl = parse_timeline(
             match, timeline, owner_puuid=owner, offset_s=offset_s, confidence=confidence
         )
     except ValueError as e:
         _log.warning("Riot timeline: %s (asset %s)", e, asset_id)
-        return None
-    try:
-        save_cache(
-            d,
-            match,
-            timeline,
-            match_id=match_id,
-            confidence=confidence,
-            offset_s=offset_s,
-            owner_puuid=owner,
-        )
-    except OSError as e:
-        _log.warning("Riot timeline cache write failed for %s: %s", asset_id, e)
+        return cached_tl
+    tl.offset_source = offset_source
+    if confidence != "low":
+        try:
+            save_cache(
+                d,
+                match,
+                timeline,
+                match_id=match_id,
+                confidence=confidence,
+                offset_s=offset_s,
+                owner_puuid=owner,
+                offset_source=offset_source,
+            )
+        except OSError as e:
+            _log.warning("Riot timeline cache write failed for %s: %s", asset_id, e)
     return tl

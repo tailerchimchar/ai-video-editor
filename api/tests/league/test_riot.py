@@ -410,6 +410,10 @@ def test_detect_low_confidence_has_no_fight_metadata(riot_cfg, monkeypatch):
     for r in rows:
         assert "fight_start_s" not in r["metadata"]
         assert "match_confidence" not in r["metadata"]
+    # a low pick is never written to the cache
+    from ai_video_editor.config import settings
+
+    assert not (settings.workspace_dir / "riot" / "asset-jhin").exists()
 
 
 def test_detect_rate_limited_twice_returns_empty(riot_cfg, monkeypatch):
@@ -429,3 +433,86 @@ def test_fetch_timeline_inputs_feeds_load_or_fetch(riot_cfg, monkeypatch, tmp_pa
         cache_dir=tmp_path / "c",
     )
     assert tl is not None and tl.match_id == "NA1_JHIN" and tl.confidence == "high"
+
+
+# ----- Fix round 1: one offset basis for clips and timeline -----
+
+_SYNC = 3.0
+_CALIBRATED = 20.0
+
+
+@pytest.fixture
+def offset_cfg(riot_cfg, monkeypatch):
+    from ai_video_editor.config import settings
+
+    monkeypatch.setattr(settings, "riot_sync_offset_seconds", _SYNC)
+    monkeypatch.setattr(settings, "riot_offset_override_seconds", None)
+    monkeypatch.setattr(settings, "riot_offset_min_quality", 0.0)
+    return riot_cfg
+
+
+def test_end_to_end_fight_bounds_on_calibrated_plus_sync_basis(offset_cfg, monkeypatch, tmp_path):
+    import json
+
+    import numpy as np
+
+    from ai_video_editor.league import orchestrator as orch
+
+    monkeypatch.setattr(riot_mod, "_client_factory", lambda: _client(_riot_handler([])))
+    monkeypatch.setattr(orch, "align_offset", lambda kills, energy: (_CALIBRATED, 5.0))
+    asset = {**_ASSET, "path": str(tmp_path / "rec.mp4")}
+    rows, status = orch.gather_lol_candidates(asset, 1000.0, np.zeros(1000))
+    assert status == "ok"
+    basis = _CALIBRATED + _SYNC
+    kill = next(r for r in rows if r["event_type"] == "kill")["metadata"]
+    assert kill["anchor_seconds"] == 310.0 + basis
+    assert kill["fight_start_s"] == 300.0 + basis  # earliest fight event (ally death)
+    assert kill["fight_end_s"] == 310.0 + basis
+    assert kill["game_end_s"] == 990.0 + basis
+    meta = json.loads((tmp_path / "riot" / "asset-jhin" / "meta.json").read_text())
+    assert meta["offset_s"] == basis
+    assert meta["offset_source"] == "audio"  # orchestrator overwrote the sync_only write
+
+
+def test_fetch_timeline_inputs_returns_calibrated_offset(offset_cfg, monkeypatch, tmp_path):
+    import json
+
+    import numpy as np
+
+    from ai_video_editor.league import offset as offset_mod
+    from ai_video_editor.league.riot_timeline import load_or_fetch
+
+    rec = tmp_path / "rec.mp4"
+    rec.write_bytes(b"x")
+    monkeypatch.setattr(riot_mod, "_client_factory", lambda: _client(_riot_handler([])))
+    monkeypatch.setattr(offset_mod, "align_offset", lambda kills, energy: (_CALIBRATED, 5.0))
+    asset = {**_ASSET, "path": str(rec)}
+    cdir = tmp_path / "c"
+    tl = load_or_fetch(
+        "asset-jhin",
+        fetch=lambda: riot_mod.fetch_timeline_inputs(
+            asset, 1000.0, energy_fn=lambda p, d: np.zeros(1000)
+        ),
+        cache_dir=cdir,
+    )
+    basis = _CALIBRATED + _SYNC
+    assert tl is not None and tl.offset_s == basis and tl.offset_source == "audio"
+    kill = next(e for e in tl.events if e.kind == "kill")
+    assert kill.t_rec_s == 310.0 + basis  # same second as the clip anchor
+    meta = json.loads((cdir / "meta.json").read_text())
+    assert meta["offset_s"] == basis and meta["offset_source"] == "audio"
+
+
+def test_fetch_timeline_inputs_without_recording_is_sync_only(offset_cfg, monkeypatch, tmp_path):
+    import json
+
+    from ai_video_editor.league.riot_timeline import load_or_fetch
+
+    monkeypatch.setattr(riot_mod, "_client_factory", lambda: _client(_riot_handler([])))
+    asset = {**_ASSET, "path": str(tmp_path / "gone.mp4")}
+    cdir = tmp_path / "c"
+    tl = load_or_fetch(
+        "asset-jhin", fetch=lambda: riot_mod.fetch_timeline_inputs(asset, 1000.0), cache_dir=cdir
+    )
+    assert tl is not None and tl.offset_s == _SYNC and tl.offset_source == "sync_only"
+    assert json.loads((cdir / "meta.json").read_text())["offset_source"] == "sync_only"

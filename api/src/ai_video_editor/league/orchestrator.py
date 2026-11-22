@@ -26,6 +26,7 @@ from ..config import settings
 from .calibrate import align_offset
 from .candidates.riot import detect_riot_events
 from .ocr import verify_offset
+from .offset import calibrate_offset
 from .riot_timeline import DRIFT_WARN_S, offset_drift_s, pre_pad_for_drift, record_offset
 
 _log = logging.getLogger(__name__)
@@ -85,32 +86,27 @@ def gather_lol_candidates(
     # otherwise align the kill comb against this recording's loudness,
     # with an OCR clock read as a tiebreaker if the lock is weak.
     kills = sorted((r["metadata"]["riot_event_ms"]) / 1000.0 for r in riot_rows)
-    ocr_check: dict | None = None
-    offset: float
-    quality: float | None
-    offset_source: str
-
-    if settings.riot_offset_override_seconds is not None:
-        offset = settings.riot_offset_override_seconds
-        quality = None
-        offset_source = "manual_override"
-    else:
-        offset, quality = align_offset(kills, energy)
-        offset_source = "audio"
-        if quality < settings.riot_offset_min_quality and kills:
-            gc_ref = kills[len(kills) // 2]
-            ocr_check = verify_offset(asset["path"], gc_ref + offset, gc_ref)
-            if ocr_check.get("ocr_available"):
-                offset = ocr_check["ocr_offset_seconds"]
-                offset_source = "ocr"
-
-    # Optional manual nudge on top of whatever the calibration produced.
-    offset += settings.riot_sync_offset_seconds
+    cal = calibrate_offset(
+        kills, energy, asset.get("path"), align=align_offset, verify=verify_offset
+    )
+    offset, quality, offset_source, ocr_check = (
+        cal.offset_s,
+        cal.quality,
+        cal.source,
+        cal.ocr_check,
+    )
     pad = settings.analyze_window_padding
+    # riot.py built fight bounds at game clock + sync; move them to the
+    # calibrated basis (game clock + calibrated + sync) shared with the anchor.
     fight_shift = offset - settings.riot_sync_offset_seconds
-    wide_pre_pad = _drift_pre_pad(kills, offset, energy, duration)
+    # A human-measured override is trusted as-is: no drift second-guessing.
+    wide_pre_pad = (
+        None
+        if offset_source == "manual_override"
+        else _drift_pre_pad(kills, offset, energy, duration)
+    )
     try:
-        record_offset(video_id, offset)
+        record_offset(video_id, offset, source=offset_source)
     except OSError as e:
         _log.warning("Riot cache offset update skipped: %s", e)
 

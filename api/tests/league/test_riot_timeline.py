@@ -315,3 +315,55 @@ def test_drift_over_three_widens_pre_pad():
     assert pre_pad_for_drift(3.5) == 8.0
     assert pre_pad_for_drift(3.0) == 4.0
     assert pre_pad_for_drift(0.0) == 4.0
+
+
+# ----- Fix round 1: cache validity, sync_only, gameDuration fallback -----
+
+
+def _seed(tmp_path, **meta_overrides):
+    load_or_fetch("a", fetch=_fetcher("high", []), cache_dir=tmp_path)
+    meta = json.loads((tmp_path / "meta.json").read_text())
+    for k, v in meta_overrides.items():
+        if v is None:
+            meta.pop(k, None)
+        else:
+            meta[k] = v
+    (tmp_path / "meta.json").write_text(json.dumps(meta))
+
+
+def test_cache_without_owner_is_a_miss(tmp_path):
+    _seed(tmp_path, owner_puuid=None)
+    calls: list = []
+    load_or_fetch("a", fetch=_fetcher("high", calls), cache_dir=tmp_path)
+    assert len(calls) == 1
+
+
+def test_cache_for_other_riot_id_is_a_miss(tmp_path):
+    _seed(tmp_path, riot_id="Someone#Else")
+    calls: list = []
+    load_or_fetch("a", fetch=_fetcher("high", calls), cache_dir=tmp_path)
+    assert len(calls) == 1
+
+
+def test_low_result_is_not_written(tmp_path):
+    load_or_fetch("a", fetch=_fetcher("low", []), cache_dir=tmp_path)
+    assert not (tmp_path / "meta.json").exists()
+
+
+def test_sync_only_cache_refetches_and_falls_back(tmp_path):
+    _seed(tmp_path, offset_source="sync_only", offset_s=3.0)
+    calls: list = []
+    tl = load_or_fetch("a", fetch=_fetcher("high", calls), cache_dir=tmp_path)
+    assert len(calls) == 1 and tl.offset_s == 12.5  # treated as a miss for offset
+    _seed(tmp_path, offset_source="sync_only", offset_s=3.0)
+    tl = load_or_fetch("a", fetch=lambda: None, cache_dir=tmp_path)
+    assert tl is not None and tl.offset_s == 3.0 and tl.offset_source == "sync_only"
+
+
+def test_game_end_falls_back_to_game_duration():
+    match = _match(end_ms=None)
+    match["info"]["gameDuration"] = 1500  # seconds (post-11.20 units)
+    tl = parse_timeline(
+        match, _timeline(with_game_end=False), owner_puuid="ME", offset_s=0.0, confidence="high"
+    )
+    assert tl.game_end_s == 1500.0

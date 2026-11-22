@@ -99,3 +99,15 @@ def test_calibrated_offset_recorded_in_cache(cfg, monkeypatch):
     monkeypatch.setattr(orch, "align_offset", lambda kills, energy: (20.0, 5.0))
     orch.gather_lol_candidates(_asset(), 1000.0, np.zeros(1000))
     assert json.loads((d / "meta.json").read_text())["offset_s"] == 20.0
+
+
+def test_manual_override_skips_drift_check(cfg, monkeypatch):
+    from ai_video_editor.config import settings
+
+    monkeypatch.setattr(settings, "riot_offset_override_seconds", 12.0)
+    rows = [_row(t, (t, t)) for t in (100.0, 200.0, 600.0, 700.0)]
+    monkeypatch.setattr(orch, "detect_riot_events", lambda a, d: (rows, "ok"))
+    monkeypatch.setattr(orch, "_drift_pre_pad", lambda *a: pytest.fail("drift ran"))
+    out, _ = orch.gather_lol_candidates(_asset(), 1000.0, np.zeros(1000))
+    assert out[0]["metadata"]["offset_source"] == "manual_override"
+    assert out[0]["metadata"]["fight_start_s"] == 112.0

@@ -29,17 +29,21 @@ Endpoints used (Riot ACCOUNT-V1 / MATCH-V5, regional routing):
 import logging
 import re
 import time
+from collections.abc import Callable
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import httpx
 
 from ...config import settings
+from ..offset import SYNC_ONLY, calibrate_offset, sync_only_offset
 from ..riot_timeline import (
     RiotTimeline,
     cache_dir_for,
     fight_containing,
     fights,
+    game_window_ms,
     load_cached,
     parse_timeline,
     save_cache,
@@ -150,15 +154,11 @@ def _get(client: httpx.Client, path: str, **params) -> dict | list:
 def _game_window_ms(match_info: dict) -> tuple[int, int]:
     """(start_ms, end_ms) for a MATCH-V5 match `info` object, handling the
     historical gameDuration units quirk."""
-    info = match_info["info"]
-    start = int(info["gameStartTimestamp"])
-    end = info.get("gameEndTimestamp")
-    if end is not None:
-        return start, int(end)
-    dur = int(info.get("gameDuration", 0))
-    # Pre-patch-11.20 matches report gameDuration in ms; later ones in s.
-    dur_ms = dur if dur > 100_000 else dur * 1000
-    return start, start + dur_ms
+    window = game_window_ms(match_info)
+    if window is None:  # no end signal at all: zero-length game at its start
+        start = int(match_info["info"]["gameStartTimestamp"])
+        return start, start
+    return window
 
 
 def _our_participant(match_info: dict, puuid: str) -> dict | None:
@@ -414,8 +414,11 @@ def _fetch_live(
 
 def _write_cache(cdir, match: dict, timeline: dict, puuid: str, confidence: str) -> None:
     """Persist the correlated match; a cache failure never breaks candidates.
-    The offset recorded here is the raw sync offset; the orchestrator
-    overwrites it with the calibrated one (`riot_timeline.record_offset`)."""
+    Low-confidence picks are never written. The offset recorded here is the
+    uncalibrated sync offset, marked `sync_only`; the orchestrator overwrites
+    it with the calibrated one (`riot_timeline.record_offset`)."""
+    if confidence == "low":
+        return
     try:
         save_cache(
             cdir,
@@ -425,6 +428,7 @@ def _write_cache(cdir, match: dict, timeline: dict, puuid: str, confidence: str)
             confidence=confidence,
             offset_s=settings.riot_sync_offset_seconds,
             owner_puuid=puuid,
+            offset_source=SYNC_ONLY,
         )
     except (OSError, KeyError, TypeError) as e:
         _log.warning("Riot cache write skipped: %s", e)
@@ -462,10 +466,20 @@ def _attach_fight_metadata(rows: list[dict], tl: RiotTimeline | None) -> None:
         meta["match_confidence"] = tl.confidence
 
 
-def fetch_timeline_inputs(asset: dict, duration: float) -> tuple | None:
-    """`riot_timeline.load_or_fetch` fetch for an asset: returns
-    (match, timeline, match_id, confidence, offset_s, owner_puuid) or None
-    on any failure (unconfigured, not League, no match, API error)."""
+def fetch_timeline_inputs(
+    asset: dict, duration: float, *, energy_fn: Callable | None = None
+) -> tuple | None:
+    """`riot_timeline.load_or_fetch` fetch for an asset.
+
+    Returns (match, timeline, match_id, confidence, offset_s, owner_puuid,
+    offset_source) or None on any failure (unconfigured, not League, no
+    match, API error). `offset_s` comes from the same `calibrate_offset`
+    the candidate path uses, run on the same owner events, so timeline
+    seconds match clip seconds. Without a readable recording (`asset["path"]`)
+    the offset is the uncalibrated sync nudge and `offset_source` is
+    `sync_only`. `energy_fn(path, duration)` defaults to the audio module's
+    `energy_curve`.
+    """
     if not (_configured() and _is_league(asset) and duration > 0):
         return None
     expected_start_ms = _expected_start_ms(asset.get("filename", ""))
@@ -482,11 +496,40 @@ def fetch_timeline_inputs(asset: dict, duration: float) -> tuple | None:
         return None
     chosen, timeline, puuid = live
     _, ds_ms, dd_ms = _correlate(expected_start_ms, duration_ms, [chosen])
+    rows = _kill_candidates(
+        chosen,
+        timeline,
+        puuid,
+        duration,
+        settings.analyze_window_padding,
+        settings.riot_sync_offset_seconds,
+    )
+    kills = sorted(r["metadata"]["riot_event_ms"] / 1000.0 for r in rows)
+    cal = _calibrate_for_asset(asset, duration, kills, energy_fn)
     return (
         chosen,
         timeline,
         chosen["metadata"]["matchId"],
         _confidence(ds_ms, dd_ms),
-        settings.riot_sync_offset_seconds,
+        cal.offset_s,
         puuid,
+        cal.source,
     )
+
+
+def _calibrate_for_asset(asset: dict, duration: float, kills: list[float], energy_fn):
+    """Calibrated offset when the recording is readable (or a manual
+    override is set); otherwise the sync-only fallback."""
+    if settings.riot_offset_override_seconds is not None:
+        return calibrate_offset(kills, None, None)
+    path = asset.get("path")
+    if not (path and kills and Path(path).is_file()):
+        return sync_only_offset()
+    if energy_fn is None:
+        from ...candidates.audio import energy_curve as energy_fn
+    try:
+        energy = energy_fn(path, duration)
+    except Exception as e:  # decode failure -> same as no loudness curve
+        _log.warning("Riot offset: loudness decode failed: %s", e)
+        energy = None
+    return calibrate_offset(kills, energy, path)
