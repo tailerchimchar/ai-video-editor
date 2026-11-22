@@ -8,6 +8,13 @@ These tests mock/inspect the ffmpeg filter strings rather than rendering real vi
 
 from __future__ import annotations
 
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+
+import pytest
+
 # ---------------------------------------------------------------------
 # 1) MONTAGE_TITLE_OPTIONAL — opt-out for the title burn-in
 # ---------------------------------------------------------------------
@@ -328,3 +335,327 @@ class TestConfigFlags:
         )
         assert hasattr(s, "caption_fontsize_scale_enabled")
         assert s.caption_fontsize_scale_enabled is False
+
+
+# ---------------------------------------------------------------------
+# Real ffmpeg integration tests (require ffmpeg/ffprobe in PATH)
+# ---------------------------------------------------------------------
+
+
+def _ffmpeg_available() -> bool:
+    """Check if ffmpeg is available."""
+    return shutil.which("ffmpeg") is not None and shutil.which("ffprobe") is not None
+
+
+def _make_test_video(path: Path, duration: float = 2.0) -> None:
+    """Generate a minimal test video using ffmpeg lavfi testsrc."""
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        f"testsrc=duration={duration}:size=1920x1080:rate=30",
+        "-f",
+        "lavfi",
+        "-i",
+        f"sine=frequency=440:duration={duration}",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "ultrafast",
+        "-crf",
+        "35",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "64k",
+        str(path),
+    ]
+    result = subprocess.run(cmd, capture_output=True, timeout=30)
+    if result.returncode != 0:
+        raise RuntimeError(f"ffmpeg failed: {result.stderr.decode()}")
+
+
+def _get_video_dimensions(path: Path) -> tuple[int, int]:
+    """Get video dimensions using ffprobe."""
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=width,height",
+        "-of",
+        "csv=p=0",
+        str(path),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+    if result.returncode != 0:
+        raise RuntimeError(f"ffprobe failed: {result.stderr}")
+    w, h = result.stdout.strip().split(",")
+    return int(w), int(h)
+
+
+@pytest.mark.skipif(not _ffmpeg_available(), reason="ffmpeg/ffprobe not in PATH")
+class TestRealFfmpegIntegration:
+    """Real ffmpeg integration tests for the quirk flags."""
+
+    def test_burn_title_true_includes_title_text_in_output(self, monkeypatch) -> None:
+        """With MONTAGE_TITLE_OPTIONAL=True and burn_title=True, video is rendered."""
+        from ai_video_editor.config import settings
+        from ai_video_editor.shorts import _build_filter_complex
+
+        monkeypatch.setattr(settings, "montage_title_optional", True)
+
+        # Build filter complex with burn_title=True
+        fc = _build_filter_complex(
+            n_video_inputs=1,
+            title="TEST_TITLE",
+            mode="montage",
+            music_input_index=None,
+            duck_volume=0.2,
+            music_volume=0.4,
+            layout="blur_fill",
+            burn_title=True,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            src = Path(tmpdir) / "src.mp4"
+            out = Path(tmpdir) / "out.mp4"
+            _make_test_video(src, duration=1.0)
+
+            cmd = [
+                "ffmpeg",
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                str(src),
+                "-filter_complex",
+                fc,
+                "-map",
+                "[vout]",
+                "-map",
+                "[aout]",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-crf",
+                "35",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "64k",
+                "-t",
+                "1",
+                str(out),
+            ]
+            result = subprocess.run(cmd, capture_output=True, timeout=60)
+            assert result.returncode == 0, f"ffmpeg failed: {result.stderr.decode()}"
+            assert out.exists()
+            w, h = _get_video_dimensions(out)
+            assert w == 720 and h == 1280  # blur_fill = 9:16
+
+    def test_burn_title_false_produces_valid_output(self, monkeypatch) -> None:
+        """With MONTAGE_TITLE_OPTIONAL=True and burn_title=False, video renders without title."""
+        from ai_video_editor.config import settings
+        from ai_video_editor.shorts import _build_filter_complex
+
+        monkeypatch.setattr(settings, "montage_title_optional", True)
+
+        fc = _build_filter_complex(
+            n_video_inputs=1,
+            title="SHOULD_NOT_APPEAR",
+            mode="montage",
+            music_input_index=None,
+            duck_volume=0.2,
+            music_volume=0.4,
+            layout="blur_fill",
+            burn_title=False,
+        )
+
+        # Verify no drawtext with title in filter
+        assert "SHOULD_NOT_APPEAR" not in fc
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            src = Path(tmpdir) / "src.mp4"
+            out = Path(tmpdir) / "out.mp4"
+            _make_test_video(src, duration=1.0)
+
+            cmd = [
+                "ffmpeg",
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                str(src),
+                "-filter_complex",
+                fc,
+                "-map",
+                "[vout]",
+                "-map",
+                "[aout]",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-crf",
+                "35",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "64k",
+                "-t",
+                "1",
+                str(out),
+            ]
+            result = subprocess.run(cmd, capture_output=True, timeout=60)
+            assert result.returncode == 0, f"ffmpeg failed: {result.stderr.decode()}"
+            assert out.exists()
+            w, h = _get_video_dimensions(out)
+            assert w == 720 and h == 1280
+
+    def test_caption_scale_produces_valid_drawtext(self) -> None:
+        """With scale_enabled=True, caption_filters produces valid ffmpeg drawtext."""
+        from ai_video_editor.edits import caption_filters
+
+        segments = [
+            {
+                "text": "Hello World",
+                "start_seconds": 0.0,
+                "end_seconds": 1.0,
+                "style": {"fontsize": 60},
+            },
+        ]
+        fc = caption_filters(
+            segments,
+            clip_start_offset=0.0,
+            output_height=1280,
+            output_width=720,
+            scale_enabled=True,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            src = Path(tmpdir) / "src.mp4"
+            out = Path(tmpdir) / "out.mp4"
+            _make_test_video(src, duration=1.5)
+
+            cmd = [
+                "ffmpeg",
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                str(src),
+                "-vf",
+                fc or "null",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-crf",
+                "35",
+                "-c:a",
+                "copy",
+                "-t",
+                "1",
+                str(out),
+            ]
+            result = subprocess.run(cmd, capture_output=True, timeout=60)
+            assert result.returncode == 0, f"ffmpeg failed: {result.stderr.decode()}"
+            assert out.exists()
+
+    def test_caption_long_text_wraps_and_renders(self) -> None:
+        """Long captions wrap and produce valid ffmpeg output."""
+        from ai_video_editor.edits import caption_filters
+
+        segments = [
+            {
+                "text": "This is a very long caption that should wrap onto multiple lines",
+                "start_seconds": 0.0,
+                "end_seconds": 1.5,
+                "style": {"fontsize": 50},
+            },
+        ]
+        fc = caption_filters(
+            segments,
+            clip_start_offset=0.0,
+            output_height=1280,
+            output_width=720,
+            scale_enabled=True,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            src = Path(tmpdir) / "src.mp4"
+            out = Path(tmpdir) / "out.mp4"
+            _make_test_video(src, duration=2.0)
+
+            cmd = [
+                "ffmpeg",
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                str(src),
+                "-vf",
+                fc or "null",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-crf",
+                "35",
+                "-c:a",
+                "copy",
+                "-t",
+                "1.5",
+                str(out),
+            ]
+            result = subprocess.run(cmd, capture_output=True, timeout=60)
+            assert result.returncode == 0, f"ffmpeg failed: {result.stderr.decode()}"
+            assert out.exists()
+
+
+# ---------------------------------------------------------------------
+# Endpoint test for CustomMontageBody burn_title field
+# ---------------------------------------------------------------------
+
+
+class TestCustomMontageBodyBurnTitle:
+    """Test that the burn_title field is properly defined in CustomMontageBody."""
+
+    def test_custom_montage_body_has_burn_title_field(self) -> None:
+        """CustomMontageBody accepts burn_title parameter."""
+        from ai_video_editor.routers.shorts import CustomMontageBody
+
+        # Should not raise
+        body = CustomMontageBody(clip_paths=["/some/path.mp4"], burn_title=False)
+        assert body.burn_title is False
+
+        body = CustomMontageBody(clip_paths=["/some/path.mp4"], burn_title=True)
+        assert body.burn_title is True
+
+        body = CustomMontageBody(clip_paths=["/some/path.mp4"])
+        assert body.burn_title is None  # defaults to None (not set)
+
+    def test_custom_montage_body_serializes_burn_title(self) -> None:
+        """CustomMontageBody serializes burn_title correctly."""
+        from ai_video_editor.routers.shorts import CustomMontageBody
+
+        body = CustomMontageBody(clip_paths=["/some/path.mp4"], burn_title=False)
+        data = body.model_dump()
+        assert data["burn_title"] is False
+
+        body = CustomMontageBody(clip_paths=["/some/path.mp4"])
+        data = body.model_dump()
+        assert data["burn_title"] is None

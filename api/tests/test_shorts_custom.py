@@ -254,3 +254,66 @@ def test_list_custom_shorts_returns_folders(tmp_path, monkeypatch) -> None:
     assert len(result["folders"]) == 1
     assert result["folders"][0]["name"] == "my_edit"
     assert "my_edit.mp4" in result["folders"][0]["shorts"]
+
+
+# ---------------------------------------------------------------------
+# burn_title parameter tests
+# ---------------------------------------------------------------------
+
+
+def test_build_custom_montage_passes_burn_title_to_render(tmp_path, monkeypatch) -> None:
+    """When burn_title is explicitly passed, it reaches the render function."""
+    from ai_video_editor.config import settings
+    from ai_video_editor.shorts import build_custom_montage
+
+    monkeypatch.setattr(settings, "workspace_dir", tmp_path)
+    clip = tmp_path / "clip.mp4"
+    _make_mp4(clip, size=1024)
+
+    monkeypatch.setattr(
+        "ai_video_editor.candidates.probe.get_duration_seconds",
+        lambda p: 10.0,
+    )
+
+    captured_kwargs: list[dict] = []
+
+    def _fake_render(plan, out_path, **kwargs):
+        captured_kwargs.append(kwargs)
+        from ai_video_editor.shorts import RenderResult
+
+        return RenderResult(plan=plan, out_path=out_path, ok=True)
+
+    monkeypatch.setattr("ai_video_editor.shorts._render_and_refine", _fake_render)
+    result = build_custom_montage(clip_paths=[str(clip)], name="burn_test", burn_title=False)
+    assert result["ok"] is True
+    assert len(captured_kwargs) == 1
+    assert captured_kwargs[0].get("burn_title") is False
+
+
+def test_build_custom_montage_burn_title_default_true(tmp_path, monkeypatch) -> None:
+    """When burn_title is not passed, it defaults to True."""
+    from ai_video_editor.config import settings
+    from ai_video_editor.shorts import build_custom_montage
+
+    monkeypatch.setattr(settings, "workspace_dir", tmp_path)
+    clip = tmp_path / "clip.mp4"
+    _make_mp4(clip, size=1024)
+
+    monkeypatch.setattr(
+        "ai_video_editor.candidates.probe.get_duration_seconds",
+        lambda p: 10.0,
+    )
+
+    captured_kwargs: list[dict] = []
+
+    def _fake_render(plan, out_path, **kwargs):
+        captured_kwargs.append(kwargs)
+        from ai_video_editor.shorts import RenderResult
+
+        return RenderResult(plan=plan, out_path=out_path, ok=True)
+
+    monkeypatch.setattr("ai_video_editor.shorts._render_and_refine", _fake_render)
+    result = build_custom_montage(clip_paths=[str(clip)], name="default_test")
+    assert result["ok"] is True
+    assert len(captured_kwargs) == 1
+    assert captured_kwargs[0].get("burn_title") is True
