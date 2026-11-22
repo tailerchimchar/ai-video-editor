@@ -600,6 +600,8 @@ _LAYOUT_BUILDERS: dict[str, tuple[callable, tuple[str, ...]]] = {  # type: ignor
     # via cropped_hud_labels_for_game(game). The label tuple stored
     # here is the LoL default (backward-compat when game=None).
     "cropped_hud": (cropped_hud_9x16, CROPPED_HUD_9X16_LABELS),
+    # Owner-approved layout B: the per-edit HUD builder, per indexed clip.
+    "9:16_hud": (cropped_hud_9x16, CROPPED_HUD_9X16_LABELS),
 }
 
 
@@ -612,14 +614,19 @@ def _indexed_layout_chain(layout: str, i: int, *, game: str | None = None) -> st
 
     Raises `ValueError` for unknown layouts.
     """
-    from .edits import cropped_hud_labels_for_game
+    from .edits import build_hud_aspect_filter_complex, cropped_hud_labels_for_game
 
     if layout not in _LAYOUT_BUILDERS:
         raise ValueError(
             f"unknown shorts layout {layout!r}; expected one of {sorted(_LAYOUT_BUILDERS)}"
         )
-    if layout == "cropped_hud":
-        chain = cropped_hud_9x16(game=game).replace("[0:v]", f"[{i}:v]")
+    if layout in ("cropped_hud", "9:16_hud"):
+        base = (
+            build_hud_aspect_filter_complex("", game=game)
+            if layout == "9:16_hud"
+            else cropped_hud_9x16(game=game)
+        )
+        chain = base.replace("[0:v]", f"[{i}:v]")
         labels = cropped_hud_labels_for_game(game)
     else:
         builder, labels = _LAYOUT_BUILDERS[layout]
@@ -809,8 +816,8 @@ _SNAP_TOLERANCE_SECONDS = 0.5
 
 
 def _snap_plan_to_beats(plan: ShortPlan, music_path: str) -> ShortPlan:
-    """Shift each clip's start so its payoff lands on the nearest beat
-    (`kill_on_beat`, bounded by `_SNAP_TOLERANCE_SECONDS`).
+    """Move each clip's END onto the nearest beat (`end_on_beat`, bounded by
+    `_SNAP_TOLERANCE_SECONDS`). Starts never move: a fight window keeps its start.
 
     Only clips with an `anchor_offset_seconds` move: for the rest the
     window is a source offset on a pre-cut file and is never trimmed.
@@ -831,11 +838,12 @@ def _snap_plan_to_beats(plan: ShortPlan, music_path: str) -> ShortPlan:
                     if c.anchor_offset_seconds is None
                     else c.anchor_offset_seconds
                 ),
+                snappable=c.anchor_offset_seconds is not None,
             )
             for c in plan.clips
         ]
         snapped = snap_clips_to_beats(
-            windows, beats, strategy="kill_on_beat", tolerance_seconds=_SNAP_TOLERANCE_SECONDS
+            windows, beats, strategy="end_on_beat", tolerance_seconds=_SNAP_TOLERANCE_SECONDS
         )
     except Exception as exc:
         _log.warning("beat-snap failed (non-fatal, rendering unsnapped): %s", exc)
@@ -843,13 +851,7 @@ def _snap_plan_to_beats(plan: ShortPlan, music_path: str) -> ShortPlan:
     return replace(
         plan,
         clips=tuple(
-            c
-            if c.anchor_offset_seconds is None
-            else replace(
-                c,
-                start_seconds=s.new_start_seconds,
-                anchor_offset_seconds=c.anchor_offset_seconds + s.shift_seconds,
-            )
+            c if c.anchor_offset_seconds is None else replace(c, end_seconds=s.new_end_seconds)
             for c, s in zip(plan.clips, snapped.clips, strict=True)
         ),
     )
@@ -866,7 +868,7 @@ def render_short(
     beat_flash_source: str | None = None,
     game: str | None = None,
     max_seconds: float | None = None,
-    snap_to_beats: bool = False,
+    snap_to_beats: bool | None = None,
     burn_title: bool = True,
     title_optional: bool = False,
 ) -> tuple[bool, str | None]:
@@ -886,8 +888,9 @@ def render_short(
     stay at the config default. `None` uses the config setting.
 
     `snap_to_beats` (montage with music only) moves each anchored clip's
-    start so its payoff lands on a beat; off by default, which leaves the
-    render exactly as before.
+    END onto a beat (starts never move); None follows
+    `settings.shorts_beat_sync_enabled` (off by default, which leaves the
+    render exactly as before).
 
     `burn_title` (default True) controls whether the title overlay is
     drawn. `title_optional` is resolved from settings at the entry point.
@@ -897,6 +900,8 @@ def render_short(
     """
     if not plan.clips:
         return False, "empty plan"
+    if snap_to_beats is None:
+        snap_to_beats = settings.shorts_beat_sync_enabled
     if snap_to_beats and mode == "montage" and music_path:
         plan = _snap_plan_to_beats(plan, music_path)
 
@@ -1014,6 +1019,24 @@ def _highlights_folder_for_asset(asset: dict, candidates: list[dict]) -> Path | 
     return folder if folder.is_dir() else None
 
 
+def _write_music_provenance(folder: Path, music_path: str | None) -> None:
+    """Record which licensed music folder a render used in `index.json`
+    (`music_folder`: royalty_free / owner_recs / null when no music or an
+    unlicensed path). The Drive guard fails closed without this key."""
+    from .music.library import music_folder_of
+
+    idx = folder / "index.json"
+    try:
+        data = json.loads(idx.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    data["music_path"] = music_path
+    data["music_folder"] = music_folder_of(music_path) if music_path else None
+    idx.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
 def _write_index_md(
     folder: Path,
     *,
@@ -1068,6 +1091,7 @@ def _write_index_md(
             lines.append(f"Error: {r.error}")
         lines.append("")
     (folder / "index.md").write_text("\n".join(lines), encoding="utf-8")
+    _write_music_provenance(folder, music_path)
 
 
 def build_shorts(
@@ -1895,6 +1919,7 @@ def _write_cross_asset_index_md(
         if not result.ok:
             lines.append(f"Error: {result.error}")
     (folder / "index.md").write_text("\n".join(lines), encoding="utf-8")
+    _write_music_provenance(folder, music_path)
 
 
 def preview_cross_asset_montage(
@@ -2608,6 +2633,7 @@ def _write_outplayed_index_md(
         if not result.ok:
             lines.append(f"Error: {result.error}")
     (folder / "index.md").write_text("\n".join(lines), encoding="utf-8")
+    _write_music_provenance(folder, music_path)
 
 
 def preview_outplayed_montage(
@@ -3103,6 +3129,7 @@ def _write_custom_index_md(
         if not result.ok:
             lines.append(f"Error: {result.error}")
     (folder / "index.md").write_text("\n".join(lines), encoding="utf-8")
+    _write_music_provenance(folder, music_path)
 
 
 def build_custom_montage(
