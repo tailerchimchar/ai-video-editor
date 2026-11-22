@@ -86,14 +86,15 @@ def game_scorecard(
         if deaths >= ACE_DEATHS:
             aces += 1
         owner_kills = sum(1 for e in f.events if e.kind == "kill")
-        if deaths >= MULTIKILL_FIGHT_MIN and owner_kills:
+        owner_assists = sum(1 for e in f.events if e.kind == "assist")
+        if deaths >= MULTIKILL_FIGHT_MIN and (owner_kills or owner_assists):
             fight_rows.append(
                 {
                     "start_s": f.start_s,
                     "end_s": f.end_s,
                     "enemy_deaths": deaths,
                     "owner_kills": owner_kills,
-                    "owner_assists": sum(1 for e in f.events if e.kind == "assist"),
+                    "owner_assists": owner_assists,
                 }
             )
     kill_times = [e.t_rec_s for e in timeline.events if e.kind == "kill" and e.t_rec_s is not None]

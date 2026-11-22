@@ -51,6 +51,13 @@ def test_three_enemy_deaths_with_owner_kill_is_a_multikill_fight():
     assert score.aces == 0
 
 
+def test_multikill_fight_needs_owner_kill_or_assist():
+    assisted = _timeline([_ev("enemy_death", 100), _ev("enemy_death", 103), _ev("assist", 106)])
+    assert len(sc.game_scorecard(assisted, MATCH).multikill_fights) == 1
+    absent = _timeline([_ev("enemy_death", 100 + i * 3) for i in range(3)])
+    assert sc.game_scorecard(absent, MATCH).multikill_fights == []
+
+
 def test_five_enemy_deaths_in_one_fight_is_an_ace():
     tl = _timeline([_ev("enemy_death", 100 + i * 3) for i in range(5)])
     assert sc.game_scorecard(tl, MATCH).aces == 1
