@@ -126,3 +126,84 @@ def test_window_anchor_bounds_beyond_duration_fall_back_to_old_path():
     s, e = _window_anchor(cand, {}, 1000.0)
     assert 0.0 <= s < e
     assert (s, e) == _window_anchor(_cand(), {}, 1000.0)
+
+
+def _build(monkeypatch, tmp_path, cands, rankings):
+    import json
+
+    from ai_video_editor import highlights
+    from ai_video_editor.config import settings
+
+    monkeypatch.setattr(settings, "workspace_dir", tmp_path)
+    monkeypatch.setattr(highlights, "get_duration_seconds", lambda _p: 1000.0)
+    cuts = []
+    monkeypatch.setattr(
+        highlights, "trim_clip", lambda src, out, s, e: (cuts.append((s, e)), (True, None))[1]
+    )
+    monkeypatch.setattr(highlights, "_vlm_enabled", lambda: False)
+    asset = {"id": "v1", "path": "x.mp4", "filename": "League_05-15-2026_21-19-8-0.mp4"}
+    summary = highlights.build_highlights(asset, rankings, cands)
+    written = json.loads((tmp_path / summary["folder"] / "index.json").read_text("utf-8"))
+    return cuts, written
+
+
+def _fight_cand(cid, event, anchor, fs, fe):
+    return {
+        "id": cid,
+        "source": "riot_api",
+        "event_type": event,
+        "start_seconds": anchor - 5,
+        "end_seconds": anchor + 5,
+        "metadata": {"anchor_seconds": anchor, "fight_start_s": fs, "fight_end_s": fe},
+    }
+
+
+def _rank(cid, hype, start):
+    return {"candidate_id": cid, "keep": True, "hype_score": hype, "suggested_start_seconds": start}
+
+
+def test_same_fight_rankings_cut_one_clip_and_record_merged(monkeypatch, tmp_path):
+    cands = [
+        _fight_cand("k1", "kill", 105.0, 100.0, 120.0),
+        _fight_cand("m1", "multi_kill", 110.0, 100.0, 120.0),
+        _fight_cand("d1", "death", 118.0, 100.0, 120.0),
+    ]
+    rankings = [_rank("m1", 9, 110.0), _rank("k1", 7, 105.0), _rank("d1", 3, 118.0)]
+    cuts, written = _build(monkeypatch, tmp_path, cands, rankings)
+    assert len(cuts) == 1
+    assert len(written["clips"]) == 1
+    clip = written["clips"][0]
+    assert clip["event"] == "multi_kill"
+    assert clip["merged_candidates"] == ["k1", "d1"]
+
+
+def test_distinct_fights_cut_two_clips(monkeypatch, tmp_path):
+    cands = [
+        _fight_cand("k1", "kill", 105.0, 100.0, 120.0),
+        _fight_cand("k2", "kill", 405.0, 400.0, 420.0),
+    ]
+    rankings = [_rank("k1", 5, 105.0), _rank("k2", 6, 405.0)]
+    cuts, written = _build(monkeypatch, tmp_path, cands, rankings)
+    assert len(cuts) == 2
+    assert all("merged_candidates" not in c for c in written["clips"])
+
+
+def test_fight_windows_disabled_restores_anchor_path(monkeypatch):
+    from ai_video_editor.config import settings
+
+    monkeypatch.setattr(settings, "fight_windows_enabled", False)
+    cand = _cand(fight_start_s=100.0, fight_end_s=110.0)
+    assert _window_anchor(cand, {}, 1000.0) == _window_anchor(_cand(), {}, 1000.0)
+    assert cut_window(cand, {}, 1000.0) == (97.0, 108.0)
+
+
+def test_fight_windows_disabled_does_not_merge(monkeypatch, tmp_path):
+    from ai_video_editor.config import settings
+
+    monkeypatch.setattr(settings, "fight_windows_enabled", False)
+    cands = [
+        _fight_cand("k1", "kill", 105.0, 100.0, 120.0),
+        _fight_cand("d1", "death", 118.0, 100.0, 120.0),
+    ]
+    cuts, _ = _build(monkeypatch, tmp_path, cands, [_rank("k1", 5, 105.0), _rank("d1", 3, 118.0)])
+    assert len(cuts) == 2

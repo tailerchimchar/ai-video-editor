@@ -176,6 +176,10 @@ class Settings(BaseSettings):
     # cluster from producing a multi-minute clip. Well past a real
     # rampage/teamfight length.
     highlight_max_seconds: float = 120.0
+    # Event-driven fight windows (spec-jhin-round): when a riot candidate
+    # carries fight bounds, cut the whole fight. False restores the
+    # per-event anchor window everywhere.
+    fight_windows_enabled: bool = True
 
     # Per-event-type window overrides. Different events deserve different
     # pacing: a kill needs short pre + long post (milk the celebration),
