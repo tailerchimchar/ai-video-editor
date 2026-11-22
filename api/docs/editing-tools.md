@@ -192,6 +192,43 @@ and `sounds` sections. The compilation's `asset.game` resolves which
 profile is in scope, so the same call works across LoL and Valorant —
 only the underlying ROI / audio file differs.
 
+## Feature flags
+
+Two off-by-default feature flags control optional editing behaviours:
+
+### MONTAGE_TITLE_OPTIONAL
+
+Default: `false` (title always burned in).
+
+When enabled, the per-call `burn_title` parameter on
+`compile_custom_montage` (MCP) and `CustomMontageBody` (REST API) is
+honoured. Pass `burn_title=False` to skip the title overlay.
+
+```bash
+# Enable in environment
+export MONTAGE_TITLE_OPTIONAL=true
+
+# Then call with burn_title=False to omit title overlay
+compile_custom_montage(clip_paths=[...], burn_title=False)
+```
+
+### CAPTION_FONTSIZE_SCALE_ENABLED
+
+Default: `false` (fontsize used as-is).
+
+When enabled, caption fontsize scales relative to output height with a
+1080px reference. Text wraps onto multiple lines (up to 2) before
+shrinking, with a minimum of 24px. For 9:16_hud (720×1280 output), this
+prevents captions from clipping or appearing tiny on smaller outputs.
+
+```bash
+# Enable fontsize scaling
+export CAPTION_FONTSIZE_SCALE_ENABLED=true
+```
+
+Both flags are off by default to preserve byte-for-byte identical filter
+graphs with existing behaviour. Enable them in your `.env` to opt in.
+
 ## Output locations
 
 ```

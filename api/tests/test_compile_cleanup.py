@@ -418,7 +418,7 @@ def test_render_spec_auto_runs_cleanup_after_concat(comp_folder: Path, monkeypat
     monkeypatch.setattr(
         compile_mod,
         "_render_clip_part",
-        lambda clip, parts_dir, aspect, fade, label_number=None: (
+        lambda clip, parts_dir, aspect, fade, label_number=None, **_: (
             parts_dir / f"part_{clip['id'][:8]}.mp4",
             True,
             None,
@@ -445,7 +445,7 @@ def test_render_spec_skips_cleanup_on_concat_failure(comp_folder: Path, monkeypa
     monkeypatch.setattr(
         compile_mod,
         "_render_clip_part",
-        lambda clip, parts_dir, aspect, fade, label_number=None: (
+        lambda clip, parts_dir, aspect, fade, label_number=None, **_: (
             parts_dir / f"part_{clip['id'][:8]}.mp4",
             True,
             None,
@@ -468,7 +468,7 @@ def test_render_spec_cleanup_opt_out(comp_folder: Path, monkeypatch):
     monkeypatch.setattr(
         compile_mod,
         "_render_clip_part",
-        lambda clip, parts_dir, aspect, fade, label_number=None: (
+        lambda clip, parts_dir, aspect, fade, label_number=None, **_: (
             parts_dir / f"part_{clip['id'][:8]}.mp4",
             True,
             None,

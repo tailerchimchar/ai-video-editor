@@ -403,6 +403,18 @@ class Settings(BaseSettings):
     # off, requests with aspect=9:16_hud get a 400.
     hud_aspect_enabled: bool = False
 
+    # Montage title burn-in opt-out. When False (default), the title
+    # overlay is ALWAYS burned from ~0.2s to ~2.5s, matching legacy
+    # behavior. When True, the per-call `burn_title` parameter is
+    # honored (default True), allowing callers to skip the title.
+    montage_title_optional: bool = False
+
+    # Caption fontsize scaling. When False (default), fontsize is used
+    # as-is (legacy behavior). When True, fontsize scales relative to a
+    # 1080px reference height and clamps to fit inside the frame with
+    # margin, mirroring how zoom_scale_to_1080p normalizes output.
+    caption_fontsize_scale_enabled: bool = False
+
     # Clip intensity scorer (intensity.py). Raw weights; the score is
     # clamped to [0, 1] so they only need to be relative to each other.
     intensity_kill_weight: float = 0.15

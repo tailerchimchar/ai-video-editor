@@ -557,6 +557,14 @@ class CustomMontageBody(BaseModel):
             "hype shorts stay at the default. None uses the config."
         ),
     )
+    burn_title: bool | None = Field(
+        default=None,
+        description=(
+            "Whether to burn the title overlay. When MONTAGE_TITLE_OPTIONAL "
+            "is off (default), this is ignored and titles always appear. "
+            "When the flag is on, pass False to skip the title overlay."
+        ),
+    )
 
 
 async def _run_custom_job(job_id: str, body: CustomMontageBody) -> None:
@@ -577,6 +585,7 @@ async def _run_custom_job(job_id: str, body: CustomMontageBody) -> None:
             beat_flash_source=body.beat_flash_source,
             use_clip_analyzer=body.use_clip_analyzer,
             max_seconds=body.max_seconds,
+            burn_title=body.burn_title,
         )
         if not result.get("ok"):
             await finish_job(

@@ -261,6 +261,7 @@ async def caption(req: CaptionRequest):
         ]
 
     params = req.model_dump() | {"segment_count": len(segments)}
+    cap_scale = settings.caption_fontsize_scale_enabled
 
     def work():
         return apply_caption(
@@ -271,6 +272,7 @@ async def caption(req: CaptionRequest):
             segments=segments,
             aspect=req.aspect,
             game=asset.get("game"),
+            scale_enabled=cap_scale,
         )
 
     _track(_run_edit_job(job_id, edit_id, asset, "caption", params, out_path, work))

@@ -640,6 +640,8 @@ def _build_filter_complex(
     layout: str = "cropped_hud",
     beat_flash_filter: str | None = None,
     game: str | None = None,
+    burn_title: bool = True,
+    title_optional: bool = False,
 ) -> str:
     """Assemble the full `-filter_complex` string.
 
@@ -658,6 +660,10 @@ def _build_filter_complex(
     `game` selects the per-game HUD variant for cropped_hud (Valorant
     → killfeed top-right + minimap top-left; anything else → LoL).
 
+    `title_optional` is passed in from entry point (settings.montage_title_optional).
+    When True AND burn_title=False, title is skipped. When False (default),
+    burn_title is ignored and title is always applied for backward compat.
+
     Result: `[vout][aout]`.
     """
     parts: list[str] = []
@@ -675,8 +681,16 @@ def _build_filter_complex(
         parts.append(beat_flash_filter)
         video_pre_title = "vflashed"
 
-    # Title overlay on the (possibly flashed) concatenated video
-    parts.append(f"[{video_pre_title}]{_title_drawtext(title)}[vout]")
+    # Title overlay on the (possibly flashed) concatenated video.
+    # When title_optional is True AND burn_title=False, skip the
+    # title drawtext entirely. When title_optional is False (default),
+    # burn_title is ignored and the title is always applied for backward compat.
+    should_burn_title = burn_title or not title_optional
+    if should_burn_title:
+        parts.append(f"[{video_pre_title}]{_title_drawtext(title)}[vout]")
+    else:
+        # Pass video through without title overlay
+        parts.append(f"[{video_pre_title}]null[vout]")
 
     # Concat source audio
     concat_a_ins = "".join(f"[{i}:a]" for i in range(n_video_inputs))
@@ -853,6 +867,8 @@ def render_short(
     game: str | None = None,
     max_seconds: float | None = None,
     snap_to_beats: bool = False,
+    burn_title: bool = True,
+    title_optional: bool = False,
 ) -> tuple[bool, str | None]:
     """Render one short from its plan. Returns (ok, error_message_or_none).
 
@@ -872,6 +888,12 @@ def render_short(
     `snap_to_beats` (montage with music only) moves each anchored clip's
     start so its payoff lands on a beat; off by default, which leaves the
     render exactly as before.
+
+    `burn_title` (default True) controls whether the title overlay is
+    drawn. `title_optional` is resolved from settings at the entry point.
+    When title_optional is True AND burn_title is False, the title is
+    skipped. When title_optional is False (default), burn_title is ignored
+    and titles are always drawn for backward compatibility.
     """
     if not plan.clips:
         return False, "empty plan"
@@ -926,6 +948,8 @@ def render_short(
         layout=layout or settings.shorts_layout,
         beat_flash_filter=beat_flash_filter,
         game=game,
+        burn_title=burn_title,
+        title_optional=title_optional,
     )
 
     cmd = [
@@ -1307,6 +1331,8 @@ def _render_and_watch_refine(
     beat_flash: bool | None = None,
     beat_flash_source: str | None = None,
     max_seconds: float | None = None,
+    burn_title: bool = True,
+    title_optional: bool = False,
 ) -> RenderResult:
     """Alt whole-comp refine loop -- watch the whole rendered montage
     with `watch_montage`, drop clips whose panels flag as negative
@@ -1349,6 +1375,8 @@ def _render_and_watch_refine(
             beat_flash_source=beat_flash_source,
             game=game_hint,
             max_seconds=max_seconds,
+            burn_title=burn_title,
+            title_optional=title_optional,
         )
         return ok, err, out_path
 
@@ -1431,6 +1459,8 @@ def _render_and_refine(
     beat_flash: bool | None = None,
     beat_flash_source: str | None = None,
     max_seconds: float | None = None,
+    burn_title: bool = True,
+    title_optional: bool = False,
 ) -> RenderResult:
     """Render → VLM whole-comp review → refine loop.
 
@@ -1464,6 +1494,8 @@ def _render_and_refine(
             beat_flash_source=beat_flash_source,
             game=game_hint,
             max_seconds=max_seconds,
+            burn_title=burn_title,
+            title_optional=title_optional,
         )
         if not ok:
             return RenderResult(
@@ -3088,6 +3120,7 @@ def build_custom_montage(
     use_clip_analyzer: bool | None = None,
     run_vlm_check: bool = True,
     max_seconds: float | None = None,
+    burn_title: bool | None = None,
 ) -> dict:
     """Compile ONE montage from an EXPLICIT list of clip paths — no
     scanning, no ranking, no bucketing. Clips can come from anywhere:
@@ -3196,6 +3229,8 @@ def build_custom_montage(
     # switches to the panel-packed watch_montage critic that sees the
     # entire rendered video and drops flagged clips before re-render.
     # Currently opt-in and only wired here on the custom-compile path.
+    resolved_burn_title = burn_title if burn_title is not None else True
+    resolved_title_optional = settings.montage_title_optional
     if settings.shorts_watch_refine_enabled and run_vlm_check:
         result = _render_and_watch_refine(
             plan,
@@ -3209,6 +3244,8 @@ def build_custom_montage(
             beat_flash=beat_flash,
             beat_flash_source=beat_flash_source,
             max_seconds=max_seconds,
+            burn_title=resolved_burn_title,
+            title_optional=resolved_title_optional,
         )
     else:
         result = _render_and_refine(
@@ -3223,6 +3260,8 @@ def build_custom_montage(
             beat_flash=beat_flash,
             beat_flash_source=beat_flash_source,
             max_seconds=max_seconds,
+            burn_title=resolved_burn_title,
+            title_optional=resolved_title_optional,
         )
 
     _write_custom_index_md(
