@@ -25,6 +25,9 @@ def hints_dir(tmp_path, monkeypatch) -> Path:
     )
     (scratch / "_default.md").write_text("default hints", encoding="utf-8")
     monkeypatch.setattr(hint_files, "HINTS_DIR", scratch)
+    from ai_video_editor.config import settings
+
+    monkeypatch.setattr(settings, "game_hints_dir", scratch)
     return scratch
 
 
@@ -167,3 +170,31 @@ def test_http_recent_corrections_rejects_bad_limit(hints_dir, client) -> None:
         params={"game": "valorant", "limit": 999},
     )
     assert resp.status_code == 400
+
+
+def test_corrections_written_to_workspace_dir_and_read_back(
+    hints_dir, tmp_path, monkeypatch
+) -> None:
+    from ai_video_editor.config import settings
+
+    ws = tmp_path / "elsewhere"
+    monkeypatch.setattr(settings, "game_hints_dir", ws)
+    corrections.append_correction("valorant", feedback="f", rule="r")
+    assert (ws / "valorant_examples.jsonl").is_file()
+    assert not (hints_dir / "valorant_examples.jsonl").exists()
+    assert corrections.load_recent_corrections("valorant")[0].rule == "r"
+
+
+def test_package_seed_is_read_only_fallback(hints_dir, tmp_path, monkeypatch) -> None:
+    from ai_video_editor.config import settings
+
+    ws = tmp_path / "elsewhere"
+    monkeypatch.setattr(settings, "game_hints_dir", ws)
+    seed = hints_dir / "valorant_examples.jsonl"
+    seed.write_text(
+        '{"added_at": "2026-01-01", "feedback": "f", "rule": "SEED"}\n', encoding="utf-8"
+    )
+    assert corrections.load_recent_corrections("valorant")[0].rule == "SEED"
+    corrections.append_correction("valorant", feedback="f2", rule="NEW")
+    assert [c.rule for c in corrections.load_recent_corrections("valorant")] == ["NEW", "SEED"]
+    assert seed.read_text(encoding="utf-8").count("\n") == 1  # seed untouched

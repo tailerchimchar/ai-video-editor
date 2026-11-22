@@ -49,6 +49,17 @@ def _no_live_notify(monkeypatch):
     sinks.reset_sinks()
 
 
+@pytest.fixture(autouse=True)
+def _no_live_workspace_writes(tmp_path_factory, monkeypatch):
+    """The Jev audit log and the corrections file never touch the real
+    workspace, whatever `WORKSPACE_DIR` holds."""
+    from ai_video_editor.config import settings
+
+    root = tmp_path_factory.mktemp("isolated")
+    monkeypatch.setattr(settings, "decisions_log_dir", root / "decisions")
+    monkeypatch.setattr(settings, "game_hints_dir", root / "game_hints")
+
+
 # ----- shared Grok Bot fakes -----
 
 

@@ -5,7 +5,7 @@ Two questions this module answers:
 
 1. When the user says "this specific thing is wrong" (in chat, via the
    `mentor_record_correction` tool), where does that guidance land so
-   the NEXT compile knows about it? Answer: `game_hints/<game>_examples.jsonl`
+   the NEXT compile knows about it? Answer: `<workspace>/game_hints/<game>_examples.jsonl`
    — one JSON per line, structured, appendable, git-diffable.
 
 2. How does the VLM see it? Answer: `load_game_hints` picks up the
@@ -59,10 +59,25 @@ class Correction:
     example: str | None = None
 
 
+def _examples_name(game: str) -> str:
+    return f"{game.lower().strip()}_examples.jsonl"
+
+
+def corrections_dir() -> Path:
+    """Where corrections are written (and read first): `GAME_HINTS_DIR`,
+    else `<workspace>/game_hints`. Not created until a write."""
+    return settings.game_hints_dir or settings.workspace_dir / "game_hints"
+
+
 def _examples_path(game: str) -> Path:
-    """`game_hints/<game_lower>_examples.jsonl`. Never raises — the file
-    doesn't have to exist. Empty / missing → no examples injected."""
-    return hint_files.HINTS_DIR / f"{game.lower().strip()}_examples.jsonl"
+    """Path of the game's examples file. The workspace file wins; the
+    package `game_hints/` file is a read-only seed used only while the
+    workspace file does not exist. Never raises."""
+    live = corrections_dir() / _examples_name(game)
+    if live.is_file():
+        return live
+    seed = hint_files.HINTS_DIR / _examples_name(game)
+    return seed if seed.is_file() else live
 
 
 def load_recent_corrections(game: str, limit: int = 10) -> list[Correction]:
@@ -116,8 +131,12 @@ def append_correction(
         verdict=verdict,
         example=example.strip() if example else None,
     )
-    path = _examples_path(game)
+    path = corrections_dir() / _examples_name(game)
     path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():  # first write: carry the package seed over
+        seed = hint_files.HINTS_DIR / _examples_name(game)
+        if seed.is_file():
+            path.write_text(seed.read_text(encoding="utf-8"), encoding="utf-8")
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(asdict(correction), ensure_ascii=False) + "\n")
     return correction
