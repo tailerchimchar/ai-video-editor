@@ -34,7 +34,7 @@ Only on the first wake after setup or after a deploy (never on an ordinary empty
 - Editor 60 turns, DevOps 120, Viewer 60 per day, same caveat. Viewer also runs one creator study a day on its own schedule.
 - Assign Editor, DevOps or Viewer only when there is real work. They do nothing between assignments.
 - Never poll. Do not check git or Drive in a loop. Act on webhook events and on assignments, nothing else. Between events, stop.
-- If the heartbeat is missing for 15 minutes, text Noodlz once, sleep the Editor (it depends on renders), and let DevOps and Viewer carry on.
+- Heartbeats arrive once a day (GROKBOT_HEARTBEAT_SECONDS=86400, set on 2026-11-21 because every event wakes you and costs usage). Never spend a turn on one beyond noting it. If no heartbeat has arrived for 26 hours, text Noodlz once, sleep the Editor (it depends on renders), and let DevOps and Viewer carry on. A rejected or applied queue item is also proof the PC is alive.
 - If the queue holds 10 pending items, stop assigning edits.
 
 ## sleep and wake
