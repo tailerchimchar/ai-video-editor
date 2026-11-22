@@ -162,6 +162,8 @@ def compute_candidates(
             )
         )
 
+    rows = apply_cv_advisory(rows)
+
     # Promote event_type on audio-derived candidates when a visible
     # kill/death/assist happened nearby. Without this, audio_peak clips
     # get shipped as event_type='audio_peak' even when they anticipate
@@ -188,6 +190,39 @@ def compute_candidates(
         "prefilter_dropped": len(dropped),
         "prefilter_backend": select_backend(),
     }
+
+
+_CV_DEMOTION = 0.5
+
+
+def _riot_combat(row: dict) -> bool:
+    event = row.get("event_type")
+    return event in ("death", "assist") or kills_for_event(event) > 0
+
+
+def apply_cv_advisory(rows: list[dict]) -> list[dict]:
+    """Riot is the authority on LoL combat: when the match is a high-
+    confidence one, a `cv_kda` candidate whose window holds no Riot
+    kill/assist/death is probably an OCR misread, so halve its confidence
+    and flag `metadata.riot_disagrees`. A no-op without a high-confidence
+    Riot match. Mutates and returns `rows`."""
+    riot = [r for r in rows if r.get("source") == "riot_api"]
+    if not any((r.get("metadata") or {}).get("match_confidence") == "high" for r in riot):
+        return rows
+    times = [
+        float((r.get("metadata") or {}).get("anchor_seconds", r["start_seconds"]))
+        for r in riot
+        if _riot_combat(r)
+    ]
+    for r in rows:
+        if r.get("source") != "cv_kda":
+            continue
+        if any(r["start_seconds"] <= t <= r["end_seconds"] for t in times):
+            continue
+        if r.get("confidence") is not None:
+            r["confidence"] = round(r["confidence"] * _CV_DEMOTION, 4)
+        r["metadata"] = {**(r.get("metadata") or {}), "riot_disagrees": True}
+    return rows
 
 
 _AUDIO_SOURCES = frozenset({"audio_peak", "transcript_keyword"})
