@@ -64,3 +64,38 @@ def test_main_prints_table(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "Keep precision:       0%" in out and "x1" in out
     assert "scored:   1" in out
+
+
+def test_file_name_corrections_match_bare_refs():
+    correction = {
+        "rule": "callout and assist are not events",
+        "tags": ["no-event"],
+        "clip_ref": "02_hype_callout_6m33s.mp4; 04_assist_9m41s.mp4",
+    }
+    records = [rec("keep?", True, "6m33s"), rec("keep?", True, "9m41s")]
+    card = score(records, [correction])
+    assert card.keep_precision == 0.0
+    assert {d["clip_ref"] for d in card.disagreements} == {"6m33s", "9m41s"}
+
+
+def test_round_joins_when_both_sides_have_one():
+    correction = {"rule": "r", "tags": ["no-event"], "clip_ref": "01_kill_6m33s.mp4", "round": "a1"}
+    same = rec("keep?", True, "6m33s")
+    same.round = "a1"
+    other = rec("keep?", True, "6m33s")
+    other.round = "b2"
+    unknown = rec("keep?", True, "6m33s")
+    card = score([same, other, unknown], [correction])
+    assert len(card.disagreements) == 2
+    assert card.keep_precision == 1 / 3
+
+
+def test_make_record_carries_round():
+    from types import SimpleNamespace
+
+    from ai_video_editor.decisions.audit import make_record
+
+    ans = SimpleNamespace(value=True, probability=0.8)
+    assert make_record("jev", "q", {"clip": {"ref": "6m33s", "round": "a1"}}, ans).round == "a1"
+    assert make_record("jev", "q", {"round": 7, "clip": {"ref": "x"}}, ans).round == "7"
+    assert make_record("jev", "q", {"clip": {"ref": "x"}}, ans).round is None

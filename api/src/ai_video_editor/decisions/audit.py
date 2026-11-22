@@ -34,6 +34,9 @@ class AnswerRecord:
     value: Any
     probability: float | None
     clip_ref: str | None
+    # Round / asset id when the state carries one, so the scorecard can join
+    # on (round, ref) instead of the bare NmNNs ref that repeats across games.
+    round: str | None = None
 
 
 def _strip(obj: Any) -> Any:
@@ -67,6 +70,14 @@ def clip_ref(state: dict) -> str | None:
     return None if ref is None else str(ref)
 
 
+def round_of(state: dict) -> str | None:
+    clip = state.get("clip")
+    value = clip.get("round") if isinstance(clip, dict) else None
+    if value is None:
+        value = state.get("round")
+    return None if value is None else str(value)
+
+
 def make_record(backend: str, question: str, state: dict, answer: Any) -> AnswerRecord:
     value = getattr(answer.value, "value", answer.value)  # enum member -> its value
     return AnswerRecord(
@@ -78,6 +89,7 @@ def make_record(backend: str, question: str, state: dict, answer: Any) -> Answer
         value=value,
         probability=answer.probability,
         clip_ref=clip_ref(state),
+        round=round_of(state),
     )
 
 
