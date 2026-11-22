@@ -49,6 +49,12 @@ class Format(StrEnum):
     commentary = "commentary"  # voice-only story material; never a short on its own
 
 
+ClipFormat = StrEnum("ClipFormat", {f.name: f.value for f in Format if f is not Format.commentary})
+"""Formats Jev may assign to a clip. Commentary is assigned by `commentary.py`
+from owner-only speech: a clip with an on-screen event is never commentary.
+Members compare equal to the matching `Format` (both are str)."""
+
+
 PLAN_FORMAT_BY_FORMAT: dict[Format, str] = {
     Format.hype: "hype_montage",
     Format.story: "story_short",

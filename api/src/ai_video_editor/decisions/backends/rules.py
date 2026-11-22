@@ -6,7 +6,7 @@ no opinion on questions it has no rule for (value None, probability 0),
 and includes every candidate in the pre-filter.
 """
 
-from ...taxonomy import Format, Topic, kills_for_event
+from ...taxonomy import ClipFormat, Format, Topic, kills_for_event
 from ..models import Answer, BoolQuestion, ChoiceQuestion, TypedQuestion
 
 _TOPIC_BY_EVENT = {
@@ -31,7 +31,7 @@ def _event(state: dict) -> str:
 
 
 def _choose(question: ChoiceQuestion, state: dict) -> Answer:
-    if question.options is Format:
+    if question.options in (Format, ClipFormat):
         # Imported here: bucketing depends on `decisions`, not the reverse.
         from ...bucketing import route_clip
 

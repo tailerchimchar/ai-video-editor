@@ -31,7 +31,7 @@ from pathlib import Path
 
 from .config import settings
 from .decisions import Answer, BoolQuestion, ChoiceQuestion, ask_many
-from .taxonomy import Format, PayoffType, kills_for_event
+from .taxonomy import ClipFormat, Format, PayoffType, kills_for_event
 
 _log = logging.getLogger(__name__)
 
@@ -229,18 +229,14 @@ def prefilter_summary(n_dropped: int, backend: str) -> str:
 
 
 _FORMAT_QUESTION = ChoiceQuestion(
-    prompt=(
-        "Which editorial format fits this clip: hype, story, voice_over, funny, "
-        "arc_montage or commentary?"
-    ),
-    options=Format,
+    prompt="Which editorial format fits this clip: hype, story, voice_over, funny or arc_montage?",
+    options=ClipFormat,
     descriptions={
         Format.hype: "A multi-kill, ace, clutch or mechanical outplay that carries itself",
         Format.story: "A beat in a game's narrative: a comeback, a throw, a turning point",
         Format.voice_over: "Interesting play that needs the player's commentary to land",
         Format.funny: "A joke, a fail, a voice-comms moment or anything that makes you laugh",
         Format.arc_montage: "Action that fits a music-driven montage rather than standing alone",
-        Format.commentary: "The owner talking, nothing on screen: story material, never a short",
     },
 )
 

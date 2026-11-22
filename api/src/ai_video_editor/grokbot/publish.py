@@ -40,7 +40,13 @@ from ..tools.secret_scan import scan_paths
 from .digest import Digest, _ref_from_file, annotate_with_jev, build_digest, digest_leaks
 from .drive import Uploader
 from .paths import inside
-from .voice import energy_label, transcript_slice, voice_paraphrase, window_sentiment
+from .voice import (
+    energy_label,
+    owner_rows,
+    transcript_slice,
+    voice_paraphrase,
+    window_sentiment,
+)
 
 if TYPE_CHECKING:
     from ..league.riot_timeline import RiotTimeline
@@ -159,6 +165,7 @@ def _digest_inputs(
     return {
         "timeline": (load_timeline or _load_timeline)(asset_id, game),
         "transcript_slices": partial(transcript_slice, db, asset_id),
+        "owner_rows": owner_rows(db, asset_id),
         "paraphrase": partial(voice_paraphrase, asset_id=asset_id) if paraphrase else None,
         # Loudness is not wired this round: arousal and laughter tokens only.
         "energy": lambda s, e: energy_label(
