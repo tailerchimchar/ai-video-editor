@@ -93,6 +93,7 @@ from ..intros import (
 )
 from ..jobs import finish_job
 from ..models import RankResponse
+from ..transcript_track import MIXED_TRACK_SQL
 
 router = APIRouter(tags=["edit"], prefix="/edit")
 
@@ -242,8 +243,9 @@ async def caption(req: CaptionRequest):
         db = await get_db()
         try:
             rows = await db.execute_fetchall(
-                "SELECT start_seconds, end_seconds, text FROM transcripts "
-                "WHERE video_id = ? AND end_seconds >= ? AND start_seconds <= ? "
+                f"SELECT start_seconds, end_seconds, text FROM transcripts "
+                f"WHERE video_id = ? AND {MIXED_TRACK_SQL} "
+                "AND end_seconds >= ? AND start_seconds <= ? "
                 "ORDER BY start_seconds",
                 (req.asset_id, req.start_seconds, req.end_seconds),
             )
@@ -343,8 +345,8 @@ async def _run_compile_job(job_id: str, comp_id: str, asset: dict, req: CompileR
         rankings = json.loads(rankings_path.read_text(encoding="utf-8"))
 
         seg_rows = await db.execute_fetchall(
-            "SELECT start_seconds, end_seconds, text, words FROM transcripts "
-            "WHERE video_id = ? ORDER BY start_seconds",
+            f"SELECT start_seconds, end_seconds, text, words FROM transcripts "
+            f"WHERE video_id = ? AND {MIXED_TRACK_SQL} ORDER BY start_seconds",
             (asset["id"],),
         )
         segments = []
@@ -828,8 +830,9 @@ async def insert_compilation_clip(compilation_id: str, body: InsertClipBody):
         asset = await _load_asset(db, body.asset_id)
         if body.text is None:
             rows = await db.execute_fetchall(
-                "SELECT start_seconds, end_seconds, text FROM transcripts "
-                "WHERE video_id = ? AND end_seconds >= ? AND start_seconds <= ? "
+                f"SELECT start_seconds, end_seconds, text FROM transcripts "
+                f"WHERE video_id = ? AND {MIXED_TRACK_SQL} "
+                "AND end_seconds >= ? AND start_seconds <= ? "
                 "ORDER BY start_seconds",
                 (body.asset_id, body.start_seconds, body.end_seconds),
             )

@@ -163,10 +163,11 @@ class LocalWhisperBackend:
 # ---------------------------------------------------------------------
 
 
-def _extract_audio(video_path: str, out_wav: Path) -> bool:
+def _extract_audio(video_path: str, out_wav: Path, stream_index: int | None = None) -> bool:
     """Extract mono 16k WAV from `video_path` via ffmpeg. Small
     (~24MB/hour) -- fits under Groq's file-size limit even for full
-    VODs. Returns True on success."""
+    VODs. `stream_index` picks the Nth audio stream (`-map 0:a:N`);
+    None keeps ffmpeg's default. Returns True on success."""
     cmd = [
         settings.ffmpeg_path,
         "-y",
@@ -176,6 +177,7 @@ def _extract_audio(video_path: str, out_wav: Path) -> bool:
         "-i",
         video_path,
         "-vn",  # drop video stream
+        *(["-map", f"0:a:{stream_index}"] if stream_index is not None else []),
         "-ac",
         "1",  # mono
         "-ar",
