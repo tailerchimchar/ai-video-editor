@@ -255,3 +255,16 @@ def test_voice_leak_checked_at_eight_chars(fixture_round):
     d.clips[0].voice = ""
     d.clips[0].copy = {"title": "wave perf"}  # other fields keep min_len=12
     assert dg.digest_leaks(d, path) == []
+
+
+def test_queue_format_digest_example_parses():
+    import re
+
+    doc = Path(__file__).parents[2] / "docs" / "grokbot" / "queue-format.md"
+    (block,) = re.findall(r"```json digest\n(.*?)```", doc.read_text(encoding="utf-8"), re.DOTALL)
+    d = dg.Digest.model_validate_json(block)
+    c = d.clips[0]
+    assert c.events and c.game_state is not None and c.voice
+    assert c.energy != "unknown" and c.match_confidence != "none"
+    raw = json.loads(block)["clips"][0]
+    assert set(raw) == set(dg.DigestClip.model_fields)  # the example shows every field

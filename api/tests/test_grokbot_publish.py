@@ -342,8 +342,7 @@ def asset_db(tmp_path, monkeypatch):
     path = tmp_path / "a.db"
     conn = sqlite3.connect(path)
     conn.execute(
-        "CREATE TABLE assets (id TEXT, filename TEXT, path TEXT, game TEXT, "
-        "duration_seconds REAL)"
+        "CREATE TABLE assets (id TEXT, filename TEXT, path TEXT, game TEXT, duration_seconds REAL)"
     )
     conn.execute("INSERT INTO assets VALUES ('a1', 'f.mp4', 'C:/x/f.mp4', 'lol', 1900.0)")
     conn.execute(

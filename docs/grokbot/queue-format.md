@@ -29,6 +29,56 @@ A string is rejected if it contains any of these:
 
 So: no links, no file paths, no shell-looking text. Refer to things by id, by clip reference, or in plain words. Put any link in a text message to Noodlz, never in a queue file.
 
+## Digest (read only, written by the PC)
+
+Not a queue item: the digest is what the PC publishes to Drive `digests/` after each panel round, and the only view of a round the Editor gets. All values below are invented. Per clip:
+
+- `events`: Riot timeline events inside the clip window, `t_in_clip` in seconds from the clip start; actors are champion plus side (`you (Jhin)`, `ally Thresh`, `enemy Diana`). Types: `kill`, `death`, `assist`, `ally_death`, `enemy_death`, `building`, `elite`, `game_end`. Empty when no timeline matched.
+- `game_state`: game clock at the clip start, your gold and CS near the clip start and end, your level at the end, and whether the game ended inside the clip. Null when there is no timeline or the match confidence is `low`.
+- `match_confidence`: `high`, `medium`, `low` or `none`. Treat `low` as a guess and never name an objective, a location or a game result from a `low` or `none` clip.
+- `voice`: one sentence about what the player says or reacts to, written by a model from the speech in the window (or the analyst's first story beat when there is no speech). Never a quote; paraphrase it again in your own words.
+- `energy`: `hype_rising`, `laughter`, `panic`, `calm` or `unknown`.
+
+```json digest
+{
+  "game": "league",
+  "round": "2026-11-22_2140_jhin_8-3-11",
+  "built_at": "2026-11-22T23:05:00Z",
+  "compilation_id": "comp-0042",
+  "compilation_version": "3",
+  "asset_id": "asset-0007",
+  "clips": [
+    {
+      "ref": "24m10s",
+      "event": "double kill",
+      "start_s": 1438.0,
+      "end_s": 1462.5,
+      "panel": {"gaming_quality": 4, "hook_verdict": "pass", "format": "hype_montage", "include_p": 0.82},
+      "critic": "ship_it",
+      "voice": "The player counts the shots out loud and cheers when the fourth one lands.",
+      "copy": {"title": "Four shots, two down", "caption": "Patience pays", "hashtags": ["leagueoflegends", "adc"], "thumbnail_t": 9.0},
+      "drive": "1AbCdEfGhIjKlMnOp",
+      "events": [
+        {"type": "kill", "t_in_clip": 8.5, "actors": ["you (Jhin)", "enemy Diana"]},
+        {"type": "kill", "t_in_clip": 12.0, "actors": ["you (Jhin)", "enemy Lee Sin"]},
+        {"type": "elite", "t_in_clip": 19.5, "actors": ["ally Thresh"]}
+      ],
+      "game_state": {
+        "game_time_s": 1402.0,
+        "gold_start": 9150,
+        "gold_end": 9930,
+        "cs_start": 182,
+        "cs_end": 190,
+        "level": 13,
+        "game_ended_in_clip": false
+      },
+      "energy": "laughter",
+      "match_confidence": "high"
+    }
+  ]
+}
+```
+
 ## edit_plan
 
 The Editor writes it. `compilation_id` and `base_version` come from the digest's `compilation_id` and `compilation_version` (or the `round.published` event), or from the `current` field of a `queue.rejected` event; if `base_version` is stale the runner rejects the plan and sends the current state back.

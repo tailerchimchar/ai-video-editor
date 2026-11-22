@@ -39,9 +39,7 @@ class FakeClient:
 def ledger(monkeypatch):
     seen = {"checked": [], "recorded": []}
     monkeypatch.setattr(voice, "check_budget", lambda a: seen["checked"].append(a))
-    monkeypatch.setattr(
-        voice, "record_spend", lambda *a, **k: seen["recorded"].append(a) or 0.0001
-    )
+    monkeypatch.setattr(voice, "record_spend", lambda *a, **k: seen["recorded"].append(a) or 0.0001)
     monkeypatch.setattr(anthropic_surface, "_calls", {})
     return seen
 
