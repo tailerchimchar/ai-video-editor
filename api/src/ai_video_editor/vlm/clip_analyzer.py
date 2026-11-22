@@ -125,6 +125,7 @@ def analyze_source_clip(
     n_frames: int | None = None,
     backend: VLMBackend | None = None,
     use_cache: bool | None = None,
+    asset_id: str | None = None,
 ) -> ClipAnalysis | None:
     """Analyze one source clip. Returns None (never raises) when the
     VLM is disabled / unreachable / returns garbage — callers should
@@ -141,7 +142,7 @@ def analyze_source_clip(
         return None
 
     n = n_frames if n_frames is not None else settings.vlm_clip_analyzer_frames
-    backend = backend or select_backend()
+    backend = backend or select_backend(asset_id=asset_id)
     model = _resolved_model(backend)
     version = effective_prompt_version(game)
     legacy_version = game_hints_prompt_version(game)

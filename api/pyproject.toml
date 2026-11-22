@@ -32,6 +32,7 @@ jev-scorecard = "ai_video_editor.decisions.scorecard:main"
 grokbot-runner = "ai_video_editor.grokbot.startup:runner"
 grokbot-publish-round = "ai_video_editor.grokbot.publish:main"
 grokbot-note = "ai_video_editor.grokbot.note:main"
+secret-scan = "ai_video_editor.tools.secret_scan:main"
 
 [dependency-groups]
 dev = [

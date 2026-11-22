@@ -27,6 +27,7 @@ from .. import notify
 from ..config import settings
 from ..notify import Event
 from ..taxonomy import Game
+from ..tools.secret_scan import scan_paths
 from .digest import Digest, _ref_from_file, annotate_with_jev, build_digest, digest_leaks
 from .drive import Uploader
 from .paths import inside
@@ -36,6 +37,10 @@ logger = logging.getLogger(__name__)
 
 class DigestLeakError(RuntimeError):
     """The digest contains transcript text; nothing was uploaded."""
+
+
+class SecretLeakError(RuntimeError):
+    """The digest contains a secret-like string; the digest was not uploaded."""
 
 
 def _default_ask_many() -> Callable | None:
@@ -132,6 +137,15 @@ def publish_round(
         if leaks:
             raise DigestLeakError(f"digest leaks {len(leaks)} transcript fragment(s)")
 
+    # Scan the serialised digest before anything is uploaded.
+    local = round_dir / "digest.json"
+    local.write_text(digest.model_dump_json(indent=2), encoding="utf-8")
+    hits = scan_paths([local])
+    if hits:
+        local.unlink(missing_ok=True)
+        found = ", ".join(f"{h.pattern}@{h.line}" for h in hits)
+        raise SecretLeakError(f"secret-like string in digest ({found})")
+
     files = _clip_files(round_dir, clips_dir)
     roots = (settings.workspace_dir, settings.outplayed_media_dir)
     clip_ids: dict[str, str | None] = {}
@@ -146,7 +160,6 @@ def publish_round(
         clip.drive = _upload(uploader, path, path.name, f"clips/{round_dir.name}") if path else None
         clip_ids[clip.ref] = clip.drive
 
-    local = round_dir / "digest.json"
     local.write_text(digest.model_dump_json(indent=2), encoding="utf-8")
     digest_id = _upload(
         uploader, local, f"{round_dir.name}-digest.json", f"digests/{_round_date(round_dir.name)}"
@@ -206,6 +219,9 @@ def main(argv: list[str] | None = None) -> None:
     except DigestLeakError as e:
         print(f"refused: {e}", file=sys.stderr)
         sys.exit(2)
+    except SecretLeakError as e:
+        print(f"refused: {e}", file=sys.stderr)
+        sys.exit(6)
     _flush_webhook()
     print(json.dumps(result, indent=2))
 

@@ -174,6 +174,19 @@ CREATE TABLE IF NOT EXISTS feedback_events (
 CREATE INDEX IF NOT EXISTS idx_feedback_compilation ON feedback_events(compilation_id);
 CREATE INDEX IF NOT EXISTS idx_feedback_event_type ON feedback_events(event_type);
 CREATE INDEX IF NOT EXISTS idx_feedback_action ON feedback_events(action);
+
+-- One row per paid model call (see anthropic_surface.record_spend).
+CREATE TABLE IF NOT EXISTS spend_ledger (
+    id INTEGER PRIMARY KEY,
+    asset_id TEXT,
+    feature TEXT,
+    model TEXT,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    cost_usd REAL,
+    ts TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_spend_asset ON spend_ledger(asset_id);
 """
 
 

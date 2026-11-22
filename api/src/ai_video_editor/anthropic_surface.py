@@ -13,6 +13,9 @@ same way.
 """
 
 import contextlib
+import sqlite3
+from datetime import datetime, timezone
+from pathlib import Path
 
 import anthropic
 
@@ -47,6 +50,87 @@ def reserve_call(feature: str, cap: int, env_name: str) -> None:
             f"{env_name} or restart to reset. No Anthropic call was made."
         )
     _calls[feature] = _calls.get(feature, 0) + 1
+
+
+_LEDGER_DDL = """CREATE TABLE IF NOT EXISTS spend_ledger (
+    id INTEGER PRIMARY KEY,
+    asset_id TEXT,
+    feature TEXT,
+    model TEXT,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    cost_usd REAL,
+    ts TEXT
+)"""
+
+
+def _ledger_conn(db_path: Path | None) -> sqlite3.Connection:
+    conn = sqlite3.connect(db_path or settings.database_path)
+    conn.execute(_LEDGER_DDL)
+    return conn
+
+
+def check_budget(asset_id: str | None, *, db_path: Path | None = None) -> None:
+    """Raise SpendCapError when this asset's paid calls already cost >= the cap.
+
+    None asset_id means no accounting, so no check. Check-then-act is not
+    atomic: concurrent calls can overshoot the cap by one request.
+    """
+    if asset_id is None:
+        return
+    conn = _ledger_conn(db_path)
+    try:
+        (total,) = conn.execute(
+            "SELECT COALESCE(SUM(cost_usd), 0) FROM spend_ledger WHERE asset_id = ?",
+            (asset_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    cap = settings.cost_cap_per_asset_usd
+    if total >= cap:
+        raise SpendCapError(
+            f"asset {asset_id} has spent ${total:.2f} (cap ${cap:.2f}) - "
+            "raise COST_CAP_PER_ASSET_USD. No Anthropic call was made."
+        )
+
+
+def record_spend(
+    asset_id: str | None,
+    feature: str,
+    model: str,
+    usage,
+    *,
+    db_path: Path | None = None,
+) -> float | None:
+    """Write one ledger row and return its cost (None if the model has no price).
+
+    Nothing is written when `asset_id` is None.
+    """
+    if asset_id is None:
+        return None
+    tokens_in = int(getattr(usage, "input_tokens", 0) or 0)
+    tokens_out = int(getattr(usage, "output_tokens", 0) or 0)
+    price = settings.model_prices_usd_per_mtok.get(model)
+    cost = None if price is None else (tokens_in * price[0] + tokens_out * price[1]) / 1_000_000
+    conn = _ledger_conn(db_path)
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO spend_ledger (asset_id, feature, model, input_tokens, "
+                "output_tokens, cost_usd, ts) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    asset_id,
+                    feature,
+                    model,
+                    tokens_in,
+                    tokens_out,
+                    cost,
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+    finally:
+        conn.close()
+    return cost
 
 
 def make_client() -> anthropic.Anthropic:

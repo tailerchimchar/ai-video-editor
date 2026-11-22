@@ -44,6 +44,12 @@ class Settings(BaseSettings):
     # for a scoring/extraction task and ~10x cheaper than Opus — chosen as
     # the default to conserve credits (override via RANKER_MODEL).
     ranker_model: str = "claude-haiku-4-5"
+    # Dollar accounting for paid model calls (USD per million tokens: in, out).
+    model_prices_usd_per_mtok: dict[str, tuple[float, float]] = {
+        "claude-sonnet-4-6": (3.0, 15.0),
+        "claude-haiku-4-5": (1.0, 5.0),
+    }
+    cost_cap_per_asset_usd: float = 2.0
     # Hard ceiling on rank() API calls per server process — refuses the
     # call past this cap so nothing can drain the Anthropic balance.
     anthropic_max_rank_calls: int = 25

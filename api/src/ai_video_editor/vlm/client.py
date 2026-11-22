@@ -17,9 +17,10 @@ class UnsupportedVLMBackendError(RuntimeError):
     """Raised when `VLM_BACKEND` doesn't match any known implementation."""
 
 
-def select_backend(name: str | None = None) -> VLMBackend:
+def select_backend(name: str | None = None, asset_id: str | None = None) -> VLMBackend:
     """Return an instance of the backend named by `name` (or the env-configured
-    default). Raises `UnsupportedVLMBackendError` for unknown names.
+    default). `asset_id` puts the anthropic backend's spend on that asset's
+    dollar ledger. Raises `UnsupportedVLMBackendError` for unknown names.
 
     Supported today:
       - `ollama` — local Qwen3-VL via localhost:11434
@@ -30,7 +31,7 @@ def select_backend(name: str | None = None) -> VLMBackend:
     if resolved == "ollama":
         return OllamaBackend()
     if resolved == "anthropic":
-        return AnthropicBackend()
+        return AnthropicBackend(asset_id=asset_id)
     raise UnsupportedVLMBackendError(
         f"Unknown VLM_BACKEND {resolved!r}. Supported: ollama, anthropic."
     )

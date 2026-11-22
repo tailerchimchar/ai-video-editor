@@ -14,17 +14,22 @@ The model never watches video; it ranks structured metadata.
 """
 
 import json
+import logging
 
 from pydantic import BaseModel
 
 from .anthropic_surface import (
+    check_budget,
     make_client,
     observe,
     record_generation,
+    record_spend,
     reserve_call,
 )
 from .config import settings
 from .models import RankedCandidate
+
+_log = logging.getLogger(__name__)
 
 # Frozen — no timestamps/IDs/per-request data, so it forms a stable
 # cacheable prefix (90%+ cache-hit on second call onward).
@@ -90,12 +95,15 @@ class _RankerOutput(BaseModel):
 
 
 @observe(name="rank-highlight-candidates", as_type="generation")
-def rank_candidates(game: str | None, candidates: list[dict]) -> list[RankedCandidate]:
+def rank_candidates(
+    game: str | None, candidates: list[dict], asset_id: str | None = None
+) -> list[RankedCandidate]:
     """Rank candidates for one video. `candidates` are highlight_candidates
     rows (id, source, start/end, event_type, confidence, metadata)."""
     if not candidates:
         return []
 
+    check_budget(asset_id)
     reserve_call("rank", settings.anthropic_max_rank_calls, "ANTHROPIC_MAX_RANK_CALLS")
 
     # Volatile payload — deterministic ordering so the cached system
@@ -123,6 +131,10 @@ def rank_candidates(game: str | None, candidates: list[dict]) -> list[RankedCand
         messages=[{"role": "user", "content": payload}],
         output_format=_RankerOutput,
     )
+    try:
+        record_spend(asset_id, "rank", settings.ranker_model, response.usage)
+    except Exception as exc:  # a paid answer must not be lost to accounting
+        _log.warning("spend ledger write failed: %s", exc)
     results = response.parsed_output.results
 
     record_generation(
