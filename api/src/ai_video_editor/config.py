@@ -50,6 +50,11 @@ class Settings(BaseSettings):
         "claude-haiku-4-5": (1.0, 5.0),
     }
     cost_cap_per_asset_usd: float = 2.0
+    # Digest voice paraphrase (grokbot/voice.py): one short Haiku call per
+    # digest clip with transcript speech; counted in the dollar ledger.
+    paraphrase_model: str = "claude-haiku-4-5"
+    # Per-process ceiling on paraphrase calls (a fresh process = a fresh budget).
+    paraphrase_max_calls: int = 200
     # Hard ceiling on rank() API calls per server process — refuses the
     # call past this cap so nothing can drain the Anthropic balance.
     anthropic_max_rank_calls: int = 25

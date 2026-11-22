@@ -10,6 +10,12 @@ round when the Grok team is on:
 Privacy gate: when the round has a `transcript.json`, a digest that leaks
 any transcript fragment is refused before anything is uploaded. A clip file
 outside WORKSPACE_DIR / OUTPLAYED_MEDIA_DIR is never uploaded.
+
+With `--asset-id` the digest also gets the Riot timeline (events, game
+state), a Haiku paraphrase of each clip's transcript slice (`--no-paraphrase`
+skips it) and an energy label. Energy uses the window's mean transcript
+arousal and its laughter tokens; loudness is not wired yet (None), so
+`calm` comes from low arousal only and `panic` has no rule this round.
 """
 
 from __future__ import annotations
@@ -18,10 +24,13 @@ import argparse
 import json
 import logging
 import re
+import sqlite3
 import sys
 from collections.abc import Callable
 from datetime import datetime, timezone
+from functools import partial
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from .. import notify
 from ..config import settings
@@ -31,6 +40,10 @@ from ..tools.secret_scan import scan_paths
 from .digest import Digest, _ref_from_file, annotate_with_jev, build_digest, digest_leaks
 from .drive import Uploader
 from .paths import inside
+from .voice import energy_label, transcript_slice, voice_paraphrase, window_sentiment
+
+if TYPE_CHECKING:
+    from ..league.riot_timeline import RiotTimeline
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +111,62 @@ def _clip_files(round_dir: Path, clips_dir: Path | None = None) -> dict[str, Pat
     return out
 
 
+def _asset_row(asset_id: str) -> dict | None:
+    if not Path(settings.database_path).is_file():
+        return None  # never let sqlite3.connect create an empty DB
+    conn = sqlite3.connect(settings.database_path)
+    try:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT * FROM assets WHERE id = ?", (asset_id,)).fetchone()
+    finally:
+        conn.close()
+    return dict(row) if row is not None else None
+
+
+def _load_timeline(asset_id: str, game: str) -> RiotTimeline | None:
+    """The asset's Riot timeline (cached, else fetched); None on any failure."""
+    if game != Game.league:
+        return None
+    from ..league import riot_timeline
+    from ..league.candidates import riot
+
+    def fetch():
+        try:
+            asset = _asset_row(asset_id)
+            if asset is None:
+                return None
+            return riot.fetch_timeline_inputs(asset, float(asset.get("duration_seconds") or 0))
+        except Exception as e:  # enrichment is optional
+            logger.warning("publish: Riot timeline fetch failed: %s", e)
+            return None
+
+    try:
+        return riot_timeline.load_or_fetch(asset_id, fetch=fetch)
+    except Exception as e:
+        logger.warning("publish: Riot timeline unavailable: %s", e)
+        return None
+
+
+def _digest_inputs(
+    asset_id: str,
+    game: str,
+    *,
+    paraphrase: bool = True,
+    load_timeline: Callable[[str, str], RiotTimeline | None] | None = None,
+) -> dict:
+    """The digest's optional inputs for one asset, bound to the local DB."""
+    db = settings.database_path
+    return {
+        "timeline": (load_timeline or _load_timeline)(asset_id, game),
+        "transcript_slices": partial(transcript_slice, db, asset_id),
+        "paraphrase": partial(voice_paraphrase, asset_id=asset_id) if paraphrase else None,
+        # Loudness is not wired this round: arousal and laughter tokens only.
+        "energy": lambda s, e: energy_label(
+            None, window_sentiment(db, asset_id, s, e), transcript_slice(db, asset_id, s, e)
+        ),
+    }
+
+
 def publish_round(
     round_dir: Path,
     *,
@@ -109,6 +178,10 @@ def publish_round(
     emit: Callable[[Event], None] = notify.emit,
     asset_id: str | None = None,
     clips_dir: Path | None = None,
+    timeline: RiotTimeline | None = None,
+    transcript_slices: Callable[[float, float], str] | None = None,
+    paraphrase: Callable[[str], str] | None = None,
+    energy: Callable[[float, float], str] | None = None,
 ) -> dict:
     """Build, gate, upload and announce one round. Returns the event payload.
 
@@ -116,9 +189,18 @@ def publish_round(
     the decisions backend is "rules"); False skips annotation; a callable
     is used as given. `api` (a runner `ApiClient`) supplies the
     compilation's current plan version when `compilation_id` is given.
+    `timeline`, `transcript_slices`, `paraphrase` and `energy` go to
+    `build_digest` as given (None = that enrichment is off).
     """
     round_dir = Path(round_dir)
-    digest: Digest = build_digest(round_dir, game=game)
+    digest: Digest = build_digest(
+        round_dir,
+        game=game,
+        timeline=timeline,
+        transcript_slices=transcript_slices,
+        paraphrase=paraphrase,
+        energy=energy,
+    )
     digest.compilation_id = compilation_id
     digest.asset_id = asset_id
     if compilation_id and api is not None:
@@ -190,6 +272,11 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--asset-id", default=None)
     parser.add_argument("--no-jev", action="store_true", help="skip the Jev annotation")
     parser.add_argument(
+        "--no-paraphrase",
+        action="store_true",
+        help="skip the Haiku voice paraphrase (needs --asset-id to matter)",
+    )
+    parser.add_argument(
         "--clips-dir",
         type=Path,
         default=None,
@@ -205,6 +292,11 @@ def main(argv: list[str] | None = None) -> None:
     from .runner import HttpApiClient
 
     api = HttpApiClient(settings.grokbot_api_base_url) if args.compilation_id else None
+    inputs = (
+        _digest_inputs(args.asset_id, args.game, paraphrase=not args.no_paraphrase)
+        if args.asset_id
+        else {}
+    )
     try:
         result = publish_round(
             args.round_dir,
@@ -215,6 +307,7 @@ def main(argv: list[str] | None = None) -> None:
             uploader=uploader_from_settings(),
             ask_many=False if args.no_jev else None,
             clips_dir=args.clips_dir,
+            **inputs,
         )
     except DigestLeakError as e:
         print(f"refused: {e}", file=sys.stderr)
