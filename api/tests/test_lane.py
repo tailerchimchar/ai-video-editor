@@ -118,13 +118,29 @@ def test_returns_none_without_lane_opponent():
 
 def test_index_champion_mismatch_raises():
     tl = _timeline()
-    tl["info"]["frames"][3]["participantFrames"]["6"] = _pf(1, 0, 1, 1)
-    del tl["info"]["frames"][3]["participantFrames"]["1"]
+    tl["info"]["participants"] = [
+        {"participantId": 1, "puuid": "owner"},
+        {"participantId": 6, "puuid": "someone-else"},
+    ]
     with pytest.raises(ValueError):
         parse_lane_frames(_match(), tl, owner_puuid="owner", offset_s=0)
-    m = _match(opp_champ="")
+    tl["info"]["participants"][1]["puuid"] = "opp"
+    assert parse_lane_frames(_match(), tl, owner_puuid="owner", offset_s=0) is not None
+
+
+def test_frame_pid_without_champion_raises():
+    tl = _timeline()
+    tl["info"]["frames"][3]["participantFrames"]["9"] = _pf(1, 0, 1, 1)
     with pytest.raises(ValueError):
-        parse_lane_frames(m, _timeline(), owner_puuid="owner", offset_s=0)
+        parse_lane_frames(_match(), tl, owner_puuid="owner", offset_s=0)
+    with pytest.raises(ValueError):
+        parse_lane_frames(_match(opp_champ=""), _timeline(), owner_puuid="owner", offset_s=0)
+
+
+def test_owner_without_team_position_returns_none():
+    m = _match()
+    m["info"]["participants"][0]["teamPosition"] = ""
+    assert parse_lane_frames(m, _timeline(), owner_puuid="owner", offset_s=0) is None
 
 
 def test_opponent_named_by_champion_only():

@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 
 from ..bucketing import _FORMAT_QUESTION, _INCLUDE_QUESTION
 from ..decisions import Answer, ask_many
-from ..league.lane import LaneSummary
+from ..league.lane_models import LaneSummary
 
 if TYPE_CHECKING:
     from ..league.riot_timeline import OwnerFrame, RiotTimeline

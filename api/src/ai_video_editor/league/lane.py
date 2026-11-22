@@ -8,34 +8,14 @@ files under `WORKSPACE/riot/<asset_id>/`.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from pathlib import Path
 
+from .lane_models import LaneMinute, LaneSummary
 from .riot_timeline import _owner_pid, cache_dir_for
 
+__all__ = ["LaneMinute", "LaneSummary", "lane_summary_path", "parse_lane_frames"]
+
 LANE_FILE = "lane.json"
-
-
-@dataclass
-class LaneMinute:
-    minute: int
-    owner_cs: int
-    owner_gold: int
-    owner_level: int
-    opp_cs: int
-    opp_gold: int
-    opp_level: int
-
-
-@dataclass
-class LaneSummary:
-    opponent_champion: str
-    minutes: list[LaneMinute] = field(default_factory=list)
-    cs_diff_at_10: int | None = None
-    gold_diff_at_10: int | None = None
-    first_blood_s: float | None = None
-    first_lane_kill_s: float | None = None
-    owner_first_blood: bool = False
 
 
 def lane_summary_path(asset_id: str) -> Path:
@@ -47,13 +27,26 @@ def _stats(pf: dict) -> tuple[int, int, int]:
     return cs, int(pf.get("totalGold", 0)), int(pf.get("level", 0))
 
 
+def _check_index(by_pid: dict[int, dict], timeline: dict) -> None:
+    """Cross-check timeline participantId -> puuid against the match. Raises
+    ValueError on any disagreement; without a timeline participants list the
+    per-frame check (every frame pid maps to a match champion) still applies."""
+    for tp in timeline.get("info", {}).get("participants") or []:
+        pid, puuid = tp.get("participantId"), tp.get("puuid")
+        mp = by_pid.get(int(pid)) if pid is not None else None
+        if mp is None or (puuid and mp.get("puuid") != puuid):
+            raise ValueError(f"timeline participant {pid} does not match the match's participants")
+
+
 def parse_lane_frames(
     match: dict, timeline: dict, *, owner_puuid: str, offset_s: float, through_minute: int = 14
 ) -> LaneSummary | None:
     """Owner vs the enemy with the same `teamPosition`, per minute through
     `through_minute`. None when there is no such opponent (e.g. ARAM).
-    Raises ValueError when a participant id does not map to a champion the
-    match lists."""
+    Raises ValueError when the timeline's participant ids disagree with the
+    match's, or a frame id maps to no champion. A minute with no frame is
+    skipped, but a frame within range that lacks the owner's or opponent's
+    participant frame raises."""
     participants = match.get("info", {}).get("participants", [])
     owner = _owner_pid(match, owner_puuid)
     by_pid = {
@@ -79,6 +72,7 @@ def parse_lane_frames(
     champion = opp.get("championName")
     if not champion or not me.get("championName"):
         raise ValueError("participant index does not map to a champion in the match")
+    _check_index(by_pid, timeline)
 
     minutes: list[LaneMinute] = []
     first_blood_s: float | None = None
