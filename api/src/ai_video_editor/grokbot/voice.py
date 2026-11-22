@@ -14,6 +14,7 @@ from pathlib import Path
 
 from ..anthropic_surface import check_budget, make_client, record_spend, reserve_call
 from ..config import settings
+from ..transcript_track import MIXED_TRACK_SQL
 
 logger = logging.getLogger(__name__)
 
@@ -80,13 +81,20 @@ def _rows(db_path: Path, sql: str, params: tuple) -> list[tuple]:
 _OVERLAP = "WHERE video_id = ? AND start_seconds < ? AND end_seconds > ?"
 
 
-def transcript_slice(db_path: Path, video_id: str, start_s: float, end_s: float) -> str:
-    """Transcript text overlapping [start_s, end_s], in time order; "" if none."""
-    rows = _rows(
-        db_path,
-        f"SELECT text FROM transcripts {_OVERLAP} ORDER BY start_seconds",
-        (video_id, end_s, start_s),
-    )
+def transcript_slice(
+    db_path: Path, video_id: str, start_s: float, end_s: float, speaker: str | None = None
+) -> str:
+    """Transcript text overlapping [start_s, end_s], in time order; "" if none.
+
+    Default (speaker=None) reads the mixed track only; `speaker="owner"` opts in
+    to the owner mic rows, which duplicate speech already in the mixed rows."""
+    where, params = _OVERLAP, (video_id, end_s, start_s)
+    if speaker is None:
+        where += f" AND {MIXED_TRACK_SQL}"
+    else:
+        where += " AND speaker = ?"
+        params += (speaker,)
+    rows = _rows(db_path, f"SELECT text FROM transcripts {where} ORDER BY start_seconds", params)
     return " ".join(t.strip() for (t,) in rows if t and t.strip())
 
 
@@ -94,7 +102,7 @@ def window_sentiment(db_path: Path, video_id: str, start_s: float, end_s: float)
     """Mean `sentiment_score` of transcript rows overlapping the window; None if none."""
     rows = _rows(
         db_path,
-        f"SELECT AVG(sentiment_score) FROM transcripts {_OVERLAP}",
+        f"SELECT AVG(sentiment_score) FROM transcripts {_OVERLAP} AND {MIXED_TRACK_SQL}",
         (video_id, end_s, start_s),
     )
     return rows[0][0] if rows else None

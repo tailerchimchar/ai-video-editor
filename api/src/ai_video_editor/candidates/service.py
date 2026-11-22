@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 
 from ..bucketing import prefilter_candidates
 from ..config import settings
+from ..cv.hp_bar import scan_hp_shadow
 from ..decisions import select_backend
 from ..league import is_league
 from ..league.orchestrator import gather_lol_candidates
@@ -21,6 +22,34 @@ from .cv_kda import detect_kda_events
 from .overwolf_events import detect_overwolf_events
 from .probe import get_duration_seconds
 from .transcript import detect_transcript_keywords
+
+
+def hp_rows_if_enabled(asset_id: str, video_path: str, deaths_s: list[float]) -> list[dict]:
+    """HP-bar trade/escape events as candidate rows; [] unless the flag is on.
+
+    Both flags off: no scan. `hp_reader_shadow` only: scan + JSON log, zero
+    rows. `hp_reader_enabled`: scan + rows.
+    """
+    if not (settings.hp_reader_enabled or settings.hp_reader_shadow):
+        return []
+    events = scan_hp_shadow(asset_id, video_path=video_path, deaths_s=deaths_s)
+    if not settings.hp_reader_enabled:
+        return []
+    now = datetime.now(timezone.utc).isoformat()
+    return [
+        {
+            "id": str(uuid.uuid4()),
+            "video_id": asset_id,
+            "source": "hp_bar",
+            "start_seconds": max(0.0, e["start_s"] - 3.0),
+            "end_seconds": e["end_s"] + 3.0,
+            "event_type": e["type"],
+            "confidence": 0.5,
+            "metadata": {"min_hp": e["min_hp"]},
+            "created_at": now,
+        }
+        for e in events
+    ]
 
 
 def compute_candidates(
@@ -163,6 +192,11 @@ def compute_candidates(
         )
 
     rows = apply_cv_advisory(rows)
+
+    # HP-bar reader: shadow mode, adds nothing unless hp_reader_enabled.
+    if is_league(asset.get("game")) and duration > settings.outplayed_clip_max_seconds:
+        deaths = [r["start_seconds"] for r in rows if r["event_type"] == "death"]
+        rows.extend(hp_rows_if_enabled(video_id, video_path, deaths))
 
     # Promote event_type on audio-derived candidates when a visible
     # kill/death/assist happened nearby. Without this, audio_peak clips

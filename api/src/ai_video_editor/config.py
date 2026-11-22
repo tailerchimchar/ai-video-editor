@@ -9,6 +9,11 @@ class Settings(BaseSettings):
     outplayed_media_dir: Path
     workspace_dir: Path
     ffmpeg_path: str = "ffmpeg"
+    # Owner-mic track (candidates/mic_track.py). Override = audio-stream
+    # position (0:a:N) to force; min_activity = least speech-frame fraction
+    # for the activity heuristic to trust a stream.
+    mic_stream_override: int | None = None
+    mic_min_activity: float = 0.05
     database_path: Path = Path("ai_video_editor.db")
 
     # ffmpeg encoder used for compile/per-clip re-encodes. libx264 is the
@@ -337,6 +342,14 @@ class Settings(BaseSettings):
     # Where the Jev audit log (jev-<date>.jsonl) is written. None ->
     # `<workspace_dir>/decisions`.
     decisions_log_dir: Path | None = None
+
+    # --- HP-bar reader (cv/hp_bar.py), shadow mode ------------------------
+    # Both False: nothing is scanned. hp_reader_shadow=True: the scan runs and
+    # logs trade/escape events to <workspace_dir>/hp_shadow/<asset_id>.json but
+    # creates NO candidates. hp_reader_enabled=True: scan + candidates.
+    hp_reader_shadow: bool = False
+    hp_reader_enabled: bool = False
+    hp_reader_step_s: float = 1.5
 
     # --- YouTube Shorts pipeline -----------------------------------------
     # `compile_shorts` reads the highlights folder, buckets clips by

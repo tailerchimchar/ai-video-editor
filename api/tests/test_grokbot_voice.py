@@ -110,7 +110,7 @@ def db(tmp_path):
     conn = sqlite3.connect(path)
     conn.execute(
         "CREATE TABLE transcripts (id TEXT, video_id TEXT, start_seconds REAL, "
-        "end_seconds REAL, text TEXT, sentiment_score REAL)"
+        "end_seconds REAL, text TEXT, sentiment_score REAL, speaker TEXT)"
     )
     rows = [
         ("1", "a1", 5.0, 9.0, "before window", 0.1),
@@ -119,7 +119,7 @@ def db(tmp_path):
         ("4", "a1", 20.0, 25.0, "touches end", None),
         ("5", "a2", 12.0, 15.0, "other asset", 0.9),
     ]
-    conn.executemany("INSERT INTO transcripts VALUES (?,?,?,?,?,?)", rows)
+    conn.executemany("INSERT INTO transcripts VALUES (?,?,?,?,?,?,NULL)", rows)
     conn.commit()
     conn.close()
     return path
