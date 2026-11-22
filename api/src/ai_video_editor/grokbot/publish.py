@@ -13,9 +13,9 @@ outside WORKSPACE_DIR / OUTPLAYED_MEDIA_DIR is never uploaded.
 
 With `--asset-id` the digest also gets the Riot timeline (events, game
 state), a Haiku paraphrase of each clip's transcript slice (`--no-paraphrase`
-skips it) and an energy label. Energy uses the mean transcript sentiment
-of the window only; loudness is not wired yet (None), so `hype_rising` and
-`panic` cannot fire this round.
+skips it) and an energy label. Energy uses the window's mean transcript
+arousal and its laughter tokens; loudness is not wired yet (None), so
+`calm` comes from low arousal only and `panic` has no rule this round.
 """
 
 from __future__ import annotations
@@ -112,6 +112,8 @@ def _clip_files(round_dir: Path, clips_dir: Path | None = None) -> dict[str, Pat
 
 
 def _asset_row(asset_id: str) -> dict | None:
+    if not Path(settings.database_path).is_file():
+        return None  # never let sqlite3.connect create an empty DB
     conn = sqlite3.connect(settings.database_path)
     try:
         conn.row_factory = sqlite3.Row
@@ -158,8 +160,10 @@ def _digest_inputs(
         "timeline": (load_timeline or _load_timeline)(asset_id, game),
         "transcript_slices": partial(transcript_slice, db, asset_id),
         "paraphrase": partial(voice_paraphrase, asset_id=asset_id) if paraphrase else None,
-        # Loudness is not wired this round: sentiment-only labels.
-        "energy": lambda s, e: energy_label(None, window_sentiment(db, asset_id, s, e)),
+        # Loudness is not wired this round: arousal and laughter tokens only.
+        "energy": lambda s, e: energy_label(
+            None, window_sentiment(db, asset_id, s, e), transcript_slice(db, asset_id, s, e)
+        ),
     }
 
 

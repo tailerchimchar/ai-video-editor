@@ -33,11 +33,11 @@ So: no links, no file paths, no shell-looking text. Refer to things by id, by cl
 
 Not a queue item: the digest is what the PC publishes to Drive `digests/` after each panel round, and the only view of a round the Editor gets. All values below are invented. Per clip:
 
-- `events`: Riot timeline events inside the clip window, `t_in_clip` in seconds from the clip start; actors are champion plus side (`you (Jhin)`, `ally Thresh`, `enemy Diana`). Types: `kill`, `death`, `assist`, `ally_death`, `enemy_death`, `building`, `elite`, `game_end`. Empty when no timeline matched.
-- `game_state`: game clock at the clip start, your gold and CS near the clip start and end, your level at the end, and whether the game ended inside the clip. Null when there is no timeline or the match confidence is `low`.
+- `events`: Riot timeline events inside the clip window, `t_in_clip` in seconds from the clip start; actors are champion plus side (`you (Jhin)`, `ally Thresh`, `enemy Diana`). Types: `kill`, `death`, `assist`, `ally_death`, `enemy_death`, `building`, `elite`, `game_end`. Empty when no timeline matched or confidence is low.
+- `game_state`: game clock at the clip start (negative when the clip starts before the game clock does), your gold and CS near the clip start and end, your level at the end, and whether the game ended inside the clip. Null when there is no timeline or the match confidence is `low`.
 - `match_confidence`: `high`, `medium`, `low` or `none`. Treat `low` as a guess and never name an objective, a location or a game result from a `low` or `none` clip.
 - `voice`: one sentence about what the player says or reacts to, written by a model from the speech in the window (or the analyst's first story beat when there is no speech). Never a quote; paraphrase it again in your own words.
-- `energy`: `hype_rising`, `laughter`, `panic`, `calm` or `unknown`.
+- `energy`: `hype_rising`, `laughter`, `calm` or `unknown` (`panic` is reserved and not produced yet).
 
 ```json digest
 {

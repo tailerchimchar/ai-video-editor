@@ -175,6 +175,13 @@ def test_low_confidence_has_no_game_state(fixture_round):
     assert c.match_confidence == "low"
 
 
+def test_low_confidence_has_no_events(fixture_round):
+    d = dg.build_digest(fixture_round, game="lol", timeline=_timeline("low"))
+    assert [c.events for c in d.clips] == [[], [], []]
+    medium = dg.build_digest(fixture_round, game="lol", timeline=_timeline("medium"))
+    assert medium.clips[0].events
+
+
 def test_sync_only_caps_confidence_at_medium(fixture_round):
     tl = _timeline("high", offset_source="sync_only")
     assert dg.build_digest(fixture_round, game="lol", timeline=tl).clips[0].match_confidence == (
@@ -247,14 +254,48 @@ def test_energy_callable(fixture_round):
     assert [c.energy for c in d.clips] == ["laughter", "unknown", "calm"]
 
 
-def test_voice_leak_checked_at_eight_chars(fixture_round):
+def test_whole_transcript_check_on_voice_uses_normal_min_len(fixture_round):
     path = fixture_round / "transcript.json"
     d = dg.build_digest(fixture_round, game="lol")
-    d.clips[0].voice = "he said wave perf then left"  # 9-char fragment "wave perf"
-    assert any("wave perf" in x for x in dg.digest_leaks(d, path))
-    d.clips[0].voice = ""
-    d.clips[0].copy = {"title": "wave perf"}  # other fields keep min_len=12
+    d.clips[0].voice = "he said wave perf then left"  # 9-char fragment: below 12
     assert dg.digest_leaks(d, path) == []
+    d.clips[0].voice = "he said kited the wave perf then left"  # 19-char fragment
+    assert any("kited the wave perf" in x for x in dg.digest_leaks(d, path))
+
+
+def test_common_phrase_paraphrase_is_kept_and_passes_leak_check(fixture_round):
+    path = fixture_round / "transcript.json"
+    path.write_text(
+        json.dumps(
+            [
+                {"start_seconds": 1, "end_seconds": 2, "text": "what the player did there"},
+                {"start_seconds": 3, "end_seconds": 4, "text": "what the heck is that"},
+            ]
+        )
+    )
+    said = "The player laughs at what the enemy does."
+    d = dg.build_digest(
+        fixture_round,
+        game="lol",
+        transcript_slices=lambda s, e: "go go go push now",
+        paraphrase=lambda t: said,
+    )
+    assert d.clips[0].voice == said
+    assert dg.digest_leaks(d, path) == []
+
+
+def test_paraphrase_quoting_eight_chars_of_its_slice_is_dropped_not_raised(fixture_round):
+    d = dg.build_digest(
+        fixture_round,
+        game="lol",
+        transcript_slices=lambda s, e: "flash forward now",
+        paraphrase=lambda t: "Calls a flash forw play.",  # 9 chars of its own slice
+    )
+    assert [c.voice for c in d.clips] == [
+        "Quillfeather opens with a bold dive",
+        "Mumblewick turns the fight around",
+        "",
+    ]
 
 
 def test_queue_format_digest_example_parses():

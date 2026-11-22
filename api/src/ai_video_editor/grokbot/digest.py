@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 Energy = Literal["hype_rising", "laughter", "panic", "calm", "unknown"]
 MatchConfidence = Literal["high", "medium", "low", "none"]
 _SYNC_ONLY = "sync_only"  # = riot_timeline.SYNC_ONLY; not imported so league stays optional
-_VOICE_LEAK_MIN_LEN = 8  # R8: the voice field is checked for short quotes too
+_VOICE_LEAK_MIN_LEN = 8  # R8: a paraphrase may not repeat 8+ chars of its own slice
 
 
 class DigestEvent(BaseModel):
@@ -232,7 +232,12 @@ def build_digest(
                 critic=clip.get("vlm_verdict"),
                 voice=_voice(g.get("story_beats"), start_s, end_s, transcript_slices, paraphrase),
                 copy=v.get("copy"),
-                events=_events(timeline, start_s, end_s) if timeline else [],
+                # R4: a low-confidence match may be another game; ship none of its events.
+                events=(
+                    _events(timeline, start_s, end_s)
+                    if timeline and timeline.confidence != "low"
+                    else []
+                ),
                 game_state=_game_state(timeline, start_s, end_s) if timeline else None,
                 energy=_energy(energy, start_s, end_s),
                 match_confidence=_match_confidence(timeline),
@@ -287,18 +292,15 @@ def digest_leaks(digest: Digest, transcript_path: Path, *, min_len: int = 12) ->
     """Transcript fragments (>= min_len chars) found in any digest string.
 
     Compares decoded, normalised (casefolded, whitespace-collapsed) text, so
-    quotes, backslashes and newlines cannot hide a match. Each clip's
-    `voice` is checked again with an 8-char window (R8): it is the one
-    field written from the transcript, so short quotes count there.
+    quotes, backslashes and newlines cannot hide a match. `voice` is held
+    to the same `min_len` as every other field: an 8-char window against
+    the whole round would refuse common phrases. The stricter R8 guard is
+    per clip, in `build_digest`, against the clip's own transcript slice.
     """
     lines = [
         line.get("text", "") for line in json.loads(transcript_path.read_text(encoding="utf-8"))
     ]
-    leaks = _leaks(lines, _strings(digest.model_dump()), min_len)
-    voices = [_norm(c.voice) for c in digest.clips if c.voice]
-    if voices:
-        leaks += [x for x in _leaks(lines, voices, _VOICE_LEAK_MIN_LEN) if x not in leaks]
-    return leaks
+    return _leaks(lines, _strings(digest.model_dump()), min_len)
 
 
 def annotate_with_jev(digest: Digest, ask_many: Callable[..., list[Answer]] = ask_many) -> Digest:

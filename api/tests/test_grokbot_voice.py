@@ -16,8 +16,8 @@ SYSTEM_RULE = (
 
 
 class FakeMessages:
-    def __init__(self, reply="The player cheers as the fight turns.", exc=None):
-        self.reply, self.exc, self.calls = reply, exc, []
+    def __init__(self, reply="The player cheers as the fight turns.", exc=None, stop="end_turn"):
+        self.reply, self.exc, self.stop, self.calls = reply, exc, stop, []
 
     def create(self, **kw):
         self.calls.append(kw)
@@ -27,6 +27,7 @@ class FakeMessages:
             content=[SimpleNamespace(type="text", text=self.reply)],
             usage=SimpleNamespace(input_tokens=40, output_tokens=12),
             model=kw["model"],
+            stop_reason=self.stop,
         )
 
 
@@ -140,21 +141,48 @@ def test_window_sentiment_mean_ignores_nulls(db):
 
 
 @pytest.mark.parametrize(
-    ("loudness", "sentiment", "label"),
+    ("reply", "out"),
     [
-        (-20.0, 0.3, "hype_rising"),
-        (-10.0, 0.9, "hype_rising"),
-        (-20.0, -0.31, "panic"),
-        (-20.0, 0.0, "unknown"),
-        (None, 0.6, "laughter"),
-        (-25.0, 0.7, "laughter"),
-        (-30.5, 0.1, "calm"),
-        (-30.5, None, "calm"),
-        (-30.0, 0.1, "unknown"),
-        (None, -0.9, "unknown"),
-        (None, None, "unknown"),
-        (-10.0, None, "unknown"),
+        ("The player cheers. Then the player starts to", "The player cheers."),
+        ("The player is shocked! And then", "The player is shocked!"),
+        ("The player starts describing the whole", ""),
     ],
 )
-def test_energy_label_table(loudness, sentiment, label):
-    assert voice.energy_label(loudness, sentiment) == label
+def test_truncated_paraphrase_keeps_last_full_sentence(ledger, reply, out):
+    client = FakeClient(reply=reply, stop="max_tokens")
+    assert voice.voice_paraphrase("words", client=client) == out
+
+
+# energy_label: arousal is VADER arousal in [0, 1]; loudness is optional.
+@pytest.mark.parametrize(
+    ("loudness", "arousal", "text", "label"),
+    [
+        (None, 0.6, "", "hype_rising"),
+        (-20.0, 0.9, "", "hype_rising"),
+        (-25.0, 0.9, "", "unknown"),  # aroused but quiet: not hype
+        (None, 0.59, "", "unknown"),
+        (None, 0.2, "", "calm"),
+        (-10.0, 0.0, "", "calm"),
+        (-31.0, None, "", "calm"),
+        (-31.0, 0.5, "", "calm"),
+        (-30.0, 0.5, "", "unknown"),
+        (None, None, "", "unknown"),
+        (None, 0.4, "HAHAHA no way", "laughter"),
+        (None, 0.9, "that was so bad lol", "laughter"),
+        (None, 0.1, "lmao what", "laughter"),
+        (None, None, "[laughter] okay", "laughter"),
+        (None, 0.4, "lollipop solo", "unknown"),  # no word match
+    ],
+)
+def test_energy_label_table(loudness, arousal, text, label):
+    assert voice.energy_label(loudness, arousal, text) == label
+
+
+def test_energy_never_panic():
+    labels = {
+        voice.energy_label(ld, a, t)
+        for ld in (None, -40.0, -25.0, -10.0)
+        for a in (None, 0.0, 0.3, 0.7, 1.0)
+        for t in ("", "help help")
+    }
+    assert "panic" not in labels

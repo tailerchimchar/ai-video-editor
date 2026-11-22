@@ -301,7 +301,7 @@ def test_paraphrase_leaking_transcript_is_refused(round_dir):
             round_dir,
             uploader=up,
             transcript_slices=lambda s, e: "unrelated words",
-            paraphrase=lambda t: "they cried wave perf at it",
+            paraphrase=lambda t: "they cried kited the wave perf at it",
         )
     assert up.uploads == []
 
@@ -350,6 +350,7 @@ def asset_db(tmp_path, monkeypatch):
         "text TEXT, sentiment_score REAL)"
     )
     conn.execute("INSERT INTO transcripts VALUES ('a1', 10.0, 12.0, 'haha', 0.7)")
+    conn.execute("INSERT INTO transcripts VALUES ('a1', 14.0, 15.0, 'go go go', 0.8)")
     conn.commit()
     conn.close()
     monkeypatch.setattr(settings, "database_path", path)
@@ -401,7 +402,58 @@ def test_load_timeline_skips_non_league(monkeypatch):
 
 def test_digest_inputs_energy_uses_window_sentiment(asset_db):
     inputs = pub._digest_inputs("a1", "league", paraphrase=False, load_timeline=lambda a, g: None)
-    assert inputs["energy"](9.0, 13.0) == "laughter"  # mean sentiment 0.7, loudness unknown
+    assert inputs["energy"](9.0, 13.0) == "laughter"  # "haha" in the slice
+    assert inputs["energy"](13.5, 16.0) == "hype_rising"  # arousal 0.8, loudness unknown
     assert inputs["energy"](50.0, 60.0) == "unknown"
     assert inputs["transcript_slices"](9.0, 13.0) == "haha"
     assert inputs["paraphrase"] is None
+
+
+def test_asset_row_never_creates_a_db(tmp_path, monkeypatch):
+    missing = tmp_path / "nope.db"
+    monkeypatch.setattr(settings, "database_path", missing)
+    assert pub._asset_row("a1") is None
+    assert not missing.exists()
+
+
+def _e2e(round_dir, monkeypatch, asset_db, *extra):
+    from ai_video_editor.grokbot import drive
+    from ai_video_editor.notify import sinks
+
+    paraphrased = []
+
+    def fake_paraphrase(text, *, asset_id=None, client=None):
+        paraphrased.append((text, asset_id))
+        return "The player hypes up the team."
+
+    monkeypatch.setattr(pub, "voice_paraphrase", fake_paraphrase)
+    monkeypatch.setattr(pub, "_load_timeline", lambda asset_id, game: _fake_timeline())
+    monkeypatch.setattr(drive, "uploader_from_settings", lambda: None)
+    monkeypatch.setattr(sinks, "SINKS", {})
+    import sqlite3
+
+    conn = sqlite3.connect(asset_db)
+    conn.execute("INSERT INTO transcripts VALUES ('a1', 871.0, 875.0, 'lets go push', 0.9)")
+    conn.commit()
+    conn.close()
+    pub.main([str(round_dir), "--game", "league", "--no-jev", "--asset-id", "a1", *extra])
+    saved = dg.Digest.model_validate_json((round_dir / "digest.json").read_text())
+    return saved, paraphrased
+
+
+def test_cli_end_to_end_builds_digest_v2(round_dir, monkeypatch, asset_db, capsys):
+    saved, paraphrased = _e2e(round_dir, monkeypatch, asset_db)
+    c = saved.clips[0]
+    assert paraphrased == [("lets go push", "a1")]  # only clip 1 has speech
+    assert c.voice == "The player hypes up the team."
+    assert c.energy == "hype_rising" and c.match_confidence == "medium"
+    assert [e.type for e in c.events] == ["kill"]
+    assert saved.asset_id == "a1"
+    assert saved.clips[1].voice == "Mumblewick turns the fight around"
+
+
+def test_cli_end_to_end_no_paraphrase(round_dir, monkeypatch, asset_db, capsys):
+    saved, paraphrased = _e2e(round_dir, monkeypatch, asset_db, "--no-paraphrase")
+    assert paraphrased == []
+    assert saved.clips[0].voice == "Quillfeather opens with a bold dive"
+    assert saved.clips[0].energy == "hype_rising"

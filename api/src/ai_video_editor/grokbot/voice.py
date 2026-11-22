@@ -8,6 +8,7 @@ result (R8).
 from __future__ import annotations
 
 import logging
+import re
 import sqlite3
 from pathlib import Path
 
@@ -21,6 +22,14 @@ PARAPHRASE_SYSTEM = (
 )
 _MAX_TOKENS = 60
 _QUOTE_CHARS = "\"'\u201c\u201d\u2018\u2019"
+_SENTENCE_END = re.compile(r"[.!?](?=\s|$)")
+_LAUGH = re.compile(r"\b(?:a?ha(?:ha)+h?|lol+|lmao+)\b|\[laugh", re.IGNORECASE)
+
+
+def _whole_sentences(text: str) -> str:
+    """`text` cut after its last full sentence; "" when there is none."""
+    ends = [m.end() for m in _SENTENCE_END.finditer(text)]
+    return text[: ends[-1]].strip() if ends else ""
 
 
 def voice_paraphrase(text: str, *, asset_id: str | None = None, client=None) -> str:
@@ -48,7 +57,10 @@ def voice_paraphrase(text: str, *, asset_id: str | None = None, client=None) -> 
         reply = next(b.text for b in response.content if getattr(b, "type", None) == "text")
     except Exception:
         return ""
-    return reply.strip().strip(_QUOTE_CHARS).strip()
+    reply = reply.strip().strip(_QUOTE_CHARS).strip()
+    if getattr(response, "stop_reason", None) == "max_tokens":
+        reply = _whole_sentences(reply)  # never ship half a sentence
+    return reply
 
 
 def _rows(db_path: Path, sql: str, params: tuple) -> list[tuple]:
@@ -88,15 +100,20 @@ def window_sentiment(db_path: Path, video_id: str, start_s: float, end_s: float)
     return rows[0][0] if rows else None
 
 
-def energy_label(loudness_db: float | None, sentiment: float | None) -> str:
-    """hype_rising / panic / laughter / calm / unknown from loudness and sentiment."""
-    loud = loudness_db is not None and loudness_db >= -20
-    if loud and sentiment is not None and sentiment >= 0.3:
-        return "hype_rising"
-    if loud and sentiment is not None and sentiment < -0.3:
-        return "panic"
-    if sentiment is not None and sentiment >= 0.6:
+def energy_label(loudness_db: float | None, arousal: float | None, text: str = "") -> str:
+    """laughter / hype_rising / calm / unknown for one clip window.
+
+    `arousal` is the window's mean VADER arousal in [0, 1] (the
+    `transcripts.sentiment_score` column); `loudness_db` is optional and
+    only tightens hype or adds calm when given; `text` is the window's
+    transcript slice, scanned for laughter tokens. Laughter is checked
+    first because it is the most specific evidence. `panic` stays in the
+    digest's vocabulary but has no rule yet (it needs signed valence).
+    """
+    if text and _LAUGH.search(text):
         return "laughter"
-    if loudness_db is not None and loudness_db < -30:
+    if arousal is not None and arousal >= 0.6 and (loudness_db is None or loudness_db >= -20):
+        return "hype_rising"
+    if (arousal is not None and arousal <= 0.2) or (loudness_db is not None and loudness_db < -30):
         return "calm"
     return "unknown"
