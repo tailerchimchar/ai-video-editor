@@ -229,7 +229,10 @@ def prefilter_summary(n_dropped: int, backend: str) -> str:
 
 
 _FORMAT_QUESTION = ChoiceQuestion(
-    prompt="Which editorial format fits this clip: hype, story, voice_over, funny or arc_montage?",
+    prompt=(
+        "Which editorial format fits this clip: hype, story, voice_over, funny, "
+        "arc_montage or commentary?"
+    ),
     options=Format,
     descriptions={
         Format.hype: "A multi-kill, ace, clutch or mechanical outplay that carries itself",
@@ -237,6 +240,7 @@ _FORMAT_QUESTION = ChoiceQuestion(
         Format.voice_over: "Interesting play that needs the player's commentary to land",
         Format.funny: "A joke, a fail, a voice-comms moment or anything that makes you laugh",
         Format.arc_montage: "Action that fits a music-driven montage rather than standing alone",
+        Format.commentary: "The owner talking, nothing on screen: story material, never a short",
     },
 )
 

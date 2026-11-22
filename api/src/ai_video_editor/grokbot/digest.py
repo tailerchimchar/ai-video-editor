@@ -24,8 +24,8 @@ from typing import TYPE_CHECKING, Any, Literal, get_args
 from pydantic import BaseModel, Field
 
 from ..bucketing import _FORMAT_QUESTION, _INCLUDE_QUESTION
-from ..decisions import Answer, ask_many
 from ..commentary import commentary_candidates
+from ..decisions import Answer, ask_many
 from ..league.lane_models import LaneSummary
 from ..refs import normalize_clip_ref
 
@@ -308,9 +308,7 @@ def build_digest(
         game=game,
         round=round_dir.name,
         clips=out,
-        commentary=_commentary(
-            owner_rows or [], beats, transcript_slices, paraphrase, energy
-        ),
+        commentary=_commentary(owner_rows or [], beats, transcript_slices, paraphrase, energy),
         built_at=datetime.now(timezone.utc).isoformat(),
         lane=lane,
     )

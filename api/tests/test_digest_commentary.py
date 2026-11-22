@@ -45,7 +45,9 @@ def test_digest_commentary_section_capped_at_5(tmp_path):
 
 def test_commentary_voice_is_paraphrase_or_energy_plus_beat(tmp_path):
     rd = _round(tmp_path)
-    plain = dg.build_digest(rd, game="lol", owner_rows=_rows(1, start=1400.0), energy=lambda a, b: "calm")
+    plain = dg.build_digest(
+        rd, game="lol", owner_rows=_rows(1, start=1400.0), energy=lambda a, b: "calm"
+    )
     item = plain.commentary[0]
     assert item.energy == "calm"
     assert item.attached_beat == "Neeko pick"

@@ -20,6 +20,7 @@ Pick the bucket FIRST, then compile — never the reverse.
 | **Story short** | ONE round with a narrative arc — a decision (eco, force, save), an execution (stack, flank, retake), a payoff (round won, sick round-winning kill). Let the game tell it. | Opening title card (2-3s), minimal or NO internal cuts, keep the round intact, optional outro card | 60-90s | When it happens |
 | **Voice-over** | 1-2K plays Noodlz wants to TALK OVER. Needs a running theme. Examples: "solo queue moments with my team", "how I got better at aim", "bad decisions I still make". NOT random subway-surfer talk. | Subtitles for the VO, subtle game slowdown when Noodlz makes a point, hook in first 3s | 30-90s | Steady — 1-2 per week |
 | **Funny short** | Laughter in transcript OR unusual callout ("OH MY GOD", "what") OR teammate reaction that's the moment. | Captions, emote overlays, slow-mo on the funny beat, big impact SFX. Can bundle up to 2 moments per short. | 20-40s | High — multiple per session |
+| **Commentary** | The owner talking with no kill or fight on screen: describing a plan, an odd reaction. Lower confidence than a clip; capped at 5 per game, ranked by voice arousal. | None on its own. Story material: it feeds the per-game story video. It never becomes a short. | n/a | Per game, max 5 |
 
 ## Hard rules (do not violate)
 
@@ -88,7 +89,8 @@ When Noodlz brings a new clip, session, or request, ask (silently):
 - Before applying an editing effect (captions, zooms, focus, beat flash).
 - Before naming an output file (name should reflect bucket:
   `hype_<theme>_<date>`, `story_<hook>_<date>`, `vo_<theme>_<date>`,
-  `funny_<hook>_<date>`).
+  `funny_<hook>_<date>`; `commentary_<hook>_<date>` is story material,
+  not a short).
 - When Noodlz asks "what kind of edit is this" or "should this be a short".
 
 ## How to update this file

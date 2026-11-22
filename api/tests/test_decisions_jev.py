@@ -70,6 +70,7 @@ def test_choice_maps_to_jev_choice_with_descriptions_defaulting_to_the_name():
             "voice_over": "voice_over",
             "funny": "funny",
             "arc_montage": "arc_montage",
+            "commentary": "commentary",
         },
     }
 

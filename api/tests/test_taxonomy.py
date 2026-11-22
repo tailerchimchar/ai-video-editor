@@ -25,7 +25,14 @@ FIXTURE_DIR = Path(__file__).parent / "fixtures" / "taxonomy"
 
 
 def test_contract_members() -> None:
-    assert {m.value for m in Format} == {"hype", "story", "voice_over", "funny", "arc_montage"}
+    assert {m.value for m in Format} == {
+        "hype",
+        "story",
+        "voice_over",
+        "funny",
+        "arc_montage",
+        "commentary",
+    }
     assert {m.value for m in Topic} == {
         "first_blood", "outplay", "multikill", "teamfight",
         "objective_steal", "kite_escape", "tower_dive", "teamfight_turn",
