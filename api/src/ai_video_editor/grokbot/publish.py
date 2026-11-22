@@ -191,6 +191,7 @@ def publish_round(
     transcript_slices: Callable[[float, float], str] | None = None,
     paraphrase: Callable[[str], str] | None = None,
     energy: Callable[[float, float], str] | None = None,
+    owner_rows: list[dict] | None = None,
 ) -> dict:
     """Build, gate, upload and announce one round. Returns the event payload.
 
@@ -198,7 +199,7 @@ def publish_round(
     the decisions backend is "rules"); False skips annotation; a callable
     is used as given. `api` (a runner `ApiClient`) supplies the
     compilation's current plan version when `compilation_id` is given.
-    `timeline`, `transcript_slices`, `paraphrase` and `energy` go to
+    `timeline`, `transcript_slices`, `paraphrase`, `energy` and `owner_rows` go to
     `build_digest` as given (None = that enrichment is off).
     """
     round_dir = Path(round_dir)
@@ -209,6 +210,7 @@ def publish_round(
         transcript_slices=transcript_slices,
         paraphrase=paraphrase,
         energy=energy,
+        owner_rows=owner_rows,
     )
     digest.compilation_id = compilation_id
     digest.asset_id = asset_id
