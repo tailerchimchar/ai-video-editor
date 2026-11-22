@@ -640,6 +640,7 @@ def _build_filter_complex(
     layout: str = "cropped_hud",
     beat_flash_filter: str | None = None,
     game: str | None = None,
+    burn_title: bool = True,
 ) -> str:
     """Assemble the full `-filter_complex` string.
 
@@ -675,8 +676,16 @@ def _build_filter_complex(
         parts.append(beat_flash_filter)
         video_pre_title = "vflashed"
 
-    # Title overlay on the (possibly flashed) concatenated video
-    parts.append(f"[{video_pre_title}]{_title_drawtext(title)}[vout]")
+    # Title overlay on the (possibly flashed) concatenated video.
+    # When MONTAGE_TITLE_OPTIONAL is on AND burn_title=False, skip the
+    # title drawtext entirely. When the flag is off (default), burn_title
+    # is ignored and the title is always applied for backward compat.
+    should_burn_title = burn_title or not settings.montage_title_optional
+    if should_burn_title:
+        parts.append(f"[{video_pre_title}]{_title_drawtext(title)}[vout]")
+    else:
+        # Pass video through without title overlay
+        parts.append(f"[{video_pre_title}]null[vout]")
 
     # Concat source audio
     concat_a_ins = "".join(f"[{i}:a]" for i in range(n_video_inputs))

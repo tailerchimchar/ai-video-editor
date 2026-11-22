@@ -488,11 +488,52 @@ def resolve_caption_style(style: dict | None) -> dict:
     return base
 
 
+def _scale_fontsize(
+    fontsize: int,
+    text: str,
+    output_height: int | None,
+    output_width: int | None,
+) -> int:
+    """Scale fontsize relative to 1080px reference and clamp to fit frame.
+
+    When CAPTION_FONTSIZE_SCALE_ENABLED is off, returns fontsize unchanged.
+    When on:
+      1. Scale by output_height / 1080 (reference height).
+      2. Clamp so estimated text width fits inside frame with 10% margin.
+
+    The width estimation uses a rough heuristic (~0.6 chars per fontsize
+    pixel for typical fonts) since we don't have access to actual font
+    metrics in pure Python.
+    """
+    if not settings.caption_fontsize_scale_enabled:
+        return fontsize
+
+    ref_height = 1080
+    height = output_height or ref_height
+    width = output_width or (height * 9 // 16)  # Assume 9:16 aspect
+
+    scale_factor = height / ref_height
+    scaled = round(fontsize * scale_factor)
+
+    char_width_ratio = 0.6
+    margin_ratio = 0.10
+    max_text_width = width * (1.0 - 2 * margin_ratio)
+    estimated_text_width = len(text) * scaled * char_width_ratio
+
+    if estimated_text_width > max_text_width and len(text) > 0:
+        max_fontsize = int(max_text_width / (len(text) * char_width_ratio))
+        scaled = min(scaled, max(12, max_fontsize))
+
+    return scaled
+
+
 def caption_filters(
     segments: list[dict],
     clip_start_offset: float,
     *,
     fontfile: str | None = None,
+    output_height: int | None = None,
+    output_width: int | None = None,
 ) -> str:
     """Build a `drawtext` chain — one filter per segment.
 
@@ -502,6 +543,11 @@ def caption_filters(
 
     Each segment's `style` field (optional) picks the preset and any
     per-segment overrides. Segments with no style use `default`.
+
+    When CAPTION_FONTSIZE_SCALE_ENABLED is on, `output_height` and
+    `output_width` are used to scale fontsize relative to a 1080px
+    reference and clamp to fit the frame. When off (default), fontsize
+    is used as-is for backward compatibility.
 
     This function REPLACES the old `caption_filters` + `caption_filters_tiktok`
     pair — both modes are now driven by the same code with different
@@ -516,6 +562,9 @@ def caption_filters(
         if not text:
             continue
         style = resolve_caption_style(s.get("style"))
+        raw_fontsize = int(style["fontsize"])
+        # Scale fontsize when flag is enabled; pass-through when disabled
+        fontsize = _scale_fontsize(raw_fontsize, text, output_height, output_width)
         # Per-segment font override -- pass `font_path` for a specific
         # font (e.g. `settings.caption_emoji_font_path` when the segment
         # is an emoji glyph). Falls back to the caption default.
@@ -528,7 +577,7 @@ def caption_filters(
             "drawtext="
             f"fontfile='{ff}'"  # single-quote so Windows 'C:/...' stays literal
             f":text='{text}'"
-            f":fontsize={int(style['fontsize'])}:fontcolor={style['color']}"
+            f":fontsize={fontsize}:fontcolor={style['color']}"
             f":borderw={int(style['border_width'])}:bordercolor={style['border_color']}"
             f":x=(w-text_w)/2:y={style['y_position']}"
             f":enable='between(t,{a:.2f},{b:.2f})'"
