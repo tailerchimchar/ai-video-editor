@@ -8,18 +8,51 @@ files under `WORKSPACE/riot/<asset_id>/`.
 
 from __future__ import annotations
 
+import json
+import logging
+from dataclasses import asdict
 from pathlib import Path
 
 from .lane_models import LaneMinute, LaneSummary
 from .riot_timeline import _owner_pid, cache_dir_for
 
-__all__ = ["LaneMinute", "LaneSummary", "lane_summary_path", "parse_lane_frames"]
+__all__ = [
+    "LaneMinute",
+    "LaneSummary",
+    "lane_summary_path",
+    "load_lane_summary",
+    "parse_lane_frames",
+    "write_lane_summary",
+]
+
+_log = logging.getLogger(__name__)
 
 LANE_FILE = "lane.json"
 
 
 def lane_summary_path(asset_id: str) -> Path:
     return cache_dir_for(asset_id) / LANE_FILE
+
+
+def write_lane_summary(path: Path, summary: LaneSummary) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(asdict(summary), indent=2), encoding="utf-8")
+
+
+def load_lane_summary(path: Path) -> LaneSummary | None:
+    """`lane.json` as a LaneSummary; None when missing, unreadable or malformed."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    try:
+        minutes = [LaneMinute(**m) for m in data.get("minutes") or []]
+        return LaneSummary(**{**data, "minutes": minutes})
+    except (TypeError, ValueError) as e:  # dataclass fields
+        _log.warning("malformed %s: %s", path, e)
+        return None
 
 
 def _stats(pf: dict) -> tuple[int, int, int]:

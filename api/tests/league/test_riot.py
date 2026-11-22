@@ -544,3 +544,38 @@ def test_failed_audio_decode_is_sync_only_not_audio(offset_cfg, monkeypatch, tmp
     )
     assert tl is not None and tl.offset_s == _SYNC and tl.offset_source == "sync_only"
     assert json.loads((cdir / "meta.json").read_text())["offset_source"] == "sync_only"
+
+
+# ----- I6b: lane.json is written after a successful correlation -----
+
+
+def test_detect_writes_lane_json_after_caching(riot_cfg, monkeypatch, tmp_path):
+    from ai_video_editor.league.lane import LaneSummary, lane_summary_path, load_lane_summary
+
+    seen = {}
+
+    def fake_parse(match, timeline, *, owner_puuid, offset_s):
+        seen.update(owner=owner_puuid, offset=offset_s)
+        return LaneSummary("Diana", cs_diff_at_10=7)
+
+    monkeypatch.setattr(riot_mod, "parse_lane_frames", fake_parse)
+    calls: list = []
+    monkeypatch.setattr(riot_mod, "_client_factory", lambda: _client(_riot_handler(calls)))
+    _, status = riot_mod.detect_riot_events(_ASSET, 1000.0)
+    assert status == "ok"
+    assert seen == {"owner": "ME", "offset": 0.0}
+    written = load_lane_summary(lane_summary_path("asset-jhin"))
+    assert written == LaneSummary("Diana", cs_diff_at_10=7)
+
+
+def test_lane_parse_failure_never_breaks_candidates(riot_cfg, monkeypatch, tmp_path):
+    from ai_video_editor.league.lane import lane_summary_path
+
+    def boom(*a, **k):
+        raise ValueError("participant index mismatch")
+
+    monkeypatch.setattr(riot_mod, "parse_lane_frames", boom)
+    monkeypatch.setattr(riot_mod, "_client_factory", lambda: _client(_riot_handler([])))
+    rows, status = riot_mod.detect_riot_events(_ASSET, 1000.0)
+    assert status == "ok" and rows
+    assert not lane_summary_path("asset-jhin").exists()

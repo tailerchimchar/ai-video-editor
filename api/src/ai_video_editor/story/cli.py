@@ -87,7 +87,10 @@ def _entry_beats(entry: dict, clips: dict[str, tuple[float, float]]) -> list[Bea
                     ref,
                     point,
                 )
-            if clip_start is not None and start < clip_start:  # clip-relative beat
+            # Clip-relative when below the clip start, unless shifting would land
+            # past the clip's end (then it was already in recording seconds).
+            past_end = clip is not None and start + clip_start > clip[1]
+            if clip_start is not None and start < clip_start and not past_end:
                 start, end = start + clip_start, end + clip_start
         elif clip:
             start, end = clip
@@ -109,7 +112,8 @@ def _entry_beats(entry: dict, clips: dict[str, tuple[float, float]]) -> list[Bea
 
 def load_beats(round_path: Path) -> list[Beat]:
     """Gaming-expert story beats in recording seconds. Beats with `t_start`
-    below their clip's start are clip-relative and shifted by it; beats
+    below their clip's start are clip-relative and shifted by it (unless the
+    shift would land past the clip's end: then they are absolute); beats
     without times take the clip window (or the ref's time as a point)."""
     raw = _read_json(round_path / "gaming-expert.json")
     entries = raw.get("clips") if isinstance(raw, dict) else raw
@@ -153,9 +157,12 @@ def load_lane(asset_id: str) -> LaneSummary | None:
 
 
 def load_mic_stream(asset_id: str) -> int | None:
-    """Audio-relative mic stream index (`0:a:<idx>`), None when unknown."""
+    """Audio-relative mic stream index (`0:a:<idx>`), None when unknown or
+    when the mic pass recorded an `error` (its pick was never transcribed)."""
     data = _read_json(Path(settings.workspace_dir) / "mic" / f"{asset_id}.json")
-    idx = data.get("stream_index") if isinstance(data, dict) else None
+    if not isinstance(data, dict) or data.get("error"):
+        return None
+    idx = data.get("stream_index")
     return int(idx) if isinstance(idx, int) else None
 
 
@@ -199,6 +206,7 @@ def main(argv: list[str] | None = None) -> int:
         load_beats(rnd),
         load_lane(args.asset),
         mic_stream=load_mic_stream(args.asset),
+        card_s=0.0 if args.no_cards else settings.story_card_seconds,
         asset_id=args.asset,
     )
     out_dir = Path(args.out) if args.out else Path(settings.workspace_dir) / "story" / rnd.name
@@ -207,7 +215,10 @@ def main(argv: list[str] | None = None) -> int:
     except StoryRenderError as e:
         print(f"story render failed: {e}", file=sys.stderr)
         return 1
-    print(f"{story} ({len(plan.chapters)} chapters, {plan.total_s:.0f}s, audio={plan.audio})")
+    budget = ", over_budget: lane + close alone exceed the max" if plan.over_budget else ""
+    print(
+        f"{story} ({len(plan.chapters)} chapters, {plan.total_s:.0f}s, audio={plan.audio}{budget})"
+    )
     return 0
 
 

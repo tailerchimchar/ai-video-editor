@@ -74,12 +74,17 @@ def _ledger_conn(db_path: Path | None) -> sqlite3.Connection:
 
 
 def check_budget(
-    asset_id: str | None, *, db_path: Path | None = None, cap_usd: float | None = None
+    asset_id: str | None,
+    *,
+    db_path: Path | None = None,
+    cap_usd: float | None = None,
+    cap_name: str | None = None,
 ) -> None:
     """Raise SpendCapError when this asset's paid calls already cost >= the cap.
 
     `cap_usd` overrides `settings.cost_cap_per_asset_usd` (e.g. the story
-    review budget, keyed `story:<asset_id>`, sits outside the asset cap).
+    review budget, keyed `story:<asset_id>`, sits outside the asset cap);
+    `cap_name` is the setting the error tells the user to raise.
 
     None asset_id means no accounting, so no check. Check-then-act is not
     atomic: concurrent calls can overshoot the cap by one request.
@@ -95,10 +100,11 @@ def check_budget(
     finally:
         conn.close()
     cap = settings.cost_cap_per_asset_usd if cap_usd is None else cap_usd
+    name = cap_name or ("COST_CAP_PER_ASSET_USD" if cap_usd is None else "the caller's cap")
     if total >= cap:
         raise SpendCapError(
-            f"asset {asset_id} has spent ${total:.2f} (cap ${cap:.2f}) - "
-            "raise COST_CAP_PER_ASSET_USD. No Anthropic call was made."
+            f"{asset_id} has spent ${total:.2f} (cap ${cap:.2f}, {name}) - "
+            f"raise {name}. No Anthropic call was made."
         )
 
 

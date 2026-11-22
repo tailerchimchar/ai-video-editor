@@ -105,3 +105,10 @@ def test_unanchored_clip_is_left_alone() -> None:
 def test_beat_analysis_failure_falls_back_to_unsnapped(anchored_plan) -> None:
     cmd = _render(anchored_plan, analysis_error=OSError("boom"), snap_to_beats=True)
     assert _ss_values(cmd) == [10.0]
+
+
+def test_dead_beat_sync_strategy_setting_is_removed():
+    # M7: nothing read it; a stale SHORTS_BEAT_SYNC_STRATEGY in .env is ignored.
+    from ai_video_editor.config import Settings
+
+    assert "shorts_beat_sync_strategy" not in Settings.model_fields

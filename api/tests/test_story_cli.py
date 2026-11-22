@@ -68,6 +68,11 @@ def test_mic_stream_read_from_workspace(ws):
     assert cli.load_mic_stream("a1") == 2
 
 
+def test_mic_stream_none_when_meta_has_error(ws):
+    _write(ws / "mic" / "a1.json", {"stream_index": 2, "method": "override", "error": "x"})
+    assert cli.load_mic_stream("a1") is None
+
+
 def test_round_dir_accepts_name_or_path(ws, tmp_path):
     assert cli.round_dir("2026-11-22_jhin") == ws / "panel" / "2026-11-22_jhin"
     assert cli.round_dir(str(tmp_path)) == tmp_path
@@ -174,3 +179,64 @@ def test_load_beats_skips_game_story_and_long_beats(tmp_path):
 def test_load_lane_malformed_json_returns_none(ws):
     _write(ws / "riot" / "a1" / "lane.json", {"opponent_champion": "Cait", "minutes": [{"x": 1}]})
     assert cli.load_lane("a1") is None
+
+
+# --- final fix wave ---
+
+
+def test_absolute_beat_just_before_its_clip_is_not_double_shifted(tmp_path):
+    # 02_hype_callout_9m45s spans 585-620; a recording-second beat at 580 s
+    # would land at 1165 s if treated as clip-relative: past the clip end.
+    _write(tmp_path / "clips.json", [{"file": "02_hype_callout_9m45s.mp4",
+                                      "start_seconds": 585.0, "end_seconds": 620.0}])  # fmt: skip
+    _write(
+        tmp_path / "gaming-expert.json",
+        [
+            {
+                "clip_ref": "02_hype_callout_9m45s",
+                "story_beats": [
+                    {"t_start": 580.0, "t_end": 590.0, "beat": "absolute"},
+                    {"t_start": 0.0, "t_end": 35.0, "beat": "relative"},
+                ],
+            }
+        ],
+    )
+    beats = cli.load_beats(tmp_path)
+    assert [(b.t_start, b.t_end, b.beat) for b in beats] == [
+        (580.0, 590.0, "absolute"),
+        (585.0, 620.0, "relative"),
+    ]
+
+
+def _main_with_plan(ws, monkeypatch, *, cards: bool, over_budget: bool = False):
+    from ai_video_editor.story.planner import StoryPlan
+
+    _write(ws / "panel" / "r1" / "gaming-expert.json", [])
+    monkeypatch.setattr(cli, "load_timeline", lambda asset_id: _one_kill_timeline())
+    monkeypatch.setattr(cli, "load_lane", lambda asset_id: None)
+    seen = {}
+
+    def fake_plan(*a, **k):
+        seen.update(k)
+        return StoryPlan(
+            chapters=[], total_s=0.0, mic_stream=None, audio="mixed", over_budget=over_budget
+        )
+
+    monkeypatch.setattr(cli, "plan_story", fake_plan)
+    monkeypatch.setattr(cli, "render_story", lambda *a, **k: Path("story.mp4"))
+    argv = ["--asset", "a1", "--round", "r1", "--source", "C:/x.mp4"]
+    assert cli.main(argv + ([] if cards else ["--no-cards"])) == 0
+    return seen
+
+
+def test_main_passes_card_seconds_only_when_cards_on(ws, monkeypatch):
+    monkeypatch.setattr(settings, "story_card_seconds", 2.5)
+    assert _main_with_plan(ws, monkeypatch, cards=True)["card_s"] == 2.5
+    assert _main_with_plan(ws, monkeypatch, cards=False)["card_s"] == 0.0
+
+
+def test_main_prints_over_budget(ws, monkeypatch, capsys):
+    _main_with_plan(ws, monkeypatch, cards=False, over_budget=True)
+    assert "over_budget" in capsys.readouterr().out
+    _main_with_plan(ws, monkeypatch, cards=False, over_budget=False)
+    assert "over_budget" not in capsys.readouterr().out

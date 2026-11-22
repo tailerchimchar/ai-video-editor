@@ -82,7 +82,7 @@ cd C:\Users\taile\source\repos\ai-video-editor-runner\api
 uv sync
 ```
 
-A deploy means moving that checkout to the new tag (`git -C C:\Users\taile\source\repos\ai-video-editor-runner checkout v0.1.1`, then restart the two tasks). There is ONE `api\.env`, in the main repo: the task wrappers `cd` into the main repo's `api` folder and run the checkout venv's `dev.exe` / `grokbot-runner.exe` directly, so settings come from the main `.env` while code comes from the pinned checkout. Never create a second `.env` in the checkout.
+A deploy means moving that checkout to the new tag (`git -C C:\Users\taile\source\repos\ai-video-editor-runner checkout v0.1.1`, then restart the two tasks). **New console scripts** (`story-render`, `league-scorecard`, added in the content-direction build) exist in the checkout venv only after `uv sync` there (both tasks stopped); until then run them as `python -m ai_video_editor.story.cli` / `python -m ai_video_editor.league.scorecard` with the checkout venv's `python.exe`. There is ONE `api\.env`, in the main repo: the task wrappers `cd` into the main repo's `api` folder and run the checkout venv's `dev.exe` / `grokbot-runner.exe` directly, so settings come from the main `.env` while code comes from the pinned checkout. Never create a second `.env` in the checkout.
 
 Two Task Scheduler tasks exist, `AVE API` and `AVE Grok Runner` (registered 2026-11-20 with PowerShell `Register-ScheduledTask`). Both are "At log on", restart every minute on failure, and "run as soon as possible after a missed start". Each action is `conhost.exe --headless cmd.exe /c <checkout>\api\run-api.cmd` (and `run-runner.cmd`), both exes by full `C:\WINDOWS\system32\` path. Do not launch through `powershell.exe -WindowStyle Hidden`: with Windows Terminal as the default terminal the console is handed to a visible Terminal window anyway (found 2026-11-21); `conhost --headless` creates no window at all. **Start in** is set to the checkout's `api` folder. The two `.cmd` files hold `cd /d <MAIN repo api dir>` and `<checkout>pi\.venv\Scripts\<dev|grokbot-runner>.exe >> <logs>\<name>.log 2>&1` (`--no-sync` matters: a plain `uv run` tries to re-sync the venv at launch and fails while the other task holds `dev.exe`, so the runner dies on every auto-restart; run `uv sync` only during a deploy with both tasks stopped): cmd does the redirect, so the log is plain UTF-8. Never let PowerShell do the redirect (`>>` or `*>>` in `-Command`): it writes UTF-16 and wraps lines, and grep/tail then see nothing. The hidden window matters: a visible console that gets closed kills the server with exit code 0xC000013A (STATUS_CONTROL_C_EXIT), which is what happened three times on day one so `api\.env` loads (Task Scheduler otherwise starts in `C:\Windows\System32` and the runner exits with "run from the api directory so api/.env loads"). Set `DATABASE_PATH` in `api\.env` to the ONE real database (absolute path); the default is relative to the working directory, so a second checkout silently gets its own empty database and the runner rejects every item with "asset not found". Do not quote the paths in the cmd argument: with two quoted paths `cmd /c` strips the outer quotes and the task exits with result 1 and no log.
 
@@ -117,3 +117,30 @@ uv run grokbot-publish-round <round folder> --game league --clips-dir "<highligh
 ```
 
 `--clips-dir` is the `highlights\<game>\<session>` folder the clips were cut into; `clips.json` names bare files that live there, not in the round folder. It builds the name-free digest, refuses it if any transcript text slipped in, uploads the clips to Drive `clips/` and the digest to `digests/`, saves `digest.json` in the round folder, and sends the Lead a `round.published` event with the ids the Editor needs.
+
+The digest is also refused when it repeats owner mic speech (the DB rows, when `--asset-id` is given). Exit codes: 2 transcript leak, 6 secret-like string, 7 music guard (section 11).
+
+## 11. Content-direction tools
+
+Run these from the `api` folder of the checkout (see the deploy note in section 7 for new console scripts).
+
+- `story-render --asset <id> --round <panel round name or path> [--no-cards] [--out DIR] [--source PATH] [--review]` renders a long-form story video from the round's `gaming-expert.json` beats, the cached Riot timeline (`WORKSPACE\riot\<asset>\`), the lane summary (`lane.json` there) and the owner mic. Output: `WORKSPACE\story\<round>\story.mp4` plus `story.json`. The total (title cards included) stays under 360 s; it prints `over_budget` when the lane and close chapters alone exceed that. `--review` adds a 0.25 fps critic under `STORY_BUDGET_USD`.
+- `league-scorecard [--asset <id>]` prints one line per cached game, most multikill fights first: which games are worth a story video.
+- `POST /api/v1/assets/{id}/transcribe-mic` (a job; poll `GET /api/v1/jobs/{id}`) finds the owner mic stream and stores its transcript rows as `speaker = 'owner'`; the pick is saved in `WORKSPACE\mic\<asset>.json`. Set `MIC_STREAM_OVERRIDE=2` on this Outplayed profile (see `.env.example`).
+
+### Music licences and the Drive guard
+
+Music lives in two folders, each with a `licence.json`:
+
+- `WORKSPACE\music\royalty_free\`: safe to publish anywhere.
+- `WORKSPACE\music\owner_recs\`: label releases, local only, never uploaded.
+
+`licence.json` maps a file name to its entry:
+
+```
+{"song.mp3": {"title": "Song", "source_url": "https://...", "licence": "CC-BY 4.0", "note": ""}}
+```
+
+Provenance comes from that entry, not the folder: only a `royalty_free` file with an entry (non-empty `licence`) counts as licensed. A file without an entry (including an old flat file in `WORKSPACE\music\` and a `download_music` call without a licence) is `unlicensed` and is not listed by `list_tracks`.
+
+Every render records `music_folder` (`royalty_free`, `owner_recs`, `unlicensed`, or null when there is no music) in its `index.json`; compilations record it in `spec.json`. Every Drive upload (`grokbot-publish-round` and the runner's render uploads) passes one guard: it refuses a file whose sidecar says `owner_recs` or `unlicensed`, a sidecar with music but no `royalty_free` provenance, and a file under `WORKSPACE\shorts\` without `index.json` provenance. Edit plans that pick `owner_recs` or unlicensed music are refused before anything changes. `grokbot-publish-round` checks every file before uploading any and exits 7 on a refusal.

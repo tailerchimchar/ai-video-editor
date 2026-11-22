@@ -21,7 +21,7 @@ from ..compile import load_spec, resolve_clip_ref
 from ..compile import reorder_clips_explicit as spec_reorder_clips_explicit
 from ..compile_journal import read_journal
 from ..edit_plan import EditPlan, PlanEffect, load_progress
-from ..music.library import Library
+from ..music.library import Library, music_folder_of
 from .edits import AddEffectBody, _do_edit, effect_payload
 
 _MUTATOR_KINDS = ("zoom", "focus", "caption")
@@ -72,15 +72,30 @@ class EditsPlanExecutor:
             for effect in plan.effects
             if effect.kind in _MUTATOR_KINDS and (problem := _dry_run(effect))
         ]
-        if plan.music and self._music_file(plan.music.song_id) is None:
-            problems.append(f"music: song '{plan.music.song_id}' not found")
+        if plan.music and (problem := self._music_problem(plan.music.song_id)):
+            problems.append(problem)
         return problems
 
-    def _music_file(self, song_id: str) -> Path | None:
-        """Library song first, then a plain file path."""
+    def _music_candidate(self, song_id: str) -> Path | None:
+        """Library song first, then a plain file path; None when missing."""
         row = self._library.get(song_id)
         candidate = Path(row["audio_path"]) if row and row.get("audio_path") else Path(song_id)
         return candidate if candidate.is_file() else None
+
+    def _music_problem(self, song_id: str) -> str | None:
+        """Why `song_id` cannot be used: missing, or not licensed royalty_free
+        (owner_recs and unlicensed music never go into a compilation)."""
+        candidate = self._music_candidate(song_id)
+        if candidate is None:
+            return f"music: song '{song_id}' not found"
+        folder = music_folder_of(candidate)
+        if folder != "royalty_free":
+            return f"music: song '{song_id}' is {folder}; refused"
+        return None
+
+    def _music_file(self, song_id: str) -> Path | None:
+        """The song's file, only when it is licensed royalty_free music."""
+        return None if self._music_problem(song_id) else self._music_candidate(song_id)
 
     def compilation_folder(self, compilation_id: str) -> Path:
         return self._folder
@@ -177,9 +192,14 @@ class EditsPlanExecutor:
         if not plan.music:
             return
         music = plan.music
-        music_path = self._music_file(music.song_id).as_posix()
+        problem = self._music_problem(music.song_id)
+        if problem:
+            raise UnsupportedPlanStepError(problem)
+        music_path = self._music_candidate(music.song_id).as_posix()
+        music_folder = music_folder_of(music_path)
 
         def mutator(s: dict) -> tuple[dict, set[str]]:
-            return {**s, "music_path": music_path}, set()
+            # music_folder rides on the spec so the Drive guard sees provenance.
+            return {**s, "music_path": music_path, "music_folder": music_folder}, set()
 
         self._edit(mutator, "plan:music", {"song_id": music.song_id, "music_path": music_path})

@@ -559,6 +559,8 @@ def spec_from_rankings(
         "aspect": aspect,
         "fade_seconds": fade_seconds,
         "music_path": music_path,
+        # Provenance for the Drive guard (royalty_free / owner_recs / unlicensed).
+        "music_folder": _music_folder(music_path),
         "music_volume": music_volume,
         # When True, every clip is rendered with a corner "#NN" label.
         # Lets the caller say "zoom #04" by position. Toggle off when
@@ -700,6 +702,14 @@ def render_spec(
         "thumbnail": thumbnail_summary,
         "clip_thumbnails": clip_thumbnails_summary,
     }
+
+
+def _music_folder(music_path: str | None) -> str | None:
+    if not music_path:
+        return None
+    from .music.library import music_folder_of  # lazy: keeps compile import-light
+
+    return music_folder_of(music_path)
 
 
 def build_compilation(

@@ -503,3 +503,69 @@ def test_publish_with_asset_id_fills_commentary_from_owner_rows(round_dir, asset
     out = json.loads((round_dir / "digest.json").read_text(encoding="utf-8"))
     assert [c["start_s"] for c in out["commentary"]] == [9000.0]
     assert len(out["clips"]) == 3
+
+
+# ----- I6b: the lane summary reaches the digest -----
+
+
+def test_digest_inputs_load_lane_json_when_present(tmp_path, monkeypatch):
+    from dataclasses import asdict
+
+    from ai_video_editor.league.lane import LaneMinute, LaneSummary, lane_summary_path
+
+    monkeypatch.setattr(settings, "workspace_dir", tmp_path)
+    monkeypatch.setattr(settings, "database_path", str(tmp_path / "none.db"))
+    no_lane = pub._digest_inputs("a1", "league", paraphrase=False, load_timeline=lambda a, g: None)
+    assert no_lane["lane"] is None
+    summary = LaneSummary("Caitlyn", [LaneMinute(10, 80, 4000, 9, 70, 3800, 8)], cs_diff_at_10=10)
+    path = lane_summary_path("a1")
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(asdict(summary)), encoding="utf-8")
+    inputs = pub._digest_inputs("a1", "league", paraphrase=False, load_timeline=lambda a, g: None)
+    assert inputs["lane"] == summary
+
+
+def test_publish_round_puts_lane_on_the_digest(round_dir):
+    from ai_video_editor.league.lane import LaneSummary
+
+    run(round_dir, lane=LaneSummary("Caitlyn", cs_diff_at_10=-4))
+    saved = dg.Digest.model_validate_json((round_dir / "digest.json").read_text())
+    assert saved.lane.opponent_champion == "Caitlyn" and saved.lane.cs_diff_at_10 == -4
+
+
+# ----- M5: the music guard runs over every file before any upload -----
+
+
+def test_guard_runs_over_all_files_before_any_upload(round_dir, tmp_path):
+    bad = tmp_path / "shorts" / "x" / "03_kill_30m10s.mp4"
+    bad.parent.mkdir(parents=True)
+    bad.write_bytes(b"mp4")
+    (bad.parent / "index.json").write_text(json.dumps({"music_folder": "owner_recs"}))
+    clips = json.loads((round_dir / "clips.json").read_text())
+    clips[2]["file"] = str(bad)
+    (round_dir / "clips.json").write_text(json.dumps(clips))
+    up = FakeUploader(ids=ids)
+    with pytest.raises(pub.OwnerRecsMusicError):
+        run(round_dir, uploader=up)
+    assert up.uploads == []  # no partial upload of clips 1 and 2
+
+
+# ----- M6: the leak check also covers the owner mic rows -----
+
+
+def test_digest_leaking_owner_speech_is_refused(round_dir):
+    # The owner said the clip-1 beat's words at 5000 s, outside every clip window,
+    # so only the round-wide check can see it.
+    owner = [{"text": "Quillfeather opens with a bold dive", "start_seconds": 5000.0,
+              "end_seconds": 5004.0, "sentiment_score": 0.2}]  # fmt: skip
+    up = FakeUploader(ids=ids)
+    with pytest.raises(pub.DigestLeakError):
+        run(round_dir, uploader=up, owner_rows=owner)
+    assert up.uploads == []
+
+
+def test_digest_leaks_checks_extra_lines_without_transcript():
+    d = dg.Digest(game="lol", round="r", clips=[], built_at="t")
+    d.commentary = [dg.CommentaryItem(ref="1m00s", start_s=60, end_s=61, voice="zorblax kited it")]
+    assert dg.digest_leaks(d, None, extra_lines=["something else entirely"]) == []
+    assert dg.digest_leaks(d, None, extra_lines=["well zorblax kited it"]) == ["zorblax kited it"]

@@ -7,9 +7,10 @@ round when the Grok team is on:
 
     uv run grokbot-publish-round <round_dir> --game league [--compilation-id X]
 
-Privacy gate: when the round has a `transcript.json`, a digest that leaks
-any transcript fragment is refused before anything is uploaded. A clip file
-outside WORKSPACE_DIR / OUTPLAYED_MEDIA_DIR is never uploaded.
+Privacy gate: a digest that leaks any fragment of the round's
+`transcript.json` or of the owner mic rows is refused before anything is
+uploaded. A clip file outside WORKSPACE_DIR / OUTPLAYED_MEDIA_DIR is never
+uploaded.
 
 With `--asset-id` the digest also gets the Riot timeline (events, game
 state), a Haiku paraphrase of each clip's transcript slice (`--no-paraphrase`
@@ -38,7 +39,7 @@ from ..notify import Event
 from ..taxonomy import Game
 from ..tools.secret_scan import scan_paths
 from .digest import Digest, _ref_from_file, annotate_with_jev, build_digest, digest_leaks
-from .drive import Uploader
+from .drive import OwnerRecsMusicError, Uploader, check_music_provenance
 from .paths import inside
 from .voice import (
     energy_label,
@@ -49,6 +50,7 @@ from .voice import (
 )
 
 if TYPE_CHECKING:
+    from ..league.lane_models import LaneSummary
     from ..league.riot_timeline import RiotTimeline
 
 logger = logging.getLogger(__name__)
@@ -56,10 +58,6 @@ logger = logging.getLogger(__name__)
 
 class DigestLeakError(RuntimeError):
     """The digest contains transcript text; nothing was uploaded."""
-
-
-class OwnerRecsMusicError(RuntimeError):
-    """The render's music is an owner recommendation (label release): never uploaded."""
 
 
 class SecretLeakError(RuntimeError):
@@ -89,22 +87,9 @@ def _clip_path(base_dir: Path, file: str) -> Path:
 
 
 def _refuse_owner_recs(path: Path) -> None:
-    """Fail closed on music provenance.
-
-    Raises for `music_folder == "owner_recs"`, and for a render under the
-    shorts output tree whose sibling index.json is missing, unreadable, not a
-    dict or lacks `music_folder`. Files elsewhere (highlights clips, per-edit
-    outputs) carry no music and pass.
-    """
-    try:
-        sidecar = json.loads((path.parent / "index.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        sidecar = None
-    if isinstance(sidecar, dict) and sidecar.get("music_folder") == "owner_recs":
-        raise OwnerRecsMusicError(f"refused: owner_recs music ({path.name})")
-    in_shorts = inside(path, settings.workspace_dir / "shorts")
-    if in_shorts and not (isinstance(sidecar, dict) and "music_folder" in sidecar):
-        raise OwnerRecsMusicError(f"refused: unknown music provenance ({path.name})")
+    """The shared Drive guard (`drive.check_music_provenance`); also run here so
+    a refusal is raised even with no uploader configured."""
+    check_music_provenance(path)
 
 
 def _upload(uploader: Uploader | None, path: Path, name: str, subfolder: str) -> str | None:
@@ -185,9 +170,12 @@ def _digest_inputs(
     load_timeline: Callable[[str, str], RiotTimeline | None] | None = None,
 ) -> dict:
     """The digest's optional inputs for one asset, bound to the local DB."""
+    from ..league.lane import lane_summary_path, load_lane_summary
+
     db = settings.database_path
     return {
         "timeline": (load_timeline or _load_timeline)(asset_id, game),
+        "lane": load_lane_summary(lane_summary_path(asset_id)),
         "transcript_slices": partial(transcript_slice, db, asset_id),
         "owner_rows": owner_rows(db, asset_id),
         "paraphrase": partial(voice_paraphrase, asset_id=asset_id) if paraphrase else None,
@@ -223,6 +211,7 @@ def publish_round(
     paraphrase: Callable[[str], str] | None = None,
     energy: Callable[[float, float], str] | None = None,
     owner_rows: list[dict] | None = None,
+    lane: LaneSummary | None = None,
 ) -> dict:
     """Build, gate, upload and announce one round. Returns the event payload.
 
@@ -230,8 +219,8 @@ def publish_round(
     the decisions backend is "rules"); False skips annotation; a callable
     is used as given. `api` (a runner `ApiClient`) supplies the
     compilation's current plan version when `compilation_id` is given.
-    `timeline`, `transcript_slices`, `paraphrase`, `energy` and `owner_rows` go to
-    `build_digest` as given (None = that enrichment is off).
+    `timeline`, `transcript_slices`, `paraphrase`, `energy`, `owner_rows` and
+    `lane` go to `build_digest` as given (None = that enrichment is off).
     """
     round_dir = Path(round_dir)
     digest: Digest = build_digest(
@@ -242,6 +231,7 @@ def publish_round(
         paraphrase=paraphrase,
         energy=energy,
         owner_rows=owner_rows,
+        lane=lane,
     )
     digest.compilation_id = compilation_id
     digest.asset_id = asset_id
@@ -250,9 +240,13 @@ def publish_round(
 
     # Round-wide transcript check BEFORE Jev: no voice text that fails it
     # may reach TypeSafe.
+    # The owner mic rows are checked too: transcript.json holds the mixed track only.
     transcript = round_dir / "transcript.json"
-    if transcript.is_file():
-        leaks = digest_leaks(digest, transcript)
+    owner_text = [str(r.get("text") or "") for r in owner_rows or []]
+    if transcript.is_file() or owner_text:
+        leaks = digest_leaks(
+            digest, transcript if transcript.is_file() else None, extra_lines=owner_text
+        )
         if leaks:
             raise DigestLeakError(f"digest leaks {len(leaks)} transcript fragment(s)")
 
@@ -270,7 +264,7 @@ def publish_round(
 
     files = _clip_files(round_dir, clips_dir)
     roots = (settings.workspace_dir, settings.outplayed_media_dir)
-    clip_ids: dict[str, str | None] = {}
+    to_upload: dict[str, Path | None] = {}
     skipped = 0
     for clip in digest.clips:
         path = files.get(clip.ref)
@@ -279,6 +273,13 @@ def publish_round(
             logger.warning("publish: %s is outside the allowed roots, not uploaded", path)
             skipped += 1
             path = None
+        to_upload[clip.ref] = path
+    # Music guard over every file first: a refusal never leaves a partial upload.
+    for path in (*filter(None, to_upload.values()), local):
+        _refuse_owner_recs(path)
+    clip_ids: dict[str, str | None] = {}
+    for clip in digest.clips:
+        path = to_upload[clip.ref]
         clip.drive = _upload(uploader, path, path.name, f"clips/{round_dir.name}") if path else None
         clip_ids[clip.ref] = clip.drive
 

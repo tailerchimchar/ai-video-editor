@@ -9,6 +9,7 @@ subprocess seam.
 
 from __future__ import annotations
 
+import json
 import logging
 import subprocess
 from pathlib import Path
@@ -32,6 +33,9 @@ CARD_TIMEOUT_S = 60.0
 # Single-pass EBU R128 normalisation of the (very quiet) owner mic.
 MIC_LOUDNORM = "loudnorm=I=-16:TP=-1.5:LRA=11"
 _VIDEO_CHAIN = f"[0:v]scale={WIDTH}:{HEIGHT},setsar=1,fps={FPS}[v]"
+# A source without audio still gets a (silent) track so every part keeps the
+# same shape for the stream-copy concat (title cards carry audio).
+SILENT_AUDIO = "anullsrc=r=48000:cl=stereo"
 
 
 class StoryRenderError(RuntimeError):
@@ -72,17 +76,23 @@ def audio_filter(mic_stream: int | None) -> str:
 
 
 def chapter_cmd(
-    asset_path: str, start: float, end: float, out_path: str, *, mic_stream: int | None
+    asset_path: str,
+    start: float,
+    end: float,
+    out_path: str,
+    *,
+    mic_stream: int | None,
+    has_audio: bool = True,
 ) -> list[str]:
+    """One chapter's argv. `has_audio=False` (the source has no audio stream)
+    renders the video with a silent track instead of failing on `0:a:0`."""
+    head = [settings.ffmpeg_path, "-y", "-ss", str(start), "-to", str(end), "-i", asset_path]
+    if not has_audio:
+        silent = ["-f", "lavfi", "-t", str(round(end - start, 3)), "-i", SILENT_AUDIO]
+        maps = ["-filter_complex", _VIDEO_CHAIN, "-map", "[v]", "-map", "1:a"]
+        return [*head, *silent, *maps, *_encode_opts(), out_path]
     return [
-        settings.ffmpeg_path,
-        "-y",
-        "-ss",
-        str(start),
-        "-to",
-        str(end),
-        "-i",
-        asset_path,
+        *head,
         "-filter_complex",
         f"{_VIDEO_CHAIN};{audio_filter(mic_stream)}",
         "-map",
@@ -92,6 +102,22 @@ def chapter_cmd(
         *_encode_opts(),
         out_path,
     ]
+
+
+def _probe_audio_count(path: str) -> int | None:
+    """Number of audio streams in `path`; None when ffprobe cannot tell (then
+    the render assumes audio, as before)."""
+    from ..candidates.mic_track import _ffprobe
+
+    cmd = [_ffprobe(), "-v", "error", "-select_streams", "a", "-show_entries",
+           "stream=index", "-of", "json", path]  # fmt: skip
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        if r.returncode != 0:
+            return None
+        return len(json.loads(r.stdout or "{}").get("streams") or [])
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
 
 
 def chapter_timeout(start: float, end: float) -> float:
@@ -147,7 +173,7 @@ def _review(video: Path, plan: StoryPlan, out_dir: Path) -> None:
     """Vision critique at 0.25 fps under the story budget (outside the asset cap)."""
     key = f"story:{plan.asset_id}"
     try:
-        check_budget(key, cap_usd=settings.story_budget_usd)
+        check_budget(key, cap_usd=settings.story_budget_usd, cap_name="STORY_BUDGET_USD")
     except SpendCapError as e:
         _log.warning("story review skipped: %s", e)
         return
@@ -170,6 +196,14 @@ def render_story(
     parts_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "story.json").write_text(plan.model_dump_json(indent=2), encoding="utf-8")
 
+    audio_count = _probe_audio_count(asset_path)  # probed once for every chapter
+    has_audio = audio_count != 0
+    mic = plan.mic_stream
+    if mic is not None and audio_count is not None and mic >= audio_count:
+        _log.warning(
+            "story: mic stream %d not in source (%d audio); game audio only", mic, audio_count
+        )
+        mic = None
     parts: list[str] = []
     for i, ch in enumerate(plan.chapters, start=1):
         if cards:
@@ -178,7 +212,7 @@ def render_story(
             parts.append(card.as_posix())
         part = parts_dir / f"chapter_{i:02d}.mp4"
         cmd = chapter_cmd(
-            asset_path, ch.start_s, ch.end_s, part.as_posix(), mic_stream=plan.mic_stream
+            asset_path, ch.start_s, ch.end_s, part.as_posix(), mic_stream=mic, has_audio=has_audio
         )
         ok, err = _run_ffmpeg(cmd, chapter_timeout(ch.start_s, ch.end_s))
         if not ok:

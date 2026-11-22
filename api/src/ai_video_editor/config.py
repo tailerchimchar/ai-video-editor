@@ -431,7 +431,6 @@ class Settings(BaseSettings):
     # Beat-sync + beat-flash — opt-in per compile via a param, but the
     # defaults here set the "when enabled" behavior.
     shorts_beat_sync_enabled: bool = False
-    shorts_beat_sync_strategy: str = "kill_on_beat"
     shorts_beat_sync_tolerance_seconds: float = 0.5
     shorts_beat_flash_enabled: bool = False
     # `kills` = flash on each clip's payoff moment (default, tastefully rare).
