@@ -40,7 +40,13 @@ from ..tools.secret_scan import scan_paths
 from .digest import Digest, _ref_from_file, annotate_with_jev, build_digest, digest_leaks
 from .drive import Uploader
 from .paths import inside
-from .voice import energy_label, transcript_slice, voice_paraphrase, window_sentiment
+from .voice import (
+    energy_label,
+    owner_rows,
+    transcript_slice,
+    voice_paraphrase,
+    window_sentiment,
+)
 
 if TYPE_CHECKING:
     from ..league.riot_timeline import RiotTimeline
@@ -183,6 +189,7 @@ def _digest_inputs(
     return {
         "timeline": (load_timeline or _load_timeline)(asset_id, game),
         "transcript_slices": partial(transcript_slice, db, asset_id),
+        "owner_rows": owner_rows(db, asset_id),
         "paraphrase": partial(voice_paraphrase, asset_id=asset_id) if paraphrase else None,
         # Loudness is not wired this round: arousal and laughter tokens only.
         "energy": lambda s, e: energy_label(
@@ -215,6 +222,7 @@ def publish_round(
     transcript_slices: Callable[[float, float], str] | None = None,
     paraphrase: Callable[[str], str] | None = None,
     energy: Callable[[float, float], str] | None = None,
+    owner_rows: list[dict] | None = None,
 ) -> dict:
     """Build, gate, upload and announce one round. Returns the event payload.
 
@@ -222,7 +230,7 @@ def publish_round(
     the decisions backend is "rules"); False skips annotation; a callable
     is used as given. `api` (a runner `ApiClient`) supplies the
     compilation's current plan version when `compilation_id` is given.
-    `timeline`, `transcript_slices`, `paraphrase` and `energy` go to
+    `timeline`, `transcript_slices`, `paraphrase`, `energy` and `owner_rows` go to
     `build_digest` as given (None = that enrichment is off).
     """
     round_dir = Path(round_dir)
@@ -233,6 +241,7 @@ def publish_round(
         transcript_slices=transcript_slices,
         paraphrase=paraphrase,
         energy=energy,
+        owner_rows=owner_rows,
     )
     digest.compilation_id = compilation_id
     digest.asset_id = asset_id

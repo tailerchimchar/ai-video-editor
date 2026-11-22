@@ -487,3 +487,19 @@ def test_digest_rewritten_with_drive_ids_is_scanned_again(round_dir):
         run(round_dir, uploader=up)
     assert [u for u in up.uploads if "digest" in str(u)] == []
     assert not (round_dir / "digest.json").exists()
+
+
+def test_publish_with_asset_id_fills_commentary_from_owner_rows(round_dir, asset_db):
+    import sqlite3
+
+    conn = sqlite3.connect(asset_db)
+    conn.execute("INSERT INTO transcripts VALUES ('a1', 9000.0, 9006.0, 'planning', 0.8, 'owner')")
+    conn.commit()
+    conn.close()
+
+    inputs = pub._digest_inputs("a1", "league", paraphrase=False, load_timeline=lambda a, g: None)
+    assert [r["start_seconds"] for r in inputs["owner_rows"]] == [9000.0]  # owner track only
+    run(round_dir, asset_id="a1", owner_rows=inputs["owner_rows"])
+    out = json.loads((round_dir / "digest.json").read_text(encoding="utf-8"))
+    assert [c["start_s"] for c in out["commentary"]] == [9000.0]
+    assert len(out["clips"]) == 3

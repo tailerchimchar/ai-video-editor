@@ -70,6 +70,7 @@ def test_choice_maps_to_jev_choice_with_descriptions_defaulting_to_the_name():
             "voice_over": "voice_over",
             "funny": "funny",
             "arc_montage": "arc_montage",
+            "commentary": "commentary",
         },
     }
 
@@ -86,7 +87,10 @@ def test_bool_maps_to_noul_and_score_to_an_ordered_rubric():
 def test_format_question_describes_every_format_for_jev():
     from ai_video_editor.bucketing import _FORMAT_QUESTION
 
-    assert set(_FORMAT_QUESTION.descriptions) == {f.value for f in Format}
+    assert set(_FORMAT_QUESTION.descriptions) == {
+        f.value for f in Format if f is not Format.commentary
+    }
+    assert "commentary" not in {o.value for o in _FORMAT_QUESTION.options}
 
 
 # --- answer mapping ---
