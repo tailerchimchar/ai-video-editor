@@ -106,7 +106,8 @@ CREATE TABLE IF NOT EXISTS transcripts (
     text TEXT NOT NULL,
     sentiment_score REAL,            -- VADER arousal [0,1]; NULL on legacy rows
     words TEXT,                      -- JSON [{word,start,end}]; NULL on pre-word-timestamps rows
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    speaker TEXT                     -- NULL = mixed track; 'owner' = owner mic track
 );
 
 CREATE INDEX IF NOT EXISTS idx_transcripts_video ON transcripts(video_id);
@@ -212,6 +213,7 @@ async def init_db() -> None:
         # is idempotent but doesn't add new columns to an old table.
         await _ensure_column(db, "transcripts", "sentiment_score", "REAL")
         await _ensure_column(db, "transcripts", "words", "TEXT")
+        await _ensure_column(db, "transcripts", "speaker", "TEXT")
         await _ensure_column(db, "assets", "source_origin", "TEXT DEFAULT 'imported'")
         await _ensure_column(db, "assets", "source_deleted_at", "TEXT")
         await _ensure_column(db, "assets", "parent_asset_id", "TEXT")

@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException
 
 from ..bucketing import prefilter_summary
+from ..candidates.mic_track import transcribe_mic
 from ..candidates.probe import get_duration_seconds
 from ..candidates.service import compute_candidates
 from ..candidates.transcribe import transcribe
@@ -376,7 +377,9 @@ async def _run_transcribe_job(job_id: str, asset: dict) -> None:
         segments = await asyncio.to_thread(transcribe, asset["path"], duration, asset.get("game"))
 
         # Idempotent regen.
-        await db.execute("DELETE FROM transcripts WHERE video_id = ?", (asset["id"],))
+        await db.execute(
+            "DELETE FROM transcripts WHERE video_id = ? AND speaker IS NULL", (asset["id"],)
+        )
         now = datetime.now(timezone.utc).isoformat()
         for s in segments:
             await db.execute(
@@ -421,6 +424,71 @@ async def transcribe_asset(asset_id: str):
         await db.close()
 
     _track(_run_transcribe_job(job_id, asset))
+    return RankResponse(job_id=job_id)
+
+
+async def _run_transcribe_mic_job(job_id: str, asset: dict) -> None:
+    db = await get_db()
+    try:
+        await db.execute("UPDATE jobs SET status = 'running' WHERE id = ?", (job_id,))
+        await db.commit()
+
+        duration = get_duration_seconds(asset["path"])
+        segments, meta = await asyncio.to_thread(transcribe_mic, asset, duration)
+        if meta["stream_index"] is None:
+            await finish_job(
+                db, job_id, output_path=f"no mic stream (method={meta['method']})", error=None
+            )
+            return
+
+        await db.execute(
+            "DELETE FROM transcripts WHERE video_id = ? AND speaker = 'owner'", (asset["id"],)
+        )
+        now = datetime.now(timezone.utc).isoformat()
+        for s in segments:
+            await db.execute(
+                "INSERT INTO transcripts "
+                "(id, video_id, start_seconds, end_seconds, text, sentiment_score, "
+                " words, created_at, speaker) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'owner')",
+                (
+                    str(uuid.uuid4()),
+                    asset["id"],
+                    s["start_seconds"],
+                    s["end_seconds"],
+                    s["text"],
+                    None,
+                    json.dumps(s.get("words")) if s.get("words") else None,
+                    now,
+                ),
+            )
+        await db.commit()
+        msg = (
+            f"{len(segments)} owner segments "
+            f"(stream={meta['stream_index']}, method={meta['method']})"
+        )
+        await finish_job(db, job_id, output_path=msg, error=None)
+    except Exception as e:
+        await finish_job(db, job_id, output_path=None, error=str(e)[:2000])
+    finally:
+        await db.close()
+
+
+@router.post("/assets/{asset_id}/transcribe-mic", response_model=RankResponse)
+async def transcribe_asset_mic(asset_id: str):
+    db = await get_db()
+    try:
+        asset = await _load_asset(db, asset_id)
+        job_id = str(uuid.uuid4())
+        await db.execute(
+            "INSERT INTO jobs (id, project_id, type, status, created_at) "
+            "VALUES (?, NULL, 'transcribe_mic', 'pending', ?)",
+            (job_id, datetime.now(timezone.utc).isoformat()),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+    _track(_run_transcribe_mic_job(job_id, asset))
     return RankResponse(job_id=job_id)
 
 
