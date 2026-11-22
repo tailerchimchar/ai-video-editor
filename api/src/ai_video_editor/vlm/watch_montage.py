@@ -39,6 +39,7 @@ import anthropic
 from PIL import Image
 from pydantic import BaseModel, Field
 
+from ..anthropic_surface import record_spend
 from ..candidates.probe import get_duration_seconds
 from ..config import settings
 from ..taxonomy import FlagCategory
@@ -422,6 +423,7 @@ def watch_montage(
     max_panels: int = 30,
     api_key: str | None = None,
     model: str | None = None,
+    spend_key: str | None = None,
 ) -> WatchResult:
     """Panel-pack `video_path` and return the VLM's structured critique.
 
@@ -430,6 +432,10 @@ def watch_montage(
     ~$0.03. `max_panels` caps the input so a stray long input can't
     balloon the bill; over-cap montages get their tail dropped with a
     warning (single call is the whole point).
+
+    `fps` sets the sampling rate (long-form story review uses 0.25).
+    `spend_key` names the ledger row the call is recorded under (None =
+    not recorded); callers check the budget for that key first.
 
     Never raises -- degrades to `WatchResult(critique=None, error=...)`.
     """
@@ -525,6 +531,7 @@ def watch_montage(
                 error=f"anthropic api error: {exc!s}",
             )
 
+        record_spend(spend_key, "watch", model_id, getattr(resp, "usage", None))
         critique = resp.parsed_output
         if critique is None:
             return WatchResult(

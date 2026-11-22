@@ -55,6 +55,15 @@ class Settings(BaseSettings):
         "claude-haiku-4-5": (1.0, 5.0),
     }
     cost_cap_per_asset_usd: float = 2.0
+    # Long-form story video (story/): its own review budget outside the
+    # per-asset cap (R3), game-audio level under the owner's mic, and the
+    # length of each chapter title card.
+    story_budget_usd: float = 5.0
+    story_game_audio_volume: float = 0.35
+    # Owner mic tracks record very quiet (~-70 dB mean vs a -24 dB game mix);
+    # single-pass loudnorm per chapter brings the mic up before the mix.
+    story_mic_loudnorm: bool = True
+    story_card_seconds: float = 2.5
     # Digest voice paraphrase (grokbot/voice.py): one short Haiku call per
     # digest clip with transcript speech; counted in the dollar ledger.
     paraphrase_model: str = "claude-haiku-4-5"

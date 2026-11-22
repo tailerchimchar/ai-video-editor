@@ -73,8 +73,13 @@ def _ledger_conn(db_path: Path | None) -> sqlite3.Connection:
     return conn
 
 
-def check_budget(asset_id: str | None, *, db_path: Path | None = None) -> None:
+def check_budget(
+    asset_id: str | None, *, db_path: Path | None = None, cap_usd: float | None = None
+) -> None:
     """Raise SpendCapError when this asset's paid calls already cost >= the cap.
+
+    `cap_usd` overrides `settings.cost_cap_per_asset_usd` (e.g. the story
+    review budget, keyed `story:<asset_id>`, sits outside the asset cap).
 
     None asset_id means no accounting, so no check. Check-then-act is not
     atomic: concurrent calls can overshoot the cap by one request.
@@ -89,7 +94,7 @@ def check_budget(asset_id: str | None, *, db_path: Path | None = None) -> None:
         ).fetchone()
     finally:
         conn.close()
-    cap = settings.cost_cap_per_asset_usd
+    cap = settings.cost_cap_per_asset_usd if cap_usd is None else cap_usd
     if total >= cap:
         raise SpendCapError(
             f"asset {asset_id} has spent ${total:.2f} (cap ${cap:.2f}) - "
