@@ -51,12 +51,12 @@ def test_game_end_reach_inside():
 def test_game_end_reach_boundary_and_outside():
     assert fight_window({**M, "game_end_s": 145.0}, None, 1000.0, 120.0)[1] == 146.0
     assert fight_window({**M, "game_end_s": 145.5}, None, 1000.0, 120.0)[1] == 123.0
-    assert fight_window({**M, "game_end_s": 110.0}, None, 1000.0, 120.0)[1] == 123.0
+    assert fight_window({**M, "game_end_s": 110.0}, None, 1000.0, 120.0)[1] == 111.0
     assert fight_window({**M, "game_end_s": None}, None, 1000.0, 120.0)[1] == 123.0
 
 
 def test_ranker_widens_only():
-    assert fight_window(M, (90.0, 130.0), 1000.0, 120.0) == (90.0, 130.0)
+    assert fight_window(M, (90.0, 130.0), 1000.0, 120.0) == (91.0, 128.0)
     assert fight_window(M, (99.0, 121.0), 1000.0, 120.0) == (96.0, 123.0)
 
 
@@ -82,7 +82,7 @@ def test_window_anchor_delegates_and_bypasses_cluster_midpoint():
     assert _window_anchor(cand, {}, 1000.0) == (96.0, 123.0)
     assert cut_window(cand, {}, 1000.0) == (96.0, 123.0)
     r = {"suggested_start_seconds": 90.0, "suggested_end_seconds": 130.0}
-    assert _window_anchor(cand, r, 1000.0) == (90.0, 130.0)
+    assert _window_anchor(cand, r, 1000.0) == (91.0, 128.0)
 
 
 def test_duration_zero_leaves_end_unclamped():
@@ -90,8 +90,8 @@ def test_duration_zero_leaves_end_unclamped():
 
 
 def test_one_sided_suggestion_widens_own_side():
-    assert fight_window(M, (90.0, None), 1000.0, 120.0) == (90.0, 123.0)
-    assert fight_window(M, (None, 130.0), 1000.0, 120.0) == (96.0, 130.0)
+    assert fight_window(M, (90.0, None), 1000.0, 120.0) == (91.0, 123.0)
+    assert fight_window(M, (None, 130.0), 1000.0, 120.0) == (96.0, 128.0)
     assert fight_window(M, (None, None), 1000.0, 120.0) == (96.0, 123.0)
 
 
@@ -100,8 +100,8 @@ def test_rounds_to_two_dp():
     assert fight_window(m, None, 1000.0, 120.0) == (96.12, 123.46)
 
 
-def test_game_end_before_fight_end_ignored():
-    assert fight_window({**M, "game_end_s": 119.0}, None, 1000.0, 120.0) == (96.0, 123.0)
+def test_game_end_before_fight_end_caps_end():
+    assert fight_window({**M, "game_end_s": 119.0}, None, 1000.0, 120.0) == (96.0, 120.0)
 
 
 def test_cap_smaller_than_fight():

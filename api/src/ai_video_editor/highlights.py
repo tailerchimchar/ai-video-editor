@@ -154,6 +154,8 @@ def _event_override(event_type: str | None) -> tuple[float, float] | None:
 FIGHT_PRE_S = 4.0
 FIGHT_POST_S = 3.0
 GAME_END_REACH_S = 25.0
+FIGHT_PRE_ALLY_DEATH_S = 8.0
+RANKER_WIDEN_MAX_S = 5.0
 
 
 def fight_window(
@@ -165,10 +167,14 @@ def fight_window(
     """Pure window from fight bounds (candidates with fight_start_s/fight_end_s).
 
     Pads the fight, extends to the game end when within reach, widens (never
-    narrows) to the ranker's suggestion, clamps to [0, duration], then
+    narrows; at most RANKER_WIDEN_MAX_S per side) to the ranker's suggestion,
+    ends no later than game end + 1 s, clamps to [0, duration], then
     front-trims to `cap` so the payoff survives.
     """
-    pre = float(meta.get("pre_pad_s", FIGHT_PRE_S))
+    if meta.get("fight_opens_with_ally_death"):
+        pre = FIGHT_PRE_ALLY_DEATH_S
+    else:
+        pre = float(meta.get("pre_pad_s", FIGHT_PRE_S))
     fight_end = float(meta["fight_end_s"])
     start = float(meta["fight_start_s"]) - pre
     end = fight_end + FIGHT_POST_S
@@ -177,9 +183,11 @@ def fight_window(
         end = float(game_end) + 1.0
     if suggested:
         if suggested[0] is not None:
-            start = min(start, suggested[0])
+            start = max(start - RANKER_WIDEN_MAX_S, min(start, suggested[0]))
         if suggested[1] is not None:
-            end = max(end, suggested[1])
+            end = min(end + RANKER_WIDEN_MAX_S, max(end, suggested[1]))
+    if game_end is not None:  # applied after widening: never run into the Leave Game dialog
+        end = min(end, float(game_end) + 1.0)
     start = max(0.0, start)
     if duration > 0:  # unknown duration (0.0): leave the end unclamped, like _clamp
         end = min(duration, end)
