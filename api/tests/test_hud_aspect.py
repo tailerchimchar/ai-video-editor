@@ -15,6 +15,7 @@ from ai_video_editor.config import settings
 from ai_video_editor.edits import (
     HUD_ASPECT,
     HUD_CAPTION_Y,
+    apply_caption,
     apply_zoom,
     aspect_filter,
     build_hud_aspect_filter_complex,
@@ -96,6 +97,56 @@ def test_hud_caption_explicit_y_wins() -> None:
     filt = caption_filters(segs, clip_start_offset=0.0)
     assert "y=h-th-120" in filt
     assert f"y={HUD_CAPTION_Y}" not in filt
+
+
+def test_hud_caption_drawtext_comes_after_layout_output() -> None:
+    """Captions must burn onto the composed 720x1280 frame, not the source."""
+    segs = hud_caption_segments(
+        [{"text": "placeholder_callout", "start_seconds": 0.0, "end_seconds": 1.0}]
+    )
+    caps = caption_filters(segs, clip_start_offset=0.0)
+    graph = build_hud_aspect_filter_complex("null", game="League of Legends", caption_vf=caps)
+    assert "drawtext=" in graph
+    # Layout's final overlay (minimap) finishes before drawtext.
+    assert graph.index("drawtext=") > graph.rfind("overlay=")
+    # No pre-layout [fx] stage when effect is null.
+    assert "[fx]" not in graph
+    assert graph.endswith("[out]")
+
+
+def test_hud_zoom_effect_stays_before_layout() -> None:
+    """Zoom/focus still run on the source stream before cropped_hud."""
+    effect = "crop=iw/2:ih/2:(iw-iw/2)/2:(ih-ih/2)/2,scale=iw*2:ih*2"
+    graph = build_hud_aspect_filter_complex(effect, game="League of Legends")
+    assert graph.index(effect) < graph.index("split=")
+    assert "drawtext=" not in graph
+
+
+def test_hud_zoom_then_caption_order() -> None:
+    effect = "crop=iw/2:ih/2:(iw-iw/2)/2:(ih-ih/2)/2"
+    caps = caption_filters(
+        hud_caption_segments(
+            [{"text": "placeholder_callout", "start_seconds": 0.0, "end_seconds": 0.5}]
+        ),
+        clip_start_offset=0.0,
+    )
+    graph = build_hud_aspect_filter_complex(effect, game="League of Legends", caption_vf=caps)
+    assert graph.index(effect) < graph.index("split=")
+    assert graph.index("drawtext=") > graph.rfind("overlay=")
+
+
+def test_non_hud_aspect_filter_builders_unchanged() -> None:
+    """Plain 9:16 / 16:9 / source stay byte-for-byte outside the HUD path."""
+    assert aspect_filter("16:9") == ""
+    assert aspect_filter("9:16") == "crop=ih*9/16:ih:(iw-ih*9/16)/2:0,scale=720:1280"
+    assert aspect_filter("source") == ""
+    # caption_filters itself is aspect-agnostic — no HUD branch leaked in.
+    plain = caption_filters(
+        [{"text": "hi", "start_seconds": 0.0, "end_seconds": 1.0}],
+        clip_start_offset=0.0,
+    )
+    assert "y=h-th-60" in plain
+    assert f"y={HUD_CAPTION_Y}" not in plain or HUD_CAPTION_Y == "h-th-60"
 
 
 # ----- router ----------------------------------------------------------
@@ -200,3 +251,84 @@ def test_apply_zoom_9_16_hud_renders_720x1280(tmp_path, monkeypatch) -> None:
     )
     assert ok, err
     assert _probe_wh(out) == (720, 1280)
+
+
+def _gray_crop_luma_sum(path: Path, *, y: int, h: int, w: int = 720) -> int:
+    """Sum of gray pixel values for one frame crop — cheap caption probe."""
+    raw = subprocess.check_output(
+        [
+            settings.ffmpeg_path,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(path),
+            "-vf",
+            f"crop={w}:{h}:0:{y},format=gray",
+            "-frames:v",
+            "1",
+            "-f",
+            "rawvideo",
+            "-",
+        ]
+    )
+    return sum(raw)
+
+
+def test_apply_caption_9_16_hud_renders_720x1280_and_top_band(tmp_path, monkeypatch) -> None:
+    """Caption at default HUD_CAPTION_Y lands in the top band of 720x1280."""
+    monkeypatch.setattr(settings, "hud_aspect_enabled", True)
+    src = tmp_path / "src_1080p.mp4"
+    _make_lavfi(src, w=1920, h=1080, seconds=1)
+
+    with_cap = tmp_path / "with_cap.mp4"
+    ok, err = apply_caption(
+        str(src),
+        str(with_cap),
+        start=0.0,
+        end=1.0,
+        segments=[
+            {
+                "text": "PLACEHOLDER",
+                "start_seconds": 0.0,
+                "end_seconds": 1.0,
+                "style": {
+                    "fontsize": 48,
+                    "color": "white",
+                    "border_width": 0,
+                    "border_color": "black",
+                },
+            }
+        ],
+        aspect=HUD_ASPECT,
+        game="League of Legends",
+    )
+    assert ok, err
+    assert _probe_wh(with_cap) == (720, 1280)
+
+    # Same HUD layout, no drawtext (whitespace-only segment is skipped).
+    no_cap = tmp_path / "no_cap.mp4"
+    ok, err = apply_caption(
+        str(src),
+        str(no_cap),
+        start=0.0,
+        end=1.0,
+        segments=[{"text": "   ", "start_seconds": 0.0, "end_seconds": 1.0}],
+        aspect=HUD_ASPECT,
+        game="League of Legends",
+    )
+    assert ok, err
+
+    # y=h/8 → 160; fontsize 48 → glyph spans ~160..208. Crop that strip.
+    top_with = _gray_crop_luma_sum(with_cap, y=140, h=90)
+    top_without = _gray_crop_luma_sum(no_cap, y=140, h=90)
+    assert top_with > top_without + 500, (
+        f"expected caption luma in top band; with={top_with} without={top_without}"
+    )
+
+    # Play-area mid strip must NOT pick up the caption (the pre-layout bug).
+    mid_with = _gray_crop_luma_sum(with_cap, y=500, h=90)
+    mid_without = _gray_crop_luma_sum(no_cap, y=500, h=90)
+    assert abs(mid_with - mid_without) < 500, (
+        f"caption leaked into play area; with={mid_with} without={mid_without}"
+    )
