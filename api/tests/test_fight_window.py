@@ -1,8 +1,6 @@
 from ai_video_editor.highlights import _window_anchor, cut_window
 
 
-
-
 def _cands():
     plain = {"source": "riot_api", "event_type": "kill", "metadata": {"anchor_seconds": 100.0}}
     cluster = {
