@@ -33,6 +33,7 @@ grokbot-runner = "ai_video_editor.grokbot.startup:runner"
 grokbot-publish-round = "ai_video_editor.grokbot.publish:main"
 grokbot-note = "ai_video_editor.grokbot.note:main"
 secret-scan = "ai_video_editor.tools.secret_scan:main"
+story-render = "ai_video_editor.story.cli:main"
 
 [dependency-groups]
 dev = [
@@ -45,6 +46,9 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+  "real_ffmpeg: runs the real ffmpeg binary (skipped when it is not on PATH)",
+]
 # Quiet warnings from optional deps (tracing/instrumentation surfaces).
 filterwarnings = [
   "ignore::DeprecationWarning",
