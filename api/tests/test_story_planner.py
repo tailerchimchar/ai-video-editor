@@ -119,3 +119,71 @@ def test_audio_mixed_when_no_mic():
     plan = plan_story(tl, [], None, mic_stream=3)
     assert plan.audio == "mic_over_game"
     assert plan.mic_stream == 3
+
+
+# --- review round 1 fixes ---
+
+
+def test_close_chapter_ignores_fight_far_before_game_end():
+    # A fight 4 min before the nexus is not the close: the chapter is the end alone.
+    tl = _tl([_ev("kill", 1560.0)], game_end_s=1800.0)
+    plan = plan_story(tl, [], None, mic_stream=1)
+    [ch] = plan.chapters
+    assert ch.kind == "close"
+    assert (ch.start_s, ch.end_s) == (1792.0, 1801.0)
+
+
+def test_close_chapter_uses_fight_ending_within_reach():
+    tl = _tl([_ev("kill", 1750.0), _ev("kill", 1760.0)], game_end_s=1800.0)
+    [ch] = plan_story(tl, [], None, mic_stream=1).chapters
+    assert (ch.start_s, ch.end_s) == (1746.0, 1801.0)
+
+
+def test_close_chapter_capped_at_60s():
+    kills = [_ev("kill", 1700.0 + 10 * i) for i in range(10)]  # one fight 1700-1790
+    tl = _tl(kills, game_end_s=1800.0)
+    [ch] = plan_story(tl, [], None, mic_stream=1).chapters
+    assert (ch.start_s, ch.end_s) == (1741.0, 1801.0)
+
+
+def test_over_budget_flagged_when_protected_chapters_exceed_max():
+    tl = _tl([_ev("kill", 146.8), _ev("kill", 1795.0)], game_end_s=1800.0)
+    assert plan_story(tl, [], None, mic_stream=1).over_budget is False
+    plan = plan_story(tl, [], None, mic_stream=1, max_s=5.0)
+    assert plan.over_budget is True
+    assert plan.total_s > 5.0
+
+
+def test_chapter_starting_past_game_end_is_dropped():
+    tl = _tl([_ev("kill", 1795.0)], game_end_s=1800.0)
+    plan = plan_story(tl, [_beat(2100.0, 2110.0, "Double-shifted beat")], None, mic_stream=1)
+    assert [c.kind for c in plan.chapters] == ["close"]
+
+
+def test_chapter_is_union_of_beat_and_overlapping_fights():
+    # Two fights (gap 30 s > 15 s) under one beat that runs past both.
+    tl = _tl([_ev("kill", 1000.0), _ev("kill", 1030.0)])
+    [ch] = plan_story(tl, [_beat(1000.0, 1040.0, "Long skirmish")], None, mic_stream=1).chapters
+    assert (ch.start_s, ch.end_s) == (996.0, 1040.0)
+
+
+def test_title_strips_label_prefix():
+    tl = _tl([_ev("kill", 1000.0)])
+    beats = [_beat(1000.0, 1001.0, "setup: early skirmish forming")]
+    [ch] = plan_story(tl, beats, None, mic_stream=1).chapters
+    assert ch.title == "early skirmish forming"
+    assert ch.beats == ["setup: early skirmish forming"]
+
+
+def test_mic_stream_zero_is_refused():
+    tl = _tl([_ev("kill", 1000.0)])
+    plan = plan_story(tl, [], None, mic_stream=0)
+    assert plan.mic_stream is None
+    assert plan.audio == "mixed"
+
+
+def test_beat_end_before_start_rejected():
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        Beat(t_start=10.0, t_end=5.0, beat="backwards")

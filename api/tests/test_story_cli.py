@@ -117,3 +117,60 @@ def test_main_reports_render_failure(ws, monkeypatch):
 
     monkeypatch.setattr(cli, "render_story", boom)
     assert cli.main(["--asset", "a1", "--round", "r1", "--source", "C:/x.mp4"]) == 1
+
+
+# --- review round 1 fixes ---
+
+
+def test_load_beats_unknown_clip_uses_ref_time(tmp_path, caplog):
+    # Real Jhin round: clip 01 has "file": null, so clips.json cannot place it.
+    _write(tmp_path / "clips.json", [{"file": None, "start_seconds": 137.0, "end_seconds": 165.08}])
+    _write(
+        tmp_path / "gaming-expert.json",
+        [
+            {
+                "clip_ref": "01_kill_2m17s (REJECTED by VLM, window 137.0-165.1)",
+                "story_beats": [
+                    {"t_start": 0.0, "t_end": 8.8, "beat": "setup: early skirmish"},
+                    {"t_start": 8.8, "t_end": 10.8, "beat": "payoff: first kill"},
+                ],
+            }
+        ],
+    )
+    with caplog.at_level("WARNING"):
+        beats = cli.load_beats(tmp_path)
+    assert [(b.t_start, round(b.t_end, 2)) for b in beats] == [(137.0, 145.8), (145.8, 147.8)]
+    assert "unknown" in caplog.text
+
+
+def test_clip_windows_keyed_by_clip_ref_and_file(tmp_path):
+    _write(
+        tmp_path / "clips.json",
+        [
+            {"file": "03_kill_11m22s.mp4", "start_seconds": 682.5, "end_seconds": 697.5},
+            {"clip_ref": "20m00s", "file": None, "start_seconds": 1190.0, "end_seconds": 1210.0},
+        ],
+    )
+    windows = cli._clip_windows(tmp_path)
+    assert windows["11m22s"] == (682.5, 697.5)
+    assert windows["20m00s"] == (1190.0, 1210.0)
+    assert "None" not in windows
+
+
+def test_load_beats_skips_game_story_and_long_beats(tmp_path):
+    _write(
+        tmp_path / "gaming-expert.json",
+        [
+            {"clip_ref": "GAME_STORY", "story_beats": [{"t_start": 0.0, "t_end": 2037.6,
+                                                         "beat": "game: summary"}]},
+            {"clip_ref": "10m00s", "story_beats": [
+                {"t_start": 600.0, "t_end": 700.0, "beat": "too long"},
+                {"t_start": 600.0, "t_end": 610.0, "beat": "kept"}]},
+        ],
+    )  # fmt: skip
+    assert [b.beat for b in cli.load_beats(tmp_path)] == ["kept"]
+
+
+def test_load_lane_malformed_json_returns_none(ws):
+    _write(ws / "riot" / "a1" / "lane.json", {"opponent_champion": "Cait", "minutes": [{"x": 1}]})
+    assert cli.load_lane("a1") is None

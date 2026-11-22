@@ -11,15 +11,24 @@ nor close is dropped first.
 
 from __future__ import annotations
 
+import logging
+import re
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from ..highlights import FIGHT_POST_S, FIGHT_PRE_ALLY_DEATH_S, FIGHT_PRE_S
 from ..league.lane_models import LaneSummary
 from ..league.riot_timeline import Fight, RiotTimeline, TimelineEvent, fights
 
+_log = logging.getLogger(__name__)
+
 TITLE_MAX = 40
+# The close uses the last fight only when it ends this close to the nexus;
+# otherwise the chapter is the end alone. Never longer than STORY_CLOSE_MAX_S.
+STORY_CLOSE_REACH_S = 45.0
+STORY_CLOSE_MAX_S = 60.0
+_LABEL_PREFIX = re.compile(r"^\w+:\s*")
 LANE_BEFORE_S = 14 * 60.0
 LANE_EVENTS = 2
 GAME_END_TAIL_S = 1.0
@@ -33,6 +42,12 @@ class Beat(BaseModel):
     t_end: float
     beat: str
     kind: Literal["lane", "fight", "close", "commentary"] = "fight"
+
+    @model_validator(mode="after")
+    def _ordered(self) -> Beat:
+        if self.t_end < self.t_start:
+            raise ValueError(f"beat ends ({self.t_end}) before it starts ({self.t_start})")
+        return self
 
 
 class Chapter(BaseModel):
@@ -49,10 +64,17 @@ class StoryPlan(BaseModel):
     total_s: float
     mic_stream: int | None
     audio: Literal["mic_over_game", "mixed"]
+    # True when lane + close chapters alone exceed max_s (nothing left to drop).
+    over_budget: bool = False
 
 
 def _title(text: str) -> str:
     return text.strip()[:TITLE_MAX].rstrip()
+
+
+def _beat_title(text: str) -> str:
+    """Drop an expert's "setup:" / "payoff:" label before capping the length."""
+    return _title(_LABEL_PREFIX.sub("", text.strip()) or text)
 
 
 def _opens_with_death(events: list[TimelineEvent]) -> bool:
@@ -67,15 +89,17 @@ def _fight_window(f: Fight) -> tuple[float, float]:
     return f.start_s - _pre(f.events), f.end_s + FIGHT_POST_S
 
 
-def _overlapping_fight(fight_list: list[Fight], start: float, end: float) -> Fight | None:
-    return next((f for f in fight_list if f.start_s <= end and f.end_s >= start), None)
+def _overlapping_fights(fight_list: list[Fight], start: float, end: float) -> list[Fight]:
+    return [f for f in fight_list if f.start_s <= end and f.end_s >= start]
 
 
 def _beat_chapter(b: Beat, fight_list: list[Fight]) -> Chapter:
-    f = _overlapping_fight(fight_list, b.t_start, b.t_end)
-    start, end = _fight_window(f) if f else (b.t_start, b.t_end)
+    """Union of the beat and the padded window of every fight it overlaps."""
+    windows = [(b.t_start, b.t_end)]
+    windows += [_fight_window(f) for f in _overlapping_fights(fight_list, b.t_start, b.t_end)]
+    start, end = min(w[0] for w in windows), max(w[1] for w in windows)
     kind = "fight" if b.kind == "close" else b.kind
-    return Chapter(title=_title(b.beat), start_s=start, end_s=end, kind=kind, beats=[b.beat])
+    return Chapter(title=_beat_title(b.beat), start_s=start, end_s=end, kind=kind, beats=[b.beat])
 
 
 def _lane_chapters(tl: RiotTimeline, lane: LaneSummary | None) -> list[Chapter]:
@@ -103,12 +127,17 @@ def _close_chapter(tl: RiotTimeline, fight_list: list[Fight]) -> Chapter | None:
     if tl.game_end_s is None:
         return None
     end = tl.game_end_s + GAME_END_TAIL_S
-    before = [f for f in fight_list if f.start_s <= tl.game_end_s]
-    if before:
-        f = min(before, key=lambda f: max(0.0, tl.game_end_s - f.end_s))
+    near = [
+        f
+        for f in fight_list
+        if f.start_s <= tl.game_end_s and tl.game_end_s - f.end_s <= STORY_CLOSE_REACH_S
+    ]
+    if near:
+        f = min(near, key=lambda f: max(0.0, tl.game_end_s - f.end_s))
         start = _fight_window(f)[0]
     else:
         start = tl.game_end_s - FIGHT_PRE_ALLY_DEATH_S
+    start = max(start, end - STORY_CLOSE_MAX_S)
     return Chapter(title=CLOSE_TITLE, start_s=start, end_s=end, kind="close")
 
 
@@ -134,11 +163,17 @@ def _merge_overlaps(chapters: list[Chapter]) -> list[Chapter]:
     return out
 
 
-def _clamp(c: Chapter, game_end_s: float | None) -> Chapter:
+def _clamp(c: Chapter, game_end_s: float | None) -> Chapter | None:
+    """Start >= 0, end <= game_end + 1 s; None (logged) when the chapter starts
+    at or past that end, e.g. a beat shifted twice into post-game time."""
     start = round(max(0.0, c.start_s), 2)
     end = c.end_s
-    if game_end_s is not None and game_end_s + GAME_END_TAIL_S > start:
-        end = min(end, game_end_s + GAME_END_TAIL_S)
+    if game_end_s is not None:
+        limit = game_end_s + GAME_END_TAIL_S
+        if start >= limit:
+            _log.warning("story: dropping chapter %r at %.1fs, past game end", c.title, start)
+            return None
+        end = min(end, limit)
     return c.model_copy(update={"start_s": start, "end_s": round(end, 2)})
 
 
@@ -161,6 +196,7 @@ def _trim(chapters: list[Chapter], events: list[TimelineEvent], max_s: float) ->
     while _total(kept) > max_s:
         droppable = [c for c in kept if c.kind not in _PROTECTED]
         if not droppable:
+            _log.warning("story: lane + close alone run %.0fs > max %.0fs", _total(kept), max_s)
             break
         kept.remove(min(droppable, key=lambda c: (_intensity(c, events), c.end_s - c.start_s)))
     return kept
@@ -177,20 +213,26 @@ def plan_story(
     asset_id: str = "",
 ) -> StoryPlan:
     """Chapters in recording order. `target_s` is advisory: chapters are kept
-    while the total stays within `max_s`."""
+    while the total stays within `max_s`; when the protected lane + close
+    chapters alone exceed it, the plan is returned with `over_budget=True`.
+    `mic_stream=0` is refused (stream 0 is the game audio) and falls back to mixed."""
     del target_s  # advisory only; the hard limit is max_s
+    if mic_stream == 0:
+        _log.warning("story: mic stream 0 is the game audio; using mixed audio")
+        mic_stream = None
     fight_list = fights(timeline.events)
     chapters = [_beat_chapter(b, fight_list) for b in beats]
     chapters += _lane_chapters(timeline, lane)
     close = _close_chapter(timeline, fight_list)
     if close is not None:
         chapters.append(close)
-    merged = [_clamp(c, timeline.game_end_s) for c in _merge_overlaps(chapters)]
-    kept = _trim(merged, timeline.events, max_s)
+    clamped = (_clamp(c, timeline.game_end_s) for c in _merge_overlaps(chapters))
+    kept = _trim([c for c in clamped if c is not None], timeline.events, max_s)
     return StoryPlan(
         asset_id=asset_id,
         chapters=kept,
         total_s=_total(kept),
         mic_stream=mic_stream,
         audio="mic_over_game" if mic_stream is not None else "mixed",
+        over_budget=_total(kept) > max_s,
     )

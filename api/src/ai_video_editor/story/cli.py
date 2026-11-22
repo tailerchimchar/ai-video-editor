@@ -18,6 +18,8 @@ import sqlite3
 import sys
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from ..config import settings
 from ..league.lane import lane_summary_path, parse_lane_frames
 from ..league.lane_models import LaneMinute, LaneSummary
@@ -27,6 +29,10 @@ from .planner import Beat, plan_story
 from .render import StoryRenderError, render_story
 
 _log = logging.getLogger(__name__)
+
+# The gaming-expert's whole-game summary entry, not a clip.
+GAME_STORY_REF = "GAME_STORY"
+MAX_BEAT_S = 60.0
 
 
 def _read_json(path: Path):
@@ -46,11 +52,16 @@ def _ref_seconds(ref: str) -> float | None:
 
 def _clip_windows(round_path: Path) -> dict[str, tuple[float, float]]:
     out: dict[str, tuple[float, float]] = {}
+    """Clip windows keyed by normalised `clip_ref` and by normalised file stem
+    (either may be missing; a null file is never keyed as "None")."""
     for c in _read_json(round_path / "clips.json") or []:
         if not isinstance(c, dict) or c.get("start_seconds") is None:
             continue
-        ref = normalize_clip_ref(Path(str(c.get("file", ""))).stem)
-        out[ref] = (float(c["start_seconds"]), float(c.get("end_seconds") or c["start_seconds"]))
+        window = (float(c["start_seconds"]), float(c.get("end_seconds") or c["start_seconds"]))
+        if c.get("clip_ref"):
+            out[normalize_clip_ref(str(c["clip_ref"]))] = window
+        if c.get("file"):
+            out[normalize_clip_ref(Path(str(c["file"])).stem)] = window
     return out
 
 
@@ -58,6 +69,9 @@ def _entry_beats(entry: dict, clips: dict[str, tuple[float, float]]) -> list[Bea
     ref = normalize_clip_ref(str(entry.get("clip_ref", "")))
     clip = clips.get(ref)
     point = _ref_seconds(ref)
+    # Unknown clip (e.g. clips.json has "file": null): the ref's own time
+    # stands in for the clip start.
+    clip_start = clip[0] if clip else point
     out: list[Beat] = []
     for raw in entry.get("story_beats") or []:
         text = raw.get("beat") if isinstance(raw, dict) else raw
@@ -66,8 +80,15 @@ def _entry_beats(entry: dict, clips: dict[str, tuple[float, float]]) -> list[Bea
         if isinstance(raw, dict) and raw.get("t_start") is not None:
             start = float(raw["t_start"])
             end = float(raw.get("t_end", start))
-            if clip and start < clip[0]:  # clip-relative beat
-                start, end = start + clip[0], end + clip[0]
+            if clip is None:
+                _log.warning(
+                    "story beat %r: clip %r unknown in clips.json; placing by ref time %s",
+                    text,
+                    ref,
+                    point,
+                )
+            if clip_start is not None and start < clip_start:  # clip-relative beat
+                start, end = start + clip_start, end + clip_start
         elif clip:
             start, end = clip
         elif point is not None:
@@ -75,7 +96,14 @@ def _entry_beats(entry: dict, clips: dict[str, tuple[float, float]]) -> list[Bea
         else:
             _log.warning("story beat %r has no time and clip %r is unknown", text, ref)
             continue
-        out.append(Beat(t_start=start, t_end=end, beat=text.strip()))
+        if end - start > MAX_BEAT_S:
+            span = end - start
+            _log.warning("story beat %r spans %.0fs > %.0fs; skipped", text, span, MAX_BEAT_S)
+            continue
+        try:
+            out.append(Beat(t_start=start, t_end=end, beat=text.strip()))
+        except ValidationError as e:
+            _log.warning("story beat %r skipped: %s", text, e)
     return out
 
 
@@ -88,7 +116,7 @@ def load_beats(round_path: Path) -> list[Beat]:
     clips = _clip_windows(round_path)
     beats: list[Beat] = []
     for entry in entries or []:
-        if isinstance(entry, dict):
+        if isinstance(entry, dict) and str(entry.get("clip_ref", "")).strip() != GAME_STORY_REF:
             beats += _entry_beats(entry, clips)
     return beats
 
@@ -102,8 +130,12 @@ def load_lane(asset_id: str) -> LaneSummary | None:
     """`lane.json` when present, else parsed from the cached match + timeline."""
     data = _read_json(lane_summary_path(asset_id))
     if isinstance(data, dict):
-        minutes = [LaneMinute(**m) for m in data.get("minutes") or []]
-        return LaneSummary(**{**data, "minutes": minutes})
+        try:
+            minutes = [LaneMinute(**m) for m in data.get("minutes") or []]
+            return LaneSummary(**{**data, "minutes": minutes})
+        except (TypeError, ValueError) as e:  # dataclass fields; ValidationError is a ValueError
+            _log.warning("malformed lane.json for %s: %s", asset_id, e)
+            return None
     cached = load_cached(cache_dir_for(asset_id))
     if cached is None:
         return None
