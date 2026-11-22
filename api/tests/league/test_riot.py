@@ -259,3 +259,173 @@ def test_objective_outside_recording_is_filtered():
     timeline = _tl([_objective(700_000, 5, "BARON_NASHOR")])
     out = _event_candidates(_m(0, 1_000_000, [_me()]), timeline, "ME", 600.0, 4.0)
     assert out == []
+
+
+# ----- Jhin round T1: Retry-After, fight metadata, cache wiring -----
+
+import httpx  # noqa: E402
+import pytest  # noqa: E402
+
+from ai_video_editor.league.candidates import riot as riot_mod  # noqa: E402
+
+
+@pytest.fixture
+def riot_cfg(monkeypatch, tmp_path):
+    from ai_video_editor.config import settings
+
+    monkeypatch.setattr(settings, "riot_api_key", "k")
+    monkeypatch.setattr(settings, "riot_id", "Noodle#NA1")
+    monkeypatch.setattr(settings, "riot_sync_offset_seconds", 0.0)
+    monkeypatch.setattr(settings, "recording_timezone", "UTC")
+    monkeypatch.setattr(settings, "workspace_dir", tmp_path)
+    sleeps: list[float] = []
+    monkeypatch.setattr(riot_mod, "_sleep", sleeps.append)
+    return sleeps
+
+
+def _client(handler):
+    return httpx.Client(transport=httpx.MockTransport(handler))
+
+
+def test_get_honours_retry_after_once(riot_cfg):
+    calls = []
+
+    def handler(req):
+        calls.append(req)
+        if len(calls) == 1:
+            return httpx.Response(429, headers={"Retry-After": "3"})
+        return httpx.Response(200, json={"ok": True})
+
+    with _client(handler) as c:
+        assert riot_mod._get(c, "/x") == {"ok": True}
+    assert riot_cfg == [3.0]
+    assert len(calls) == 2
+
+
+def test_get_second_429_raises_and_caps_sleep(riot_cfg):
+    def handler(req):
+        return httpx.Response(429, headers={"Retry-After": "60"})
+
+    with _client(handler) as c, pytest.raises(httpx.HTTPStatusError):
+        riot_mod._get(c, "/x")
+    assert riot_cfg == [10.0]
+
+
+def test_get_5xx_raises_without_retry(riot_cfg):
+    calls = []
+
+    def handler(req):
+        calls.append(req)
+        return httpx.Response(503)
+
+    with _client(handler) as c, pytest.raises(httpx.HTTPStatusError):
+        riot_mod._get(c, "/x")
+    assert len(calls) == 1 and riot_cfg == []
+
+
+# Recording: filename local (UTC) 2026-11-20 20:00:00, 1000 s long.
+_START_MS = int(datetime(2026, 11, 20, 20, 0, 0, tzinfo=timezone.utc).timestamp() * 1000)
+_ASSET = {
+    "id": "asset-jhin",
+    "game": "League of Legends",
+    "filename": "League of Legends_11-20-2026_20-0-0-000.mp4",
+}
+
+
+def _jhin_match() -> dict:
+    parts = [
+        {"puuid": "ME", "participantId": 1, "championName": "Jhin", "teamId": 100},
+        {"puuid": "A2", "participantId": 2, "championName": "Thresh", "teamId": 100},
+        {"puuid": "E6", "participantId": 6, "championName": "Diana", "teamId": 200},
+    ]
+    return _m(_START_MS, _START_MS + 990_000, parts, mid="NA1_JHIN")
+
+
+def _jhin_timeline() -> dict:
+    return _tl(
+        [
+            {"type": "CHAMPION_KILL", "timestamp": 300_000, "killerId": 6, "victimId": 2},
+            {
+                "type": "CHAMPION_KILL",
+                "timestamp": 310_000,
+                "killerId": 1,
+                "victimId": 6,
+                "assistingParticipantIds": [2],
+            },
+            {"type": "CHAMPION_KILL", "timestamp": 600_000, "killerId": 6, "victimId": 1},
+            {"type": "GAME_END", "timestamp": 990_000, "winningTeam": 100},
+        ]
+    )
+
+
+def _riot_handler(calls: list, match: dict | None = None):
+    match = match or _jhin_match()
+
+    def handler(req):
+        calls.append(req.url.path)
+        p = req.url.path
+        if "by-riot-id" in p:
+            return httpx.Response(200, json={"puuid": "ME"})
+        if p.endswith("/ids"):
+            return httpx.Response(200, json=["NA1_JHIN"])
+        if p.endswith("/timeline"):
+            return httpx.Response(200, json=_jhin_timeline())
+        return httpx.Response(200, json=match)
+
+    return handler
+
+
+def test_detect_attaches_fight_metadata_and_caches(riot_cfg, monkeypatch, tmp_path):
+    calls: list = []
+    monkeypatch.setattr(riot_mod, "_client_factory", lambda: _client(_riot_handler(calls)))
+    rows, status = riot_mod.detect_riot_events(_ASSET, 1000.0)
+    assert status == "ok"
+    kill = next(r for r in rows if r["event_type"] == "kill")
+    md = kill["metadata"]
+    assert md["fight_start_s"] == 300.0
+    assert md["fight_end_s"] == 310.0
+    assert md["game_end_s"] == 990.0
+    assert md["match_confidence"] == "high"
+    death = next(r for r in rows if r["event_type"] == "death")
+    assert death["metadata"]["fight_start_s"] == 600.0
+    assert (tmp_path / "riot" / "asset-jhin" / "meta.json").exists()
+
+    # Second run: served from cache, no lookback calls.
+    calls.clear()
+    rows2, status2 = riot_mod.detect_riot_events(_ASSET, 1000.0)
+    assert status2 == "ok" and calls == []
+    assert [r["metadata"]["fight_start_s"] for r in rows2] == [
+        r["metadata"]["fight_start_s"] for r in rows
+    ]
+
+
+def test_detect_low_confidence_has_no_fight_metadata(riot_cfg, monkeypatch):
+    far = _jhin_match()
+    far["info"]["gameStartTimestamp"] += 3_600_000  # an hour off -> low
+    far["info"]["gameEndTimestamp"] += 3_600_000
+    calls: list = []
+    monkeypatch.setattr(riot_mod, "_client_factory", lambda: _client(_riot_handler(calls, far)))
+    rows, _ = riot_mod.detect_riot_events(_ASSET, 1000.0)
+    assert rows, "low-confidence candidates are still surfaced as before"
+    for r in rows:
+        assert "fight_start_s" not in r["metadata"]
+        assert "match_confidence" not in r["metadata"]
+
+
+def test_detect_rate_limited_twice_returns_empty(riot_cfg, monkeypatch):
+    monkeypatch.setattr(
+        riot_mod, "_client_factory", lambda: _client(lambda req: httpx.Response(429))
+    )
+    assert riot_mod.detect_riot_events(_ASSET, 1000.0) == ([], "rate_limited")
+
+
+def test_fetch_timeline_inputs_feeds_load_or_fetch(riot_cfg, monkeypatch, tmp_path):
+    from ai_video_editor.league.riot_timeline import load_or_fetch
+
+    monkeypatch.setattr(riot_mod, "_client_factory", lambda: _client(_riot_handler([])))
+    tl = load_or_fetch(
+        "asset-jhin",
+        fetch=lambda: riot_mod.fetch_timeline_inputs(_ASSET, 1000.0),
+        cache_dir=tmp_path / "c",
+    )
+    assert tl is not None and tl.match_id == "NA1_JHIN" and tl.confidence == "high"
