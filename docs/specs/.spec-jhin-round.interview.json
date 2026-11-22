@@ -4,7 +4,7 @@
   "status": "approved",
   "capturedAtCommit": "def8b37",
   "sourceIssue": null,
-  "previewUrl": null,
+  "previewUrl": "https://claude.ai/artifact/3HhQm6ANXDyXqAuUSzSUbQ",
   "feedbackRounds": [],
   "redTeamStatus": "completed",
   "coverageMap": {
@@ -18,43 +18,231 @@
     "Cost": "done"
   },
   "qaLog": [
-    {"area": "Pre-analysis", "question": "Analyze the codebase before interviewing?", "answer": "Yes, analyze codebase"},
-    {"area": "Game and output", "question": "Which game and what output?", "answer": "Jhin 8/2/13: shorts", "options": ["Jhin 8/2/13: shorts", "Corki 6/3/9: shorts", "Ezreal 3/4/2: shorts", "No new game: montage from the library"]},
-    {"area": "Riot timeline scope", "question": "How deep do we parse the timeline?", "answer": "Events + your own frames only", "options": ["Events only", "Events + per-minute game state", "Events + your own frames only"]},
-    {"area": "Window rules", "question": "How does the window decide where a fight starts and ends?", "answer": "Chain by gap, pad by role", "options": ["Chain by gap, pad by role", "Chain by gap, no ranker input", "Voice decides the start"]},
-    {"area": "Digest v2", "question": "Who writes the per-clip voice paraphrase?", "answer": "just try haiku paraphrase per clip but if it's bad remember why and we'll try it", "options": ["Haiku paraphrase per clip", "Energy labels only, no model", "Both", "Skip voice this round"]},
-    {"area": "Digest v2", "question": "How are players identified in per-clip events?", "answer": "dude summoner names don't matter. i don't care about IGN's. ign's are NOT pii. but if you think champion + side is good and best, feel free", "options": ["Champion + side", "Role only", "Champion + side + your own stats"]},
-    {"area": "Jev audit", "question": "How much audit?", "answer": "Log every answer, plus a scorecard", "options": ["Log every answer, plus a scorecard", "Log only", "Log, scorecard, and feed it your corrections"]},
-    {"area": "Rendering", "question": "How do the Jhin shorts get rendered in layout B?", "answer": "Per-edit path now, compiler later", "options": ["Per-edit path now, compiler later", "Teach the shorts compiler layout B first", "Per-edit path, no encoder changes"]},
-    {"area": "Scope and process", "question": "How do we ship while the bots are frozen?", "answer": "dude just jira split... you fix all of the code and then do all of the encoding and making a new video... i don't care about high risk pr's. as long as the code doesn't break and we can debug... i care more about moving fast. only thing i'm concerned about is security. if a leaked api key gets out then i'll be nervous", "options": ["Small PRs, I merge low-risk, you merge render", "One branch, you review at the end", "Small PRs, I merge all of it"]},
-    {"area": "Cost", "question": "What's the cost rule for this round?", "answer": "Keep Sonnet ranker, cap $2 per game", "options": ["Haiku ranker, cap $1 per game", "Keep Sonnet ranker, cap $2 per game", "No cap, log everything"]},
-    {"area": "Process", "question": "Ready to write? Red team? Preview?", "answer": "Yes, write it; Yes, attack the spec; Artifact preview"}
+    {
+      "area": "Pre-analysis",
+      "question": "Analyze the codebase before interviewing?",
+      "answer": "Yes, analyze codebase"
+    },
+    {
+      "area": "Game and output",
+      "question": "Which game and what output?",
+      "answer": "Jhin 8/2/13: shorts",
+      "options": [
+        "Jhin 8/2/13: shorts",
+        "Corki 6/3/9: shorts",
+        "Ezreal 3/4/2: shorts",
+        "No new game: montage from the library"
+      ]
+    },
+    {
+      "area": "Riot timeline scope",
+      "question": "How deep do we parse the timeline?",
+      "answer": "Events + your own frames only",
+      "options": [
+        "Events only",
+        "Events + per-minute game state",
+        "Events + your own frames only"
+      ]
+    },
+    {
+      "area": "Window rules",
+      "question": "How does the window decide where a fight starts and ends?",
+      "answer": "Chain by gap, pad by role",
+      "options": [
+        "Chain by gap, pad by role",
+        "Chain by gap, no ranker input",
+        "Voice decides the start"
+      ]
+    },
+    {
+      "area": "Digest v2",
+      "question": "Who writes the per-clip voice paraphrase?",
+      "answer": "just try haiku paraphrase per clip but if it's bad remember why and we'll try it",
+      "options": [
+        "Haiku paraphrase per clip",
+        "Energy labels only, no model",
+        "Both",
+        "Skip voice this round"
+      ]
+    },
+    {
+      "area": "Digest v2",
+      "question": "How are players identified in per-clip events?",
+      "answer": "dude summoner names don't matter. i don't care about IGN's. ign's are NOT pii. but if you think champion + side is good and best, feel free",
+      "options": [
+        "Champion + side",
+        "Role only",
+        "Champion + side + your own stats"
+      ]
+    },
+    {
+      "area": "Jev audit",
+      "question": "How much audit?",
+      "answer": "Log every answer, plus a scorecard",
+      "options": [
+        "Log every answer, plus a scorecard",
+        "Log only",
+        "Log, scorecard, and feed it your corrections"
+      ]
+    },
+    {
+      "area": "Rendering",
+      "question": "How do the Jhin shorts get rendered in layout B?",
+      "answer": "Per-edit path now, compiler later",
+      "options": [
+        "Per-edit path now, compiler later",
+        "Teach the shorts compiler layout B first",
+        "Per-edit path, no encoder changes"
+      ]
+    },
+    {
+      "area": "Scope and process",
+      "question": "How do we ship while the bots are frozen?",
+      "answer": "dude just jira split... you fix all of the code and then do all of the encoding and making a new video... i don't care about high risk pr's. as long as the code doesn't break and we can debug... i care more about moving fast. only thing i'm concerned about is security. if a leaked api key gets out then i'll be nervous",
+      "options": [
+        "Small PRs, I merge low-risk, you merge render",
+        "One branch, you review at the end",
+        "Small PRs, I merge all of it"
+      ]
+    },
+    {
+      "area": "Cost",
+      "question": "What's the cost rule for this round?",
+      "answer": "Keep Sonnet ranker, cap $2 per game",
+      "options": [
+        "Haiku ranker, cap $1 per game",
+        "Keep Sonnet ranker, cap $2 per game",
+        "No cap, log everything"
+      ]
+    },
+    {
+      "area": "Process",
+      "question": "Ready to write? Red team? Preview?",
+      "answer": "Yes, write it; Yes, attack the spec; Artifact preview"
+    }
   ],
   "baseline": {
     "derivedFrom": "Explore agent pre-analysis, 2026-11-22",
     "capturedAtCommit": "def8b37",
     "claims": [
-      {"area": "Riot timeline scope", "claim": "league/candidates/riot.py fetches match timeline (riot.py:339) but only reads frames[].events for the user's kills, special kills, elite monsters; participantFrames unread; nothing cached", "evidence": "api/src/ai_video_editor/league/candidates/riot.py:158-289,321-339"},
-      {"area": "Window rules", "claim": "cut_window short-circuits to _window_anchor when metadata.anchor_seconds exists; window = anchor ± pad, union with ranker suggestion, cap 120 from start", "evidence": "api/src/ai_video_editor/highlights.py:154-226"},
-      {"area": "Window rules", "claim": "No League game-end signal exists in the Outplayed path; only Riot gameEndTimestamp", "evidence": "api/src/ai_video_editor/candidates/overwolf_log.py:52-68; riot.py:123"},
-      {"area": "Digest v2", "claim": "DigestClip.voice is str but gaming-expert story_beats are dicts; voice is empty for all Zeri clips", "evidence": "api/src/ai_video_editor/grokbot/digest.py:28-38,73-78,102,115"},
-      {"area": "Jev audit", "claim": "Jev answers are not persisted; only _log.debug", "evidence": "api/src/ai_video_editor/decisions/backends/jev.py:72"},
-      {"area": "Jev audit", "claim": "Mentor corrections file league_examples.jsonl lives untracked in the runner checkout because the API runs there", "evidence": "C:/Users/taile/source/repos/ai-video-editor-runner/api/src/ai_video_editor/vlm/game_hints/league_examples.jsonl"},
-      {"area": "Rendering", "claim": "9:16_hud is a per-edit aspect gated by hud_aspect_enabled; shorts compiler offers only cropped_hud and blur_fill; shorts.py hardcodes -preset veryfast -crf 20", "evidence": "api/src/ai_video_editor/edits.py:11-29,839; shorts.py:597-603,966-971; config.py:404"},
-      {"area": "Cost", "claim": "reserve_call counts calls per feature per process; no dollar ledger", "evidence": "api/src/ai_video_editor/anthropic_surface.py:42-45"}
+      {
+        "area": "Riot timeline scope",
+        "claim": "league/candidates/riot.py fetches match timeline (riot.py:339) but only reads frames[].events for the user's kills, special kills, elite monsters; participantFrames unread; nothing cached",
+        "evidence": "api/src/ai_video_editor/league/candidates/riot.py:158-289,321-339"
+      },
+      {
+        "area": "Window rules",
+        "claim": "cut_window short-circuits to _window_anchor when metadata.anchor_seconds exists; window = anchor \u00b1 pad, union with ranker suggestion, cap 120 from start",
+        "evidence": "api/src/ai_video_editor/highlights.py:154-226"
+      },
+      {
+        "area": "Window rules",
+        "claim": "No League game-end signal exists in the Outplayed path; only Riot gameEndTimestamp",
+        "evidence": "api/src/ai_video_editor/candidates/overwolf_log.py:52-68; riot.py:123"
+      },
+      {
+        "area": "Digest v2",
+        "claim": "DigestClip.voice is str but gaming-expert story_beats are dicts; voice is empty for all Zeri clips",
+        "evidence": "api/src/ai_video_editor/grokbot/digest.py:28-38,73-78,102,115"
+      },
+      {
+        "area": "Jev audit",
+        "claim": "Jev answers are not persisted; only _log.debug",
+        "evidence": "api/src/ai_video_editor/decisions/backends/jev.py:72"
+      },
+      {
+        "area": "Jev audit",
+        "claim": "Mentor corrections file league_examples.jsonl lives untracked in the runner checkout because the API runs there",
+        "evidence": "C:/Users/taile/source/repos/ai-video-editor-runner/api/src/ai_video_editor/vlm/game_hints/league_examples.jsonl"
+      },
+      {
+        "area": "Rendering",
+        "claim": "9:16_hud is a per-edit aspect gated by hud_aspect_enabled; shorts compiler offers only cropped_hud and blur_fill; shorts.py hardcodes -preset veryfast -crf 20",
+        "evidence": "api/src/ai_video_editor/edits.py:11-29,839; shorts.py:597-603,966-971; config.py:404"
+      },
+      {
+        "area": "Cost",
+        "claim": "reserve_call counts calls per feature per process; no dollar ledger",
+        "evidence": "api/src/ai_video_editor/anthropic_surface.py:42-45"
+      }
     ]
   },
   "driftLedger": [],
   "redTeamFindings": [
-    {"dimension": "Failure modes", "severity": "critical", "title": "A new riot_events strategy would never run", "resolution": "R1: fight bounds in candidate metadata; _window_anchor branches on them", "status": "resolved"},
-    {"dimension": "Contradictory decisions", "severity": "major", "title": "120 s cap trims the payoff", "resolution": "R2: trim from the front", "status": "resolved"},
-    {"dimension": "Failure modes", "severity": "major", "title": "One constant offset cannot handle pauses", "resolution": "R3: piecewise align check; widen pre-pad to 8 s on disagreement", "status": "resolved"},
-    {"dimension": "Data integrity", "severity": "major", "title": "Wrong match pick cached and reused", "resolution": "R4: confidence gate; cache keyed by asset id with confidence", "status": "resolved"},
-    {"dimension": "Operational concerns", "severity": "major", "title": "$2 cap has no dollar ledger", "resolution": "R5: per-asset SQLite ledger from response.usage", "status": "resolved"},
-    {"dimension": "Dependency risks", "severity": "minor", "title": "Correlation refetches 23 calls with no 429 backoff", "resolution": "R6: cache asset→match; honour Retry-After once", "status": "resolved"},
-    {"dimension": "Operational concerns", "severity": "major", "title": "Scorecard depends on an untracked file outside the PR tree", "resolution": "R7: GAME_HINTS_DIR default WORKSPACE/game_hints; migrate", "status": "resolved"},
-    {"dimension": "Security gaps", "severity": "minor", "title": "digest_leaks only catches 12+ char verbatim matches", "resolution": "R8: prompt forbids quotes/slurs/names; min_len 8 on voice", "status": "resolved"},
-    {"dimension": "Wildcard", "severity": "major", "title": "No single owner checks the security hard line across merges", "resolution": "R9: secret-scan before merge and before publish", "status": "resolved"}
+    {
+      "dimension": "Failure modes",
+      "severity": "critical",
+      "title": "A new riot_events strategy would never run",
+      "resolution": "R1: fight bounds in candidate metadata; _window_anchor branches on them",
+      "status": "resolved"
+    },
+    {
+      "dimension": "Contradictory decisions",
+      "severity": "major",
+      "title": "120 s cap trims the payoff",
+      "resolution": "R2: trim from the front",
+      "status": "resolved"
+    },
+    {
+      "dimension": "Failure modes",
+      "severity": "major",
+      "title": "One constant offset cannot handle pauses",
+      "resolution": "R3: piecewise align check; widen pre-pad to 8 s on disagreement",
+      "status": "resolved"
+    },
+    {
+      "dimension": "Data integrity",
+      "severity": "major",
+      "title": "Wrong match pick cached and reused",
+      "resolution": "R4: confidence gate; cache keyed by asset id with confidence",
+      "status": "resolved"
+    },
+    {
+      "dimension": "Operational concerns",
+      "severity": "major",
+      "title": "$2 cap has no dollar ledger",
+      "resolution": "R5: per-asset SQLite ledger from response.usage",
+      "status": "resolved"
+    },
+    {
+      "dimension": "Dependency risks",
+      "severity": "minor",
+      "title": "Correlation refetches 23 calls with no 429 backoff",
+      "resolution": "R6: cache asset\u2192match; honour Retry-After once",
+      "status": "resolved"
+    },
+    {
+      "dimension": "Operational concerns",
+      "severity": "major",
+      "title": "Scorecard depends on an untracked file outside the PR tree",
+      "resolution": "R7: GAME_HINTS_DIR default WORKSPACE/game_hints; migrate",
+      "status": "resolved"
+    },
+    {
+      "dimension": "Security gaps",
+      "severity": "minor",
+      "title": "digest_leaks only catches 12+ char verbatim matches",
+      "resolution": "R8: prompt forbids quotes/slurs/names; min_len 8 on voice",
+      "status": "resolved"
+    },
+    {
+      "dimension": "Wildcard",
+      "severity": "major",
+      "title": "No single owner checks the security hard line across merges",
+      "resolution": "R9: secret-scan before merge and before publish",
+      "status": "resolved"
+    }
   ],
-  "rulingsNote": "Red-team findings were resolved by the Claude session while the owner slept, per D8 (owner: 'you fix all of the code... i care more about moving fast'); each is in the spec's Decisions Log with Source: Red Team and can be overturned."
+  "rulingsNote": "Red-team findings were resolved by the Claude session while the owner slept, per D8 (owner: 'you fix all of the code... i care more about moving fast'); each is in the spec's Decisions Log with Source: Red Team and can be overturned.",
+  "jira": {
+    "epic": "AVE-29",
+    "tasks": [
+      "AVE-30",
+      "AVE-31",
+      "AVE-32",
+      "AVE-33",
+      "AVE-34",
+      "AVE-35"
+    ]
+  }
 }
