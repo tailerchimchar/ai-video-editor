@@ -12,6 +12,7 @@ pipeline.
 import logging
 
 from ..config import settings
+from .audit import log_answers, make_record
 from .backends import BACKENDS
 from .models import (
     Answer,
@@ -55,10 +56,25 @@ def ask_many(items: list[tuple[TypedQuestion, dict]]) -> list[Answer]:
         return []
     name = select_backend()
     try:
-        return BACKENDS[name].many(items)
+        answers = BACKENDS[name].many(items)
     except DecisionError as exc:
         _log.warning("decisions: %s backend failed (%s); using rules", name, exc)
-        return BACKENDS["rules"].many(items)
+        name = "rules"
+        answers = BACKENDS["rules"].many(items)
+    _audit(name, items, answers)
+    return answers
+
+
+def _audit(name: str, items: list[tuple[TypedQuestion, dict]], answers: list[Answer]) -> None:
+    """Log every answer; a logging failure must never change the result."""
+    try:
+        records = [
+            make_record(name, question.prompt, state, answer)
+            for (question, state), answer in zip(items, answers, strict=False)
+        ]
+        log_answers(records)
+    except Exception as exc:
+        _log.warning("decisions: audit failed (%s)", exc)
 
 
 def ask(question: TypedQuestion, state: dict) -> Answer:
