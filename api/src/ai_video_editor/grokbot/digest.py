@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any, Literal, get_args
 from pydantic import BaseModel, Field
 
 from ..bucketing import _FORMAT_QUESTION, _INCLUDE_QUESTION
+from ..commentary import commentary_candidates
 from ..decisions import Answer, ask_many
 from ..league.lane_models import LaneSummary
 from ..refs import normalize_clip_ref
@@ -73,10 +74,22 @@ class DigestClip(BaseModel):
     match_confidence: MatchConfidence = "none"
 
 
+class CommentaryItem(BaseModel):
+    """An owner voice-only moment: story material, never a short on its own."""
+
+    ref: str
+    start_s: float
+    end_s: float
+    voice: str = ""
+    energy: Energy = "unknown"
+    attached_beat: str | None = None
+
+
 class Digest(BaseModel):
     game: str
     round: str
     clips: list[DigestClip]
+    commentary: list[CommentaryItem] = Field(default_factory=list)
     built_at: str
     compilation_id: str | None = None
     compilation_version: str | None = None
@@ -191,6 +204,46 @@ def _energy(energy: Callable[[float, float], str] | None, start_s: float, end_s:
     return label if label in get_args(Energy) else "unknown"
 
 
+def _mm_ss(seconds: float) -> str:
+    return f"{int(seconds // 60)}m{int(seconds % 60):02d}s"
+
+
+def _commentary(
+    owner_rows: list[dict],
+    beats: list[tuple[float, float, str]],
+    transcript_slices: Callable[[float, float], str] | None,
+    paraphrase: Callable[[str], str] | None,
+    energy: Callable[[float, float], str] | None,
+) -> list[CommentaryItem]:
+    """Up to 5 owner voice moments outside the kept clips. `voice` is a
+    paraphrase when one is injected (and does not repeat its own text), else
+    "<energy>: <nearest clip's beat>", else the energy alone."""
+    items: list[CommentaryItem] = []
+    for u in commentary_candidates(owner_rows, [(s, e) for s, e, _ in beats]):
+        start_s, end_s = u["start_s"], u["end_s"]
+        label = _energy(energy, start_s, end_s)
+        near = min(beats, key=lambda b: abs(b[0] - start_s), default=None)
+        beat = near[2] or None if near else None
+        voice = ""
+        if paraphrase is not None:
+            said = paraphrase(u["text"])
+            if said and not _leaks([u["text"]], [_norm(said)], _VOICE_LEAK_MIN_LEN):
+                voice = said
+        if not voice:
+            voice = f"{label}: {beat}" if beat else label
+        items.append(
+            CommentaryItem(
+                ref=_mm_ss(start_s),
+                start_s=start_s,
+                end_s=end_s,
+                voice=voice,
+                energy=label,
+                attached_beat=beat,
+            )
+        )
+    return items
+
+
 def build_digest(
     round_dir: Path,
     *,
@@ -200,6 +253,7 @@ def build_digest(
     paraphrase: Callable[[str], str] | None = None,
     energy: Callable[[float, float], str] | None = None,
     lane: LaneSummary | None = None,
+    owner_rows: list[dict] | None = None,
 ) -> Digest:
     clips = _load(round_dir / "clips.json")
     clips = clips if isinstance(clips, list) else []
@@ -208,6 +262,7 @@ def build_digest(
     viewer = _by_ref(viewer_raw.get("clips") if isinstance(viewer_raw, dict) else None)
 
     out: list[DigestClip] = []
+    beats: list[tuple[float, float, str]] = []  # (start, end, beat) per kept clip
     for clip in clips:
         if (
             not isinstance(clip, dict)
@@ -223,6 +278,7 @@ def build_digest(
         g = gaming.get(key) or {}
         v = viewer.get(key) or {}
         start_s, end_s = clip["start_seconds"], clip["end_seconds"]
+        beats.append((start_s, end_s, _beat_text(g.get("story_beats"))))
         out.append(
             DigestClip(
                 ref=ref,
@@ -252,6 +308,7 @@ def build_digest(
         game=game,
         round=round_dir.name,
         clips=out,
+        commentary=_commentary(owner_rows or [], beats, transcript_slices, paraphrase, energy),
         built_at=datetime.now(timezone.utc).isoformat(),
         lane=lane,
     )

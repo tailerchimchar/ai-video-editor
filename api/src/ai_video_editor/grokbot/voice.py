@@ -98,6 +98,20 @@ def transcript_slice(
     return " ".join(t.strip() for (t,) in rows if t and t.strip())
 
 
+def owner_rows(db_path: Path, video_id: str) -> list[dict]:
+    """Owner mic transcript rows of one asset, in time order (feeds commentary)."""
+    rows = _rows(
+        db_path,
+        "SELECT text, start_seconds, end_seconds, sentiment_score FROM transcripts "
+        "WHERE video_id = ? AND speaker = 'owner' ORDER BY start_seconds",
+        (video_id,),
+    )
+    return [
+        {"text": t, "start_seconds": s, "end_seconds": e, "sentiment_score": a}
+        for t, s, e, a in rows
+    ]
+
+
 def window_sentiment(db_path: Path, video_id: str, start_s: float, end_s: float) -> float | None:
     """Mean `sentiment_score` of transcript rows overlapping the window; None if none."""
     rows = _rows(

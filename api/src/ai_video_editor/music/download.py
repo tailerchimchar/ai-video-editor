@@ -1,4 +1,8 @@
-"""Music download — URL → local mp3 in `WORKSPACE/music/`.
+"""Music download — URL → local mp3 in `WORKSPACE/music/<folder>/`.
+
+`folder` is `royalty_free` (default) or `owner_recs` (label releases that
+must never reach Drive). A flat file left in `WORKSPACE/music/` from before
+the folders existed is still reused, as royalty_free, with a warning.
 
 Open/closed: `_DOWNLOAD_STRATEGIES` maps a source name to a downloader
 function. Adding SoundCloud, Bandcamp, local-upload, etc. = new
@@ -94,9 +98,13 @@ _DOWNLOAD_STRATEGIES: dict[str, Callable[[str, Path], Path]] = {
 # ---------------------------------------------------------------------
 
 
-def _music_dir() -> Path:
-    """`WORKSPACE/music/` — created lazily."""
-    d = settings.workspace_dir / "music"
+def _music_dir(folder: str = "royalty_free") -> Path:
+    """`WORKSPACE/music/<folder>/` — created lazily."""
+    from .library import FOLDERS
+
+    if folder not in FOLDERS:
+        raise ValueError(f"unknown music folder {folder!r}; expected one of {list(FOLDERS)}")
+    d = settings.workspace_dir / "music" / folder
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -106,8 +114,17 @@ def _cache_key(url: str) -> str:
     return hashlib.sha1(url.encode("utf-8")).hexdigest()[:12]
 
 
-def download_music(url: str, *, name: str | None = None) -> Path:
-    """Download `url` (YouTube or local path) to `WORKSPACE/music/`.
+def download_music(
+    url: str,
+    *,
+    name: str | None = None,
+    folder: str = "royalty_free",
+    licence: str | None = None,
+) -> Path:
+    """Download `url` (YouTube or local path) to `WORKSPACE/music/<folder>/`.
+
+    `licence`, when given, is recorded in the folder's licence.json (a track
+    without an entry is invisible to `list_tracks`).
 
     Returns the local mp3 path. Cached: repeat calls with the same URL
     return the existing file without re-downloading.
@@ -118,8 +135,10 @@ def download_music(url: str, *, name: str | None = None) -> Path:
 
     Raises `ValueError` if no strategy matches the URL pattern.
     """
+    if folder == "owner_recs" and not licence:
+        raise ValueError("downloading into owner_recs requires a licence entry")
     stem = name or _cache_key(url)
-    out_path = _music_dir() / f"{stem}.mp3"
+    out_path = _music_dir(folder) / f"{stem}.mp3"
     # Local-path shortcut — no cache to check.
     source = _detect_source(url)
     if source == "local_path":
@@ -128,7 +147,25 @@ def download_music(url: str, *, name: str | None = None) -> Path:
     if out_path.is_file() and out_path.stat().st_size > 0:
         _log.debug("music cache hit: %s", out_path)
         return out_path
+    legacy = settings.workspace_dir / "music" / f"{stem}.mp3"
+    if folder == "royalty_free" and legacy.is_file() and legacy.stat().st_size > 0:
+        _log.warning(
+            "music %s is a legacy flat file with no licence entry; treating as royalty_free",
+            legacy,
+        )
+        return legacy
     strategy = _DOWNLOAD_STRATEGIES.get(source)
     if strategy is None:
         raise ValueError(f"no download strategy for source={source!r}")
-    return strategy(url, out_path)
+    result = strategy(url, out_path)
+    if licence:
+        from .library import record_licence
+
+        record_licence(
+            result,
+            folder,  # type: ignore[arg-type]
+            title=stem,
+            source_url=url,
+            licence=licence,
+        )
+    return result

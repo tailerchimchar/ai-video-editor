@@ -40,7 +40,13 @@ from ..tools.secret_scan import scan_paths
 from .digest import Digest, _ref_from_file, annotate_with_jev, build_digest, digest_leaks
 from .drive import Uploader
 from .paths import inside
-from .voice import energy_label, transcript_slice, voice_paraphrase, window_sentiment
+from .voice import (
+    energy_label,
+    owner_rows,
+    transcript_slice,
+    voice_paraphrase,
+    window_sentiment,
+)
 
 if TYPE_CHECKING:
     from ..league.riot_timeline import RiotTimeline
@@ -50,6 +56,10 @@ logger = logging.getLogger(__name__)
 
 class DigestLeakError(RuntimeError):
     """The digest contains transcript text; nothing was uploaded."""
+
+
+class OwnerRecsMusicError(RuntimeError):
+    """The render's music is an owner recommendation (label release): never uploaded."""
 
 
 class SecretLeakError(RuntimeError):
@@ -78,7 +88,27 @@ def _clip_path(base_dir: Path, file: str) -> Path:
     return p if p.is_absolute() else base_dir / p
 
 
+def _refuse_owner_recs(path: Path) -> None:
+    """Fail closed on music provenance.
+
+    Raises for `music_folder == "owner_recs"`, and for a render under the
+    shorts output tree whose sibling index.json is missing, unreadable, not a
+    dict or lacks `music_folder`. Files elsewhere (highlights clips, per-edit
+    outputs) carry no music and pass.
+    """
+    try:
+        sidecar = json.loads((path.parent / "index.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        sidecar = None
+    if isinstance(sidecar, dict) and sidecar.get("music_folder") == "owner_recs":
+        raise OwnerRecsMusicError(f"refused: owner_recs music ({path.name})")
+    in_shorts = inside(path, settings.workspace_dir / "shorts")
+    if in_shorts and not (isinstance(sidecar, dict) and "music_folder" in sidecar):
+        raise OwnerRecsMusicError(f"refused: unknown music provenance ({path.name})")
+
+
 def _upload(uploader: Uploader | None, path: Path, name: str, subfolder: str) -> str | None:
+    _refuse_owner_recs(path)
     if uploader is None:
         return None
     if not path.is_file():
@@ -159,6 +189,7 @@ def _digest_inputs(
     return {
         "timeline": (load_timeline or _load_timeline)(asset_id, game),
         "transcript_slices": partial(transcript_slice, db, asset_id),
+        "owner_rows": owner_rows(db, asset_id),
         "paraphrase": partial(voice_paraphrase, asset_id=asset_id) if paraphrase else None,
         # Loudness is not wired this round: arousal and laughter tokens only.
         "energy": lambda s, e: energy_label(
@@ -191,6 +222,7 @@ def publish_round(
     transcript_slices: Callable[[float, float], str] | None = None,
     paraphrase: Callable[[str], str] | None = None,
     energy: Callable[[float, float], str] | None = None,
+    owner_rows: list[dict] | None = None,
 ) -> dict:
     """Build, gate, upload and announce one round. Returns the event payload.
 
@@ -198,7 +230,7 @@ def publish_round(
     the decisions backend is "rules"); False skips annotation; a callable
     is used as given. `api` (a runner `ApiClient`) supplies the
     compilation's current plan version when `compilation_id` is given.
-    `timeline`, `transcript_slices`, `paraphrase` and `energy` go to
+    `timeline`, `transcript_slices`, `paraphrase`, `energy` and `owner_rows` go to
     `build_digest` as given (None = that enrichment is off).
     """
     round_dir = Path(round_dir)
@@ -209,6 +241,7 @@ def publish_round(
         transcript_slices=transcript_slices,
         paraphrase=paraphrase,
         energy=energy,
+        owner_rows=owner_rows,
     )
     digest.compilation_id = compilation_id
     digest.asset_id = asset_id
@@ -323,6 +356,9 @@ def main(argv: list[str] | None = None) -> None:
     except SecretLeakError as e:
         print(f"refused: {e}", file=sys.stderr)
         sys.exit(6)
+    except OwnerRecsMusicError as e:
+        print(e, file=sys.stderr)
+        sys.exit(7)
     _flush_webhook()
     print(json.dumps(result, indent=2))
 

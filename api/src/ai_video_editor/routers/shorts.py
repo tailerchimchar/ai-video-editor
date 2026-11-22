@@ -341,6 +341,14 @@ class DownloadMusicBody(BaseModel):
             "Omit for hash-based auto name."
         ),
     )
+    folder: str = Field(
+        default="royalty_free",
+        description="`royalty_free` (default) or `owner_recs` (label releases, never uploaded).",
+    )
+    licence: str | None = Field(
+        default=None,
+        description="Licence text recorded in licence.json (needed to list the track).",
+    )
 
 
 @router.post("/shorts/music")
@@ -352,7 +360,13 @@ async def download_music_endpoint(body: DownloadMusicBody):
     from ..music import download_music
 
     try:
-        path = await asyncio.to_thread(download_music, body.url, name=body.name)
+        path = await asyncio.to_thread(
+            download_music,
+            body.url,
+            name=body.name,
+            folder=body.folder,
+            licence=body.licence,
+        )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:

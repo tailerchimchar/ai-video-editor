@@ -146,3 +146,12 @@ _thumbnails/
 
 # superpowers SDD workspace (ledgers, briefs, reports)
 .superpowers/
+
+# Music: licensed audio never enters git
+*.m4a
+*.opus
+*.flac
+*.wav
+/music/
+/api/music/
+/api/workspace/music/

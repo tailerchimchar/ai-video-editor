@@ -67,10 +67,14 @@ def _ss_values(cmd: list[str]) -> list[float]:
     return [float(cmd[i + 1]) for i, a in enumerate(cmd) if a == "-ss"]
 
 
+def _t_values(cmd: list[str]) -> list[float]:
+    return [float(cmd[i + 1]) for i, a in enumerate(cmd) if a == "-t"]
+
+
 @pytest.fixture
 def anchored_plan() -> ShortPlan:
-    # Anchor 1.2s into the clip; nearest beat is 1.0, so the start moves +0.2s.
-    return _plan(_clip("a.mp4", 10.0, 20.0, 1.2))
+    # Montage end lands at 10.2s; nearest beat is 10.0, so the END moves -0.2s.
+    return _plan(_clip("a.mp4", 10.0, 20.2, 1.2))
 
 
 def test_default_leaves_cut_points_untouched(anchored_plan) -> None:
@@ -81,14 +85,16 @@ def test_false_is_byte_identical_to_default(anchored_plan) -> None:
     assert _render(anchored_plan, snap_to_beats=False) == _render(anchored_plan)
 
 
-def test_true_moves_cut_to_nearest_beat_within_tolerance(anchored_plan) -> None:
-    assert _ss_values(_render(anchored_plan, snap_to_beats=True)) == [pytest.approx(10.2)]
+def test_true_moves_end_to_nearest_beat_and_keeps_start(anchored_plan) -> None:
+    cmd = _render(anchored_plan, snap_to_beats=True)
+    assert _ss_values(cmd) == [10.0]
+    assert _t_values(cmd)[:1] == [pytest.approx(10.0)]
 
 
 def test_true_never_shifts_more_than_tolerance() -> None:
-    plan = _plan(_clip("a.mp4", 10.0, 20.0, 1.2))
+    plan = _plan(_clip("a.mp4", 10.0, 20.2, 1.2))
     with patch.object(shorts, "_SNAP_TOLERANCE_SECONDS", 0.1):
-        assert _ss_values(_render(plan, snap_to_beats=True)) == [pytest.approx(10.1)]
+        assert _t_values(_render(plan, snap_to_beats=True))[:1] == [pytest.approx(10.2)]
 
 
 def test_unanchored_clip_is_left_alone() -> None:
