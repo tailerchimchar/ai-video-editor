@@ -42,3 +42,8 @@ def test_ally_death_at_recording_start_clamps_to_zero():
 def test_outplayed_only_path_unchanged():
     plain = {"source": "riot_api", "event_type": "kill", "metadata": {"anchor_seconds": 100.0}}
     assert _window_anchor(plain, {}, 1000.0) == (97.0, 108.0)
+
+
+def test_game_end_before_padded_start_skips_cap():
+    meta = {"fight_start_s": 200.0, "fight_end_s": 210.0, "game_end_s": 110.0}
+    assert fight_window(meta, None, 1000.0, 120.0) == (196.0, 213.0)

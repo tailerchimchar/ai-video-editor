@@ -186,7 +186,9 @@ def fight_window(
             start = max(start - RANKER_WIDEN_MAX_S, min(start, suggested[0]))
         if suggested[1] is not None:
             end = min(end + RANKER_WIDEN_MAX_S, max(end, suggested[1]))
-    if game_end is not None:  # applied after widening: never run into the Leave Game dialog
+    # Applied after widening: never run into the Leave Game dialog. A game_end
+    # before the padded start is bad data; skip the cap rather than invert.
+    if game_end is not None and float(game_end) + 1.0 > start:
         end = min(end, float(game_end) + 1.0)
     start = max(0.0, start)
     if duration > 0:  # unknown duration (0.0): leave the end unclamped, like _clamp

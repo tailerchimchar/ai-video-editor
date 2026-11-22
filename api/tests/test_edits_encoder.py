@@ -12,6 +12,12 @@ def argv(monkeypatch):
     return seen
 
 
+def _assert_codec_then_opts(cmd):
+    i = cmd.index("-c:v")
+    assert cmd[i + 1] == settings.ffmpeg_video_codec
+    assert cmd[i + 2 : i + 6] == ["-preset", "slow", "-crf", "18"]
+
+
 SEGS = [{"start_seconds": 0.0, "end_seconds": 1.0, "text": "hi"}]
 
 
@@ -19,8 +25,8 @@ SEGS = [{"start_seconds": 0.0, "end_seconds": 1.0, "text": "hi"}]
 def test_edits_use_configured_codec_opts(argv, aspect):
     edits.apply_caption("in.mp4", "out.mp4", start=0.0, end=2.0, segments=SEGS, aspect=aspect)
     cmd = argv[0]
-    assert "slow" in cmd and "18" in cmd
-    assert "veryfast" not in cmd and "20" not in cmd
+    _assert_codec_then_opts(cmd)
+    assert "veryfast" not in cmd and cmd[cmd.index("-crf") + 1] == "18"
 
 
 def test_zoom_and_focus_use_configured_codec_opts(argv):
@@ -40,4 +46,4 @@ def test_zoom_and_focus_use_configured_codec_opts(argv):
     )
     assert len(argv) == 2
     for cmd in argv:
-        assert "slow" in cmd and "18" in cmd
+        _assert_codec_then_opts(cmd)
