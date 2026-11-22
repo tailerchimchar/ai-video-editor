@@ -312,6 +312,7 @@ def _analyzer_env(tmp_path, monkeypatch):
     hints.mkdir()
     (hints / "valorant.md").write_text("<!-- PROMPT_VERSION: 7 -->\n", encoding="utf-8")
     monkeypatch.setattr(hint_files, "HINTS_DIR", hints)
+    monkeypatch.setattr(settings, "game_hints_dir", hints)
     monkeypatch.setattr(settings, "vlm_enabled", True)
     monkeypatch.setattr(settings, "vlm_clip_analyzer_enabled", True)
     clip = _make_clip(tmp_path)

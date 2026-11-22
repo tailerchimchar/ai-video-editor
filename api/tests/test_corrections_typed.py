@@ -23,6 +23,9 @@ def hints_dir(tmp_path, monkeypatch) -> Path:
     (scratch / "league.md").write_text("<!-- PROMPT_VERSION: 1 -->\n# lol\n", encoding="utf-8")
     (scratch / "_default.md").write_text("default hints", encoding="utf-8")
     monkeypatch.setattr(hint_files, "HINTS_DIR", scratch)
+    from ai_video_editor.config import settings
+
+    monkeypatch.setattr(settings, "game_hints_dir", scratch)
     return scratch
 
 

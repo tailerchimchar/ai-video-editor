@@ -315,6 +315,10 @@ class Settings(BaseSettings):
     # Default raised 10 -> 12 with the expert-panel build (it replaced the
     # hard-coded prompts._CORRECTIONS_LIMIT = 10).
     corrections_top_k: int = 12
+    # Where per-game `<game>_examples.jsonl` corrections are read and
+    # written. None -> `<workspace_dir>/game_hints`. The package's
+    # vlm/game_hints/ is only a read-only seed when the file is absent.
+    game_hints_dir: Path | None = None
 
     # --- YouTube Shorts pipeline -----------------------------------------
     # `compile_shorts` reads the highlights folder, buckets clips by
