@@ -246,12 +246,17 @@ def test_unalignable_drop_is_recorded() -> None:
 # --- the emitted plan is executable ------------------------------------
 
 
-def test_emitted_plan_passes_the_real_executor_music_preflight(tmp_path) -> None:
-    from ai_video_editor.music.library import Library
+def test_emitted_plan_passes_the_real_executor_music_preflight(tmp_path, monkeypatch) -> None:
+    from ai_video_editor.config import settings
+    from ai_video_editor.music.library import Library, record_licence
     from ai_video_editor.routers.plan_executor import EditsPlanExecutor
 
-    song = tmp_path / "song.mp3"
+    # Only licensed royalty_free music passes the executor's preflight (R5).
+    monkeypatch.setattr(settings, "workspace_dir", tmp_path / "ws")
+    song = tmp_path / "ws" / "music" / "royalty_free" / "song.mp3"
+    song.parent.mkdir(parents=True)
     song.write_bytes(b"")
+    record_licence(song, "royalty_free", title="s", source_url=None, licence="CC0")
     plan = plan_arc(_six_clips(), _analysis(), "arc_montage", 30.0, song_id=str(song))
     executor = EditsPlanExecutor(tmp_path, "c1", library=Library(path=tmp_path / "lib.json"))
     assert [m for m in executor.preflight(plan) if m.startswith("music")] == []
