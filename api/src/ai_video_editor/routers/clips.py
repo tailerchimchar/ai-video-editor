@@ -429,6 +429,7 @@ async def caption_video_by_path(body: CaptionVideoBody):
         raise HTTPException(400, f"could not probe duration: {src}")
 
     segments = [s.model_dump() for s in body.segments]
+    cap_scale = settings.caption_fontsize_scale_enabled
     ok, err = await asyncio.to_thread(
         apply_caption,
         str(src),
@@ -438,6 +439,7 @@ async def caption_video_by_path(body: CaptionVideoBody):
         segments=segments,
         aspect=body.aspect,
         game=body.game,
+        scale_enabled=cap_scale,
     )
     if not ok:
         raise HTTPException(500, f"caption failed: {(err or '')[:500]}")

@@ -488,16 +488,20 @@ def resolve_caption_style(style: dict | None) -> dict:
     return base
 
 
-def _wrap_text(text: str, fontsize: int, max_width: int, max_lines: int = 2) -> tuple[str, int]:
+def _wrap_text(text: str, fontsize: int, max_width: int, max_lines: int = 3) -> tuple[str, int]:
     """Wrap text onto multiple lines if needed, then shrink if still too wide.
 
     Returns (wrapped_text, final_fontsize). Lines are separated by newlines
     for ffmpeg drawtext's multi-line support.
 
     Pure function: no settings access.
+
+    **Never drops words.** If text cannot fit in max_lines at min fontsize,
+    keeps shrinking below 24px (hard floor 16px). As a last resort, returns
+    all text even if it overflows.
     """
     char_width_ratio = 0.6
-    min_fontsize = 24
+    hard_floor_fontsize = 16
 
     def line_width(line: str, fs: int) -> float:
         return len(line) * fs * char_width_ratio
@@ -527,15 +531,15 @@ def _wrap_text(text: str, fontsize: int, max_width: int, max_lines: int = 2) -> 
         if max_line_width <= max_width:
             return "\n".join(lines), fontsize
 
-    for fs in range(fontsize - 1, min_fontsize - 1, -1):
+    for fs in range(fontsize - 1, hard_floor_fontsize - 1, -1):
         lines = wrap_at_fontsize(fs)
         if len(lines) <= max_lines:
             max_line_width = max(line_width(ln, fs) for ln in lines)
             if max_line_width <= max_width:
                 return "\n".join(lines), fs
 
-    lines = wrap_at_fontsize(min_fontsize)[:max_lines]
-    return "\n".join(lines), min_fontsize
+    lines = wrap_at_fontsize(hard_floor_fontsize)
+    return "\n".join(lines), hard_floor_fontsize
 
 
 def scale_fontsize_for_output(
@@ -554,8 +558,9 @@ def scale_fontsize_for_output(
     When scale_enabled is False, returns (text, fontsize) unchanged.
     When True:
       1. Scale by output_height / 1080 (reference height).
-      2. Wrap onto up to 2 lines if needed.
-      3. Shrink fontsize as a last resort (min 24px).
+      2. Wrap onto up to 3 lines if needed.
+      3. Shrink fontsize as a last resort (min 24px preferred, hard floor 16px).
+      4. Never drops words — keeps all text even if it overflows.
 
     Returns (possibly_wrapped_text, final_fontsize).
     """
@@ -569,7 +574,7 @@ def scale_fontsize_for_output(
     margin_ratio = 0.10
     max_width = int(output_width * (1.0 - 2 * margin_ratio))
 
-    return _wrap_text(text, scaled, max_width, max_lines=2)
+    return _wrap_text(text, scaled, max_width, max_lines=3)
 
 
 def caption_filters(

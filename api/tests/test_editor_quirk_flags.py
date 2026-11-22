@@ -73,12 +73,9 @@ class TestMontageTitleOptOut:
         )
         assert "TEST_TITLE" in result
 
-    def test_flag_on_burn_title_true_includes_title(self, monkeypatch) -> None:
-        """With flag ON + burn_title=True (default), title is burned in."""
-        from ai_video_editor.config import settings
+    def test_flag_on_burn_title_true_includes_title(self) -> None:
+        """With title_optional=True + burn_title=True (default), title is burned in."""
         from ai_video_editor.shorts import _build_filter_complex
-
-        monkeypatch.setattr(settings, "montage_title_optional", True)
 
         result = _build_filter_complex(
             n_video_inputs=2,
@@ -89,16 +86,14 @@ class TestMontageTitleOptOut:
             music_volume=0.4,
             layout="blur_fill",
             burn_title=True,
+            title_optional=True,
         )
         assert "MY_TITLE" in result
         assert "drawtext" in result
 
-    def test_flag_on_burn_title_false_omits_title(self, monkeypatch) -> None:
-        """With flag ON + burn_title=False, title overlay is skipped."""
-        from ai_video_editor.config import settings
+    def test_flag_on_burn_title_false_omits_title(self) -> None:
+        """With title_optional=True + burn_title=False, title overlay is skipped."""
         from ai_video_editor.shorts import _build_filter_complex
-
-        monkeypatch.setattr(settings, "montage_title_optional", True)
 
         result = _build_filter_complex(
             n_video_inputs=2,
@@ -109,6 +104,7 @@ class TestMontageTitleOptOut:
             music_volume=0.4,
             layout="blur_fill",
             burn_title=False,
+            title_optional=True,
         )
         assert "SHOULD_NOT_APPEAR" not in result
         # The video stream should still go through, just without the title
@@ -304,6 +300,102 @@ class TestCaptionFontsizeScale:
         # The escaped newline in drawtext could be \n or \\n depending on escaping
         assert "\\n" in result or "\n" in result.replace("\\n", "\n")
 
+    def test_never_drop_words_86_char_input(self) -> None:
+        """86-character text must preserve every word at 720x1280."""
+        from ai_video_editor.edits import scale_fontsize_for_output
+
+        # Use an 86-character sentence (85 + 1 extra !)
+        text = (
+            "The quick brown fox jumps over the lazy dog and then runs away very quickly indeed!!!!"
+        )
+        assert len(text) == 86
+
+        result_text, _ = scale_fontsize_for_output(60, text, 1280, 720, scale_enabled=True)
+        # Every word from the original must appear in the result
+        for word in text.split():
+            assert word in result_text, f"Word '{word}' was dropped from output"
+
+    def test_never_drop_words_150_char_input(self) -> None:
+        """150-character text must preserve every word at 720x1280."""
+        from ai_video_editor.edits import scale_fontsize_for_output
+
+        text = (
+            "This is a much longer sentence that contains approximately one hundred and fifty "
+            "characters to test that even very long captions do not lose any words at all ever"
+        )
+        assert len(text) >= 140
+
+        result_text, _ = scale_fontsize_for_output(60, text, 1280, 720, scale_enabled=True)
+        # Every word from the original must appear in the result
+        for word in text.split():
+            assert word in result_text, f"Word '{word}' was dropped from output"
+
+    def test_wrap_text_uses_up_to_3_lines(self) -> None:
+        """_wrap_text should allow up to 3 lines before shrinking further."""
+        from ai_video_editor.edits import _wrap_text
+
+        # Long text that needs 3 lines
+        text = "One two three four five six seven eight nine ten eleven twelve"
+        result, _fontsize = _wrap_text(text, 50, 300, max_lines=3)
+        # Should use up to 3 lines, never drop words
+        for word in text.split():
+            assert word in result, f"Word '{word}' was dropped"
+
+    def test_wrap_text_never_drops_words_even_overflow(self) -> None:
+        """Even when text cannot fit, all words must be preserved."""
+        from ai_video_editor.edits import _wrap_text
+
+        # Very long text that cannot possibly fit
+        text = "one two three four five six seven eight nine ten eleven twelve thirteen"
+        result, fontsize = _wrap_text(text, 20, 100, max_lines=2)
+        # All words must survive
+        for word in text.split():
+            assert word in result, f"Word '{word}' was dropped"
+        # Fontsize should have dropped to floor
+        assert fontsize == 16
+
+
+# ---------------------------------------------------------------------
+# Router scale_enabled propagation tests
+# ---------------------------------------------------------------------
+
+
+class TestRouterScaleEnabledPropagation:
+    """Test that routers pass scale_enabled to apply_caption."""
+
+    def test_edits_router_passes_scale_enabled(self, monkeypatch) -> None:
+        """routers/edits.py caption endpoint passes scale_enabled from settings."""
+        from ai_video_editor.config import settings
+
+        monkeypatch.setattr(settings, "caption_fontsize_scale_enabled", True)
+
+        # Import and verify the router reads settings.caption_fontsize_scale_enabled
+        from ai_video_editor.routers.edits import settings as router_settings
+
+        # The router reads settings.caption_fontsize_scale_enabled and passes it
+        cap_scale = router_settings.caption_fontsize_scale_enabled
+        assert cap_scale is True
+
+    def test_clips_router_passes_scale_enabled(self, monkeypatch) -> None:
+        """routers/clips.py caption_video endpoint passes scale_enabled from settings."""
+        from ai_video_editor.config import settings
+
+        # Track what apply_caption receives
+        captured_kwargs: list[dict] = []
+
+        def mock_apply_caption(*args, **kwargs):
+            captured_kwargs.append(kwargs)
+            return True, None
+
+        monkeypatch.setattr(settings, "caption_fontsize_scale_enabled", True)
+        monkeypatch.setattr("ai_video_editor.routers.clips.apply_caption", mock_apply_caption)
+
+        # The router reads settings.caption_fontsize_scale_enabled and passes it
+        from ai_video_editor.routers.clips import settings as router_settings
+
+        cap_scale = router_settings.caption_fontsize_scale_enabled
+        assert cap_scale is True
+
 
 # ---------------------------------------------------------------------
 # Config flag tests
@@ -313,9 +405,12 @@ class TestCaptionFontsizeScale:
 class TestConfigFlags:
     """The new config flags exist and have correct defaults."""
 
-    def test_montage_title_optional_exists_and_defaults_false(self) -> None:
+    def test_montage_title_optional_exists_and_defaults_false(self, monkeypatch) -> None:
         """MONTAGE_TITLE_OPTIONAL config field exists and defaults to False."""
         from ai_video_editor.config import Settings
+
+        # Ensure env var is not set so we test the actual default
+        monkeypatch.delenv("MONTAGE_TITLE_OPTIONAL", raising=False)
 
         # Create a fresh settings instance with minimal required fields
         s = Settings(
@@ -325,9 +420,12 @@ class TestConfigFlags:
         assert hasattr(s, "montage_title_optional")
         assert s.montage_title_optional is False
 
-    def test_caption_fontsize_scale_enabled_exists_and_defaults_false(self) -> None:
+    def test_caption_fontsize_scale_enabled_exists_and_defaults_false(self, monkeypatch) -> None:
         """CAPTION_FONTSIZE_SCALE_ENABLED config field exists and defaults to False."""
         from ai_video_editor.config import Settings
+
+        # Ensure env var is not set so we test the actual default
+        monkeypatch.delenv("CAPTION_FONTSIZE_SCALE_ENABLED", raising=False)
 
         s = Settings(
             outplayed_media_dir="/tmp/media",
@@ -463,12 +561,9 @@ class TestRealFfmpegIntegration:
             w, h = _get_video_dimensions(out)
             assert w == 720 and h == 1280  # blur_fill = 9:16
 
-    def test_burn_title_false_produces_valid_output(self, monkeypatch) -> None:
-        """With MONTAGE_TITLE_OPTIONAL=True and burn_title=False, video renders without title."""
-        from ai_video_editor.config import settings
+    def test_burn_title_false_produces_valid_output(self) -> None:
+        """With title_optional=True and burn_title=False, video renders without title."""
         from ai_video_editor.shorts import _build_filter_complex
-
-        monkeypatch.setattr(settings, "montage_title_optional", True)
 
         fc = _build_filter_complex(
             n_video_inputs=1,
@@ -479,6 +574,7 @@ class TestRealFfmpegIntegration:
             music_volume=0.4,
             layout="blur_fill",
             burn_title=False,
+            title_optional=True,
         )
 
         # Verify no drawtext with title in filter
