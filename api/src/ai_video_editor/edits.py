@@ -23,8 +23,17 @@ from .config import settings
 # Flag-gated vertical aspect that preserves HUD via cropped_hud_9x16.
 HUD_ASPECT = "9:16_hud"
 # Top-band caption y for 9:16_hud — output-frame coords (720x1280) after
-# the HUD layout. Default `h-th-60` lands on the ability bar / minimap.
-HUD_CAPTION_Y = "h/8"
+# the HUD layout. Must clear the LoL scoreline overlay (see
+# `lol_scoreline_overlay_rect`); `h/8` (~160) overlapped it. Default
+# bottom caption `h-th-60` lands on the ability bar / minimap.
+HUD_CAPTION_Y = "40"
+
+# LoL scoreline overlay geometry on the 720x1280 HUD frame (must stay
+# in sync with `_cropped_hud_lol`). Width matches the scale=320 strip;
+# height is the source ROI (422x108) after that scale.
+_HUD_SCORELINE_WIDTH_PX = 320
+_HUD_SCORELINE_HEIGHT_PX = 82  # ROI 422x108 scaled to width 320
+_HUD_SCORELINE_MARGIN_X = 16
 
 # ROI presets are expressed as ffmpeg crop-friendly fractional
 # expressions (iw/ih) so they auto-scale to any source resolution.
@@ -209,19 +218,33 @@ def _hud_game(game: str | None) -> str:
     return "league_of_legends"
 
 
+def lol_scoreline_overlay_rect(
+    zoom_out: float | None = None,
+) -> tuple[int, int, int, int]:
+    """LoL scoreline overlay (x, y, w, h) on the 720x1280 HUD frame.
+
+    Pure helper mirroring `_cropped_hud_lol` geometry so callers (and
+    tests) can reason about caption clearance without duplicating the
+    letterbox math. Position: bottom edge sits just above the sharp
+    play area (in the blurred letterbox). Does not change overlay
+    placement — `_cropped_hud_lol` is the sole writer of those filters.
+    """
+    from .config import settings
+
+    factor = float(zoom_out) if zoom_out is not None else float(settings.shorts_zoom_out)
+    letterbox_top = 640.0 * (1.0 - 1.0 / factor) if factor > 0 else 0.0
+    y = max(4, round(letterbox_top - _HUD_SCORELINE_HEIGHT_PX - 4))
+    x = _SHORT_WIDTH - _HUD_SCORELINE_WIDTH_PX - _HUD_SCORELINE_MARGIN_X
+    return (x, y, _HUD_SCORELINE_WIDTH_PX, _HUD_SCORELINE_HEIGHT_PX)
+
+
 def _cropped_hud_lol(zoom_out: float | None) -> str:
     """LoL variant — scoreline top-right + minimap bottom-right."""
     from .config import settings
 
     factor = float(zoom_out) if zoom_out is not None else float(settings.shorts_zoom_out)
     crop_w = f"ih*9/16*{factor:.4f}"
-
-    # Position the scoreline strip so its bottom edge sits just above
-    # the sharp play area (i.e. IN the blurred letterbox, hugging the
-    # top of the main image).
-    scoreline_height_px = 82  # ROI 422x108 scaled to width 320
-    letterbox_top = 640.0 * (1.0 - 1.0 / factor) if factor > 0 else 0.0
-    scoreline_y = max(4, round(letterbox_top - scoreline_height_px - 4))
+    _, scoreline_y, _, _ = lol_scoreline_overlay_rect(factor)
     return (
         "[0:v]split=4[main][blur_src][sl][mm];"
         f"[main]crop={crop_w}:ih:(iw-{crop_w})/2:0,"
@@ -231,10 +254,10 @@ def _cropped_hud_lol(zoom_out: float | None) -> str:
         "setsar=1[bg];"
         "[bg][fg]overlay=(W-w)/2:(H-h)/2[main_composed];"
         "[sl]crop=iw*0.22:ih*0.10:iw*0.78:ih*0.005,"
-        "scale=320:-1:flags=lanczos,setsar=1[sls];"
+        f"scale={_HUD_SCORELINE_WIDTH_PX}:-1:flags=lanczos,setsar=1[sls];"
         "[mm]crop=ih*0.22:ih*0.22:iw-ih*0.23:ih*0.77,"
         "scale=240:240:flags=lanczos,setsar=1[mms];"
-        f"[main_composed][sls]overlay=W-w-16:{scoreline_y}[step1];"
+        f"[main_composed][sls]overlay=W-w-{_HUD_SCORELINE_MARGIN_X}:{scoreline_y}[step1];"
         "[step1][mms]overlay=W-w-16:H-h-40[out]"
     )
 
