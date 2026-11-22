@@ -20,8 +20,9 @@ from dataclasses import dataclass
 from ..config import settings
 from .calibrate import align_offset
 from .ocr import verify_offset
+from .riot_timeline import SYNC_ONLY
 
-SYNC_ONLY = "sync_only"
+__all__ = ["SYNC_ONLY", "OffsetResult", "calibrate_offset", "sync_only_offset"]
 
 
 @dataclass
