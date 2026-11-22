@@ -19,6 +19,14 @@ class Settings(BaseSettings):
     ffmpeg_video_codec: str = "libx264"
     ffmpeg_video_codec_opts: str = "-preset veryfast -crf 20"
 
+    # After a zoom crop, legacy path always does scale=iw*2:ih*2. That only
+    # lands on 1920x1080 when factor is 2.0 (center ROI on 1080p); other
+    # factors leave oversized frames so fixed-fontsize captions look tiny.
+    # When True, scale the crop to height 1080 (lanczos) instead. Skipped
+    # for 9:16 — aspect_filter already targets 720x1280. Default off keeps
+    # byte-for-byte legacy behavior until Noodlz opts in.
+    zoom_scale_to_1080p_enabled: bool = False
+
     # ffmpeg's drawtext filter needs an explicit font file on Windows
     # (no fontconfig there). Arial is shipped with every Windows install
     # so it's a safe default; override if you want a different look.
