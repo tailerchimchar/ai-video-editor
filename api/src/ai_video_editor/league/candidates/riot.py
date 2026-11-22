@@ -37,6 +37,7 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from ...config import settings
+from ..lane import LANE_FILE, parse_lane_frames, write_lane_summary
 from ..offset import SYNC_ONLY, calibrate_offset, sync_only_offset
 from ..riot_timeline import (
     RiotTimeline,
@@ -368,6 +369,8 @@ def detect_riot_events(asset: dict, duration: float) -> tuple[list[dict], RiotSt
         }
         if cached is None and cdir is not None:
             _write_cache(cdir, chosen, timeline, puuid, corr["confidence"])
+            if corr["confidence"] != "low":
+                _write_lane(cdir, chosen, timeline, puuid)
         result = _kill_candidates(
             chosen,
             timeline,
@@ -432,6 +435,19 @@ def _write_cache(cdir, match: dict, timeline: dict, puuid: str, confidence: str)
         )
     except (OSError, KeyError, TypeError) as e:
         _log.warning("Riot cache write skipped: %s", e)
+
+
+def _write_lane(cdir, match: dict, timeline: dict, puuid: str) -> None:
+    """`lane.json` next to the cache (same sync offset as the cache); a parse
+    or write failure never breaks candidates."""
+    try:
+        summary = parse_lane_frames(
+            match, timeline, owner_puuid=puuid, offset_s=settings.riot_sync_offset_seconds
+        )
+        if summary is not None:
+            write_lane_summary(Path(cdir) / LANE_FILE, summary)
+    except (OSError, KeyError, TypeError, ValueError) as e:
+        _log.warning("lane summary skipped: %s", e)
 
 
 def _safe_parse(match: dict, timeline: dict, puuid: str, confidence: str) -> RiotTimeline | None:

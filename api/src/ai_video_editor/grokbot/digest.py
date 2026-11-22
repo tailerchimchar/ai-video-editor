@@ -173,28 +173,58 @@ def _beat_text(beats: Any) -> str:
     return first if isinstance(first, str) else ""
 
 
+def _window_speech(
+    start_s: float,
+    end_s: float,
+    transcript_slices: Callable[[float, float], str] | None,
+    owner_rows: list[dict],
+) -> list[str]:
+    """Everything said in [start_s, end_s]: the mixed slice plus owner mic rows."""
+    speech = [transcript_slices(start_s, end_s)] if transcript_slices is not None else []
+    speech += [
+        str(r.get("text") or "")
+        for r in owner_rows
+        if (r.get("start_seconds") or 0.0) < end_s and (r.get("end_seconds") or 0.0) > start_s
+    ]
+    return [t for t in speech if t and t.strip()]
+
+
+def _quotes(text: str, speech: list[str]) -> bool:
+    """R8 self-check: `text` repeats an 8-char fragment of `speech`."""
+    return bool(text) and bool(_leaks(speech, [_norm(text)], _VOICE_LEAK_MIN_LEN))
+
+
 def _voice(
     beats: Any,
     start_s: float,
     end_s: float,
     transcript_slices: Callable[[float, float], str] | None,
     paraphrase: Callable[[str], str] | None,
+    *,
+    owner_rows: list[dict] | None = None,
+    label: str = "unknown",
 ) -> str:
-    """Paraphrase of the clip's speech when available, else the story beat.
+    """Paraphrase of the clip's speech when available, else the story beat,
+    else the energy `label`.
 
-    A paraphrase that repeats an 8-char fragment of its own slice is
-    dropped here, so the digest never depends on a round-dir transcript
-    being present for the leak check to see it.
+    A paraphrase or beat that repeats an 8-char fragment of the clip's own
+    speech (mixed slice and owner rows) is dropped here, so the digest never
+    depends on a round-dir transcript being present for the leak check, and
+    a quoting expert does not get the whole publish refused.
     """
-    if transcript_slices is not None and paraphrase is not None:
-        speech = transcript_slices(start_s, end_s)
-        if speech:
-            said = paraphrase(speech)
-            if said and not _leaks([speech], [_norm(said)], _VOICE_LEAK_MIN_LEN):
-                return said
-            if said:
-                logger.warning("digest: paraphrase repeated its transcript; using the beat")
-    return _beat_text(beats)
+    mixed = transcript_slices(start_s, end_s) if transcript_slices is not None else ""
+    speech = [mixed, *_window_speech(start_s, end_s, None, owner_rows or [])]
+    if mixed and paraphrase is not None:
+        said = paraphrase(mixed)
+        if said and not _quotes(said, speech):
+            return said
+        if said:
+            logger.warning("digest: paraphrase repeated its transcript; using the beat")
+    beat = _beat_text(beats)
+    if beat and _quotes(beat, speech):
+        logger.warning("digest: story beat repeats the clip's transcript; using the energy label")
+        return label
+    return beat
 
 
 def _energy(energy: Callable[[float, float], str] | None, start_s: float, end_s: float) -> str:
@@ -217,17 +247,25 @@ def _commentary(
 ) -> list[CommentaryItem]:
     """Up to 5 owner voice moments outside the kept clips. `voice` is a
     paraphrase when one is injected (and does not repeat its own text), else
-    "<energy>: <nearest clip's beat>", else the energy alone."""
+    "<energy>: <nearest clip's beat>", else the energy alone. A beat that
+    repeats 8 chars of the speech in its clip or in the utterance window
+    (mixed and owner rows) is not attached."""
     items: list[CommentaryItem] = []
     for u in commentary_candidates(owner_rows, [(s, e) for s, e, _ in beats]):
         start_s, end_s = u["start_s"], u["end_s"]
         label = _energy(energy, start_s, end_s)
         near = min(beats, key=lambda b: abs(b[0] - start_s), default=None)
         beat = near[2] or None if near else None
+        if beat:
+            speech = [u["text"], *_window_speech(start_s, end_s, transcript_slices, owner_rows)]
+            speech += _window_speech(near[0], near[1], transcript_slices, owner_rows)
+            if _quotes(beat, speech):
+                logger.warning("digest: commentary beat repeats the transcript; not attached")
+                beat = None
         voice = ""
         if paraphrase is not None:
             said = paraphrase(u["text"])
-            if said and not _leaks([u["text"]], [_norm(said)], _VOICE_LEAK_MIN_LEN):
+            if said and not _quotes(said, [u["text"]]):
                 voice = said
         if not voice:
             voice = f"{label}: {beat}" if beat else label
@@ -291,7 +329,15 @@ def build_digest(
                     "format": None,
                 },
                 critic=clip.get("vlm_verdict"),
-                voice=_voice(g.get("story_beats"), start_s, end_s, transcript_slices, paraphrase),
+                voice=_voice(
+                    g.get("story_beats"),
+                    start_s,
+                    end_s,
+                    transcript_slices,
+                    paraphrase,
+                    owner_rows=owner_rows,
+                    label=_energy(energy, start_s, end_s),
+                ),
                 copy=v.get("copy"),
                 # R4: a low-confidence match may be another game; ship none of its events.
                 events=(

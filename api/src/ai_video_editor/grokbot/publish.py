@@ -49,6 +49,7 @@ from .voice import (
 )
 
 if TYPE_CHECKING:
+    from ..league.lane_models import LaneSummary
     from ..league.riot_timeline import RiotTimeline
 
 logger = logging.getLogger(__name__)
@@ -168,9 +169,12 @@ def _digest_inputs(
     load_timeline: Callable[[str, str], RiotTimeline | None] | None = None,
 ) -> dict:
     """The digest's optional inputs for one asset, bound to the local DB."""
+    from ..league.lane import lane_summary_path, load_lane_summary
+
     db = settings.database_path
     return {
         "timeline": (load_timeline or _load_timeline)(asset_id, game),
+        "lane": load_lane_summary(lane_summary_path(asset_id)),
         "transcript_slices": partial(transcript_slice, db, asset_id),
         "owner_rows": owner_rows(db, asset_id),
         "paraphrase": partial(voice_paraphrase, asset_id=asset_id) if paraphrase else None,
@@ -206,6 +210,7 @@ def publish_round(
     paraphrase: Callable[[str], str] | None = None,
     energy: Callable[[float, float], str] | None = None,
     owner_rows: list[dict] | None = None,
+    lane: LaneSummary | None = None,
 ) -> dict:
     """Build, gate, upload and announce one round. Returns the event payload.
 
@@ -213,8 +218,8 @@ def publish_round(
     the decisions backend is "rules"); False skips annotation; a callable
     is used as given. `api` (a runner `ApiClient`) supplies the
     compilation's current plan version when `compilation_id` is given.
-    `timeline`, `transcript_slices`, `paraphrase`, `energy` and `owner_rows` go to
-    `build_digest` as given (None = that enrichment is off).
+    `timeline`, `transcript_slices`, `paraphrase`, `energy`, `owner_rows` and
+    `lane` go to `build_digest` as given (None = that enrichment is off).
     """
     round_dir = Path(round_dir)
     digest: Digest = build_digest(
@@ -225,6 +230,7 @@ def publish_round(
         paraphrase=paraphrase,
         energy=energy,
         owner_rows=owner_rows,
+        lane=lane,
     )
     digest.compilation_id = compilation_id
     digest.asset_id = asset_id

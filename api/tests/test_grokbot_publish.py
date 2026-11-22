@@ -503,3 +503,31 @@ def test_publish_with_asset_id_fills_commentary_from_owner_rows(round_dir, asset
     out = json.loads((round_dir / "digest.json").read_text(encoding="utf-8"))
     assert [c["start_s"] for c in out["commentary"]] == [9000.0]
     assert len(out["clips"]) == 3
+
+
+# ----- I6b: the lane summary reaches the digest -----
+
+
+def test_digest_inputs_load_lane_json_when_present(tmp_path, monkeypatch):
+    from dataclasses import asdict
+
+    from ai_video_editor.league.lane import LaneMinute, LaneSummary, lane_summary_path
+
+    monkeypatch.setattr(settings, "workspace_dir", tmp_path)
+    monkeypatch.setattr(settings, "database_path", str(tmp_path / "none.db"))
+    no_lane = pub._digest_inputs("a1", "league", paraphrase=False, load_timeline=lambda a, g: None)
+    assert no_lane["lane"] is None
+    summary = LaneSummary("Caitlyn", [LaneMinute(10, 80, 4000, 9, 70, 3800, 8)], cs_diff_at_10=10)
+    path = lane_summary_path("a1")
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(asdict(summary)), encoding="utf-8")
+    inputs = pub._digest_inputs("a1", "league", paraphrase=False, load_timeline=lambda a, g: None)
+    assert inputs["lane"] == summary
+
+
+def test_publish_round_puts_lane_on_the_digest(round_dir):
+    from ai_video_editor.league.lane import LaneSummary
+
+    run(round_dir, lane=LaneSummary("Caitlyn", cs_diff_at_10=-4))
+    saved = dg.Digest.model_validate_json((round_dir / "digest.json").read_text())
+    assert saved.lane.opponent_champion == "Caitlyn" and saved.lane.cs_diff_at_10 == -4
