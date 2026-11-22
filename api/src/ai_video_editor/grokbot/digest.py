@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 
 from ..bucketing import _FORMAT_QUESTION, _INCLUDE_QUESTION
 from ..decisions import Answer, ask_many
+from ..refs import normalize_clip_ref
 
 if TYPE_CHECKING:
     from ..league.riot_timeline import OwnerFrame, RiotTimeline
@@ -97,7 +98,7 @@ def _by_ref(entries: Any) -> dict[str, dict]:
     if not isinstance(entries, list):
         return {}
     return {
-        e["clip_ref"]: e
+        normalize_clip_ref(e["clip_ref"]): e
         for e in entries
         if isinstance(e, dict) and isinstance(e.get("clip_ref"), str)
     }
@@ -215,8 +216,9 @@ def build_digest(
             logger.warning("digest: skipping a clips.json entry without file/start/end")
             continue
         ref = _ref_from_file(clip["file"])
-        g = gaming.get(ref) or {}
-        v = viewer.get(ref) or {}
+        key = normalize_clip_ref(ref)
+        g = gaming.get(key) or {}
+        v = viewer.get(key) or {}
         start_s, end_s = clip["start_seconds"], clip["end_seconds"]
         out.append(
             DigestClip(
