@@ -7,9 +7,10 @@ round when the Grok team is on:
 
     uv run grokbot-publish-round <round_dir> --game league [--compilation-id X]
 
-Privacy gate: when the round has a `transcript.json`, a digest that leaks
-any transcript fragment is refused before anything is uploaded. A clip file
-outside WORKSPACE_DIR / OUTPLAYED_MEDIA_DIR is never uploaded.
+Privacy gate: a digest that leaks any fragment of the round's
+`transcript.json` or of the owner mic rows is refused before anything is
+uploaded. A clip file outside WORKSPACE_DIR / OUTPLAYED_MEDIA_DIR is never
+uploaded.
 
 With `--asset-id` the digest also gets the Riot timeline (events, game
 state), a Haiku paraphrase of each clip's transcript slice (`--no-paraphrase`
@@ -239,9 +240,13 @@ def publish_round(
 
     # Round-wide transcript check BEFORE Jev: no voice text that fails it
     # may reach TypeSafe.
+    # The owner mic rows are checked too: transcript.json holds the mixed track only.
     transcript = round_dir / "transcript.json"
-    if transcript.is_file():
-        leaks = digest_leaks(digest, transcript)
+    owner_text = [str(r.get("text") or "") for r in owner_rows or []]
+    if transcript.is_file() or owner_text:
+        leaks = digest_leaks(
+            digest, transcript if transcript.is_file() else None, extra_lines=owner_text
+        )
         if leaks:
             raise DigestLeakError(f"digest leaks {len(leaks)} transcript fragment(s)")
 
@@ -259,7 +264,7 @@ def publish_round(
 
     files = _clip_files(round_dir, clips_dir)
     roots = (settings.workspace_dir, settings.outplayed_media_dir)
-    clip_ids: dict[str, str | None] = {}
+    to_upload: dict[str, Path | None] = {}
     skipped = 0
     for clip in digest.clips:
         path = files.get(clip.ref)
@@ -268,6 +273,13 @@ def publish_round(
             logger.warning("publish: %s is outside the allowed roots, not uploaded", path)
             skipped += 1
             path = None
+        to_upload[clip.ref] = path
+    # Music guard over every file first: a refusal never leaves a partial upload.
+    for path in (*filter(None, to_upload.values()), local):
+        _refuse_owner_recs(path)
+    clip_ids: dict[str, str | None] = {}
+    for clip in digest.clips:
+        path = to_upload[clip.ref]
         clip.drive = _upload(uploader, path, path.name, f"clips/{round_dir.name}") if path else None
         clip_ids[clip.ref] = clip.drive
 

@@ -397,8 +397,18 @@ def _leaks(lines: list[str], haystacks: list[str], min_len: int) -> list[str]:
     return leaks
 
 
-def digest_leaks(digest: Digest, transcript_path: Path, *, min_len: int = 12) -> list[str]:
+def digest_leaks(
+    digest: Digest,
+    transcript_path: Path | None,
+    *,
+    min_len: int = 12,
+    extra_lines: list[str] | tuple[str, ...] = (),
+) -> list[str]:
     """Transcript fragments (>= min_len chars) found in any digest string.
+
+    Lines come from `transcript_path` (the round's mixed transcript, when
+    given) plus `extra_lines` (the owner mic rows, which transcript.json
+    does not hold).
 
     Compares decoded, normalised (casefolded, whitespace-collapsed) text, so
     quotes, backslashes and newlines cannot hide a match. `voice` is held
@@ -406,9 +416,10 @@ def digest_leaks(digest: Digest, transcript_path: Path, *, min_len: int = 12) ->
     the whole round would refuse common phrases. The stricter R8 guard is
     per clip, in `build_digest`, against the clip's own transcript slice.
     """
-    lines = [
-        line.get("text", "") for line in json.loads(transcript_path.read_text(encoding="utf-8"))
-    ]
+    lines = list(extra_lines)
+    if transcript_path is not None:
+        rows = json.loads(transcript_path.read_text(encoding="utf-8"))
+        lines += [line.get("text", "") for line in rows]
     return _leaks(lines, _strings(digest.model_dump()), min_len)
 
 

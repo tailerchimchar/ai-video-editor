@@ -531,3 +531,41 @@ def test_publish_round_puts_lane_on_the_digest(round_dir):
     run(round_dir, lane=LaneSummary("Caitlyn", cs_diff_at_10=-4))
     saved = dg.Digest.model_validate_json((round_dir / "digest.json").read_text())
     assert saved.lane.opponent_champion == "Caitlyn" and saved.lane.cs_diff_at_10 == -4
+
+
+# ----- M5: the music guard runs over every file before any upload -----
+
+
+def test_guard_runs_over_all_files_before_any_upload(round_dir, tmp_path):
+    bad = tmp_path / "shorts" / "x" / "03_kill_30m10s.mp4"
+    bad.parent.mkdir(parents=True)
+    bad.write_bytes(b"mp4")
+    (bad.parent / "index.json").write_text(json.dumps({"music_folder": "owner_recs"}))
+    clips = json.loads((round_dir / "clips.json").read_text())
+    clips[2]["file"] = str(bad)
+    (round_dir / "clips.json").write_text(json.dumps(clips))
+    up = FakeUploader(ids=ids)
+    with pytest.raises(pub.OwnerRecsMusicError):
+        run(round_dir, uploader=up)
+    assert up.uploads == []  # no partial upload of clips 1 and 2
+
+
+# ----- M6: the leak check also covers the owner mic rows -----
+
+
+def test_digest_leaking_owner_speech_is_refused(round_dir):
+    # The owner said the clip-1 beat's words at 5000 s, outside every clip window,
+    # so only the round-wide check can see it.
+    owner = [{"text": "Quillfeather opens with a bold dive", "start_seconds": 5000.0,
+              "end_seconds": 5004.0, "sentiment_score": 0.2}]  # fmt: skip
+    up = FakeUploader(ids=ids)
+    with pytest.raises(pub.DigestLeakError):
+        run(round_dir, uploader=up, owner_rows=owner)
+    assert up.uploads == []
+
+
+def test_digest_leaks_checks_extra_lines_without_transcript():
+    d = dg.Digest(game="lol", round="r", clips=[], built_at="t")
+    d.commentary = [dg.CommentaryItem(ref="1m00s", start_s=60, end_s=61, voice="zorblax kited it")]
+    assert dg.digest_leaks(d, None, extra_lines=["something else entirely"]) == []
+    assert dg.digest_leaks(d, None, extra_lines=["well zorblax kited it"]) == ["zorblax kited it"]
