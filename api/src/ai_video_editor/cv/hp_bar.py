@@ -35,9 +35,11 @@ def read_owner_hp(frame: np.ndarray) -> float | None:
     """Fill fraction (0-1) of the owner's HP bar, or None if grey/absent.
 
     Green (healthy) or red (low) columns count as filled; white (shield) and
-    dark pixels do not. Fill = right-most filled column / bar width.
+    dark pixels do not. Fill = leading filled run from the left / bar width.
     """
     x, y, w, h = HP_BAR_ROI_720P["owner"]
+    if frame.ndim != 3 or frame.shape[0] < y + h or frame.shape[1] < x + w:
+        return None
     roi = frame[y : y + h, x : x + w].astype(np.int16)
     r, g, b = roi[..., 0], roi[..., 1], roi[..., 2]
     green = (g > r + 40) & (g > b + 40)
@@ -45,7 +47,10 @@ def read_owner_hp(frame: np.ndarray) -> float | None:
     filled_cols = (green | red).mean(axis=0) >= 0.5
     if not filled_cols.any():
         return None
-    return float((np.flatnonzero(filled_cols)[-1] + 1) / w)
+    # Contiguous run from the left edge; stray filled columns to the right
+    # (HUD noise, shield edge) must not inflate the reading.
+    run = w if filled_cols.all() else int(np.argmin(filled_cols))
+    return run / w if run else None
 
 
 def scan_hp(video_path: str, *, step_s: float) -> list[tuple[float, float | None]]:
@@ -55,10 +60,14 @@ def scan_hp(video_path: str, *, step_s: float) -> list[tuple[float, float | None
     cmd = [settings.ffmpeg_path, "-v", "error", "-i", video_path, "-vf", vf]
     cmd += ["-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
     try:
-        raw = subprocess.run(cmd, capture_output=True, timeout=1800).stdout
+        proc = subprocess.run(cmd, capture_output=True, timeout=1800)
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         _log.warning("hp_bar: ffmpeg unavailable or timed out")
         return []
+    if proc.returncode != 0:
+        _log.warning("hp_bar: ffmpeg failed (rc=%s) for %s", proc.returncode, video_path)
+        return []
+    raw = proc.stdout
     size = w * h * 3
     out: list[tuple[float, float | None]] = []
     for i in range(len(raw) // size):
@@ -88,19 +97,21 @@ def hp_events(samples: list[tuple[float, float | None]], deaths_s: list[float]) 
         if trough is None:
             i += 1
             continue
-        tj, vj = pts[trough]
-        rec = next(
-            (
-                k
-                for k in range(trough + 1, len(pts))
-                if pts[k][0] - tj <= _TRADE_RECOVER_WINDOW_S and pts[k][1] - vj >= _TRADE_RECOVER
-            ),
-            None,
-        )
+        # Track the running minimum (HP may keep falling after the drop is
+        # first met); recovery is measured from that minimum.
+        rec = None
+        vmin = pts[trough][1]
+        for k in range(trough + 1, len(pts)):
+            if pts[k][0] - pts[trough][0] > _TRADE_RECOVER_WINDOW_S:
+                break
+            vmin = min(vmin, pts[k][1])
+            if pts[k][1] - vmin >= _TRADE_RECOVER:
+                rec = k
+                break
         if rec is None:
             i += 1
             continue
-        events.append({"type": "trade", "start_s": t0, "end_s": pts[rec][0], "min_hp": vj})
+        events.append({"type": "trade", "start_s": t0, "end_s": pts[rec][0], "min_hp": vmin})
         i = rec + 1
 
     in_low = False
@@ -122,6 +133,8 @@ def scan_hp_shadow(
     events = hp_events(samples, deaths_s or [])
     out_dir = settings.workspace_dir / "hp_shadow"
     out_dir.mkdir(parents=True, exist_ok=True)
-    payload = {"asset_id": asset_id, "step_s": settings.hp_reader_step_s, "events": events}
+    payload: dict = {"asset_id": asset_id, "step_s": settings.hp_reader_step_s, "events": events}
+    if not samples:
+        payload["error"] = "no samples (ffmpeg failed or video had no frames)"
     (out_dir / f"{asset_id}.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return events

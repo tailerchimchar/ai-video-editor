@@ -339,9 +339,10 @@ class Settings(BaseSettings):
     decisions_log_dir: Path | None = None
 
     # --- HP-bar reader (cv/hp_bar.py), shadow mode ------------------------
-    # While False, scan_hp_shadow() only logs trade/escape events to
-    # <workspace_dir>/hp_shadow/<asset_id>.json; candidates/service.py adds
-    # nothing. Flip on after the log has been compared against real clips.
+    # Both False: nothing is scanned. hp_reader_shadow=True: the scan runs and
+    # logs trade/escape events to <workspace_dir>/hp_shadow/<asset_id>.json but
+    # creates NO candidates. hp_reader_enabled=True: scan + candidates.
+    hp_reader_shadow: bool = False
     hp_reader_enabled: bool = False
     hp_reader_step_s: float = 1.5
 

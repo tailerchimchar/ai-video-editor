@@ -27,8 +27,12 @@ from .transcript import detect_transcript_keywords
 def hp_rows_if_enabled(asset_id: str, video_path: str, deaths_s: list[float]) -> list[dict]:
     """HP-bar trade/escape events as candidate rows; [] unless the flag is on.
 
-    Shadow mode: when `hp_reader_enabled` is False the scan is not even run.
+    Both flags off: no scan. `hp_reader_shadow` only: scan + JSON log, zero
+    rows. `hp_reader_enabled`: scan + rows.
     """
+    if not (settings.hp_reader_enabled or settings.hp_reader_shadow):
+        return []
+    events = scan_hp_shadow(asset_id, video_path=video_path, deaths_s=deaths_s)
     if not settings.hp_reader_enabled:
         return []
     now = datetime.now(timezone.utc).isoformat()
@@ -44,7 +48,7 @@ def hp_rows_if_enabled(asset_id: str, video_path: str, deaths_s: list[float]) ->
             "metadata": {"min_hp": e["min_hp"]},
             "created_at": now,
         }
-        for e in scan_hp_shadow(asset_id, video_path=video_path, deaths_s=deaths_s)
+        for e in events
     ]
 
 

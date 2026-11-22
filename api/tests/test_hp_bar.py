@@ -37,6 +37,17 @@ def test_low_red_bar():
     assert read_owner_hp(_frame(0.1, colour=RED)) == pytest.approx(0.1, abs=0.05)
 
 
+def test_stray_right_column_does_not_inflate():
+    f = _frame(0.3)
+    x, y, w, h = HP_BAR_ROI_720P["owner"]
+    f[y : y + h, x + w - 2 : x + w] = GREEN
+    assert read_owner_hp(f) == pytest.approx(0.3, abs=0.05)
+
+
+def test_small_frame_is_none():
+    assert read_owner_hp(np.zeros((100, 100, 3), dtype=np.uint8)) is None
+
+
 def test_grey_bar_is_none():
     assert read_owner_hp(_frame(1.0, colour=GREY)) is None
 
@@ -56,6 +67,9 @@ def test_events_trade_and_escape():
     ev = hp_events(samples, deaths_s=[])
     kinds = [e["type"] for e in ev]
     assert kinds.count("trade") == 2
+    trades = [e for e in ev if e["type"] == "trade"]
+    assert trades[0]["min_hp"] == pytest.approx(0.5)
+    assert trades[1]["min_hp"] == pytest.approx(0.12)
     assert kinds.count("escape") == 1
 
 
@@ -79,11 +93,43 @@ def test_shadow_writes_json(tmp_path, monkeypatch):
     assert any(e["type"] == "trade" for e in data["events"])
 
 
+def test_shadow_records_error_when_no_samples(tmp_path, monkeypatch):
+    monkeypatch.setattr(hp_bar.settings, "workspace_dir", tmp_path)
+    monkeypatch.setattr(hp_bar, "scan_hp", lambda p, *, step_s: [])
+    hp_bar.scan_hp_shadow("bad", video_path="x.mp4")
+    data = json.loads((tmp_path / "hp_shadow" / "bad.json").read_text())
+    assert "error" in data and data["events"] == []
+
+
+_TRADE = {"type": "trade", "start_s": 1.0, "end_s": 5.0, "min_hp": 0.4}
+
+
+def test_service_shadow_only_scans_but_no_rows(monkeypatch):
+    from ai_video_editor.candidates import service
+
+    calls = []
+    monkeypatch.setattr(service, "scan_hp_shadow", lambda *a, **k: calls.append(1) or [_TRADE])
+    monkeypatch.setattr(service.settings, "hp_reader_enabled", False)
+    monkeypatch.setattr(service.settings, "hp_reader_shadow", True)
+    assert service.hp_rows_if_enabled("a", "v.mp4", []) == []
+    assert calls == [1]
+
+
+def test_service_enabled_returns_rows(monkeypatch):
+    from ai_video_editor.candidates import service
+
+    monkeypatch.setattr(service, "scan_hp_shadow", lambda *a, **k: [_TRADE])
+    monkeypatch.setattr(service.settings, "hp_reader_enabled", True)
+    rows = service.hp_rows_if_enabled("a", "v.mp4", [])
+    assert len(rows) == 1 and rows[0]["source"] == "hp_bar"
+
+
 def test_service_adds_nothing_when_disabled(monkeypatch):
     from ai_video_editor.candidates import service
 
     called = []
     monkeypatch.setattr(service, "scan_hp_shadow", lambda *a, **k: called.append(1) or [])
     monkeypatch.setattr(service.settings, "hp_reader_enabled", False)
+    monkeypatch.setattr(service.settings, "hp_reader_shadow", False)
     assert service.hp_rows_if_enabled("a", "v.mp4", []) == []
     assert called == []
