@@ -158,7 +158,7 @@ GAME_END_REACH_S = 25.0
 
 def fight_window(
     meta: dict,
-    suggested: tuple[float, float] | None,
+    suggested: tuple[float | None, float | None] | None,
     duration: float,
     cap: float,
 ) -> tuple[float, float]:
@@ -176,13 +176,16 @@ def fight_window(
     if game_end is not None and 0 <= float(game_end) - fight_end <= GAME_END_REACH_S:
         end = float(game_end) + 1.0
     if suggested:
-        start = min(start, suggested[0])
-        end = max(end, suggested[1])
+        if suggested[0] is not None:
+            start = min(start, suggested[0])
+        if suggested[1] is not None:
+            end = max(end, suggested[1])
     start = max(0.0, start)
-    end = min(duration, end)
+    if duration > 0:  # unknown duration (0.0): leave the end unclamped, like _clamp
+        end = min(duration, end)
     if end - start > cap:
         start = end - cap
-    return start, end
+    return round(start, 2), round(end, 2)
 
 
 def _window_anchor(cand: dict, r: dict, duration: float) -> tuple[float, float]:
@@ -204,8 +207,14 @@ def _window_anchor(cand: dict, r: dict, duration: float) -> tuple[float, float]:
     meta = cand.get("metadata") or {}
     if meta.get("fight_start_s") is not None and meta.get("fight_end_s") is not None:
         s0, e0 = r.get("suggested_start_seconds"), r.get("suggested_end_seconds")
-        sug = (float(s0), float(e0)) if s0 is not None and e0 is not None else None
-        return fight_window(meta, sug, duration, float(settings.highlight_max_seconds))
+        sug = (
+            float(s0) if s0 is not None else None,
+            float(e0) if e0 is not None else None,
+        )
+        fs, fe = fight_window(meta, sug, duration, float(settings.highlight_max_seconds))
+        if 0.0 <= fs < fe:
+            return fs, fe
+        # Bounds fell outside the recording: take today's path for this candidate.
     anchor = meta.get("anchor_seconds")
     if anchor is None:
         anchor = (cand.get("start_seconds", 0) + cand.get("end_seconds", 0)) / 2
