@@ -58,6 +58,10 @@ class DigestLeakError(RuntimeError):
     """The digest contains transcript text; nothing was uploaded."""
 
 
+class OwnerRecsMusicError(RuntimeError):
+    """The render's music is an owner recommendation (label release): never uploaded."""
+
+
 class SecretLeakError(RuntimeError):
     """The digest contains a secret-like string; the digest was not uploaded."""
 
@@ -84,7 +88,27 @@ def _clip_path(base_dir: Path, file: str) -> Path:
     return p if p.is_absolute() else base_dir / p
 
 
+def _refuse_owner_recs(path: Path) -> None:
+    """Fail closed on music provenance.
+
+    Raises for `music_folder == "owner_recs"`, and for a render under the
+    shorts output tree whose sibling index.json is missing, unreadable, not a
+    dict or lacks `music_folder`. Files elsewhere (highlights clips, per-edit
+    outputs) carry no music and pass.
+    """
+    try:
+        sidecar = json.loads((path.parent / "index.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        sidecar = None
+    if isinstance(sidecar, dict) and sidecar.get("music_folder") == "owner_recs":
+        raise OwnerRecsMusicError(f"refused: owner_recs music ({path.name})")
+    in_shorts = inside(path, settings.workspace_dir / "shorts")
+    if in_shorts and not (isinstance(sidecar, dict) and "music_folder" in sidecar):
+        raise OwnerRecsMusicError(f"refused: unknown music provenance ({path.name})")
+
+
 def _upload(uploader: Uploader | None, path: Path, name: str, subfolder: str) -> str | None:
+    _refuse_owner_recs(path)
     if uploader is None:
         return None
     if not path.is_file():
@@ -332,6 +356,9 @@ def main(argv: list[str] | None = None) -> None:
     except SecretLeakError as e:
         print(f"refused: {e}", file=sys.stderr)
         sys.exit(6)
+    except OwnerRecsMusicError as e:
+        print(e, file=sys.stderr)
+        sys.exit(7)
     _flush_webhook()
     print(json.dumps(result, indent=2))
 
