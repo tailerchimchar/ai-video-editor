@@ -816,8 +816,8 @@ _SNAP_TOLERANCE_SECONDS = 0.5
 
 
 def _snap_plan_to_beats(plan: ShortPlan, music_path: str) -> ShortPlan:
-    """Shift each clip's start so its payoff lands on the nearest beat
-    (`kill_on_beat`, bounded by `_SNAP_TOLERANCE_SECONDS`).
+    """Move each clip's END onto the nearest beat (`end_on_beat`, bounded by
+    `_SNAP_TOLERANCE_SECONDS`). Starts never move: a fight window keeps its start.
 
     Only clips with an `anchor_offset_seconds` move: for the rest the
     window is a source offset on a pre-cut file and is never trimmed.
@@ -842,7 +842,7 @@ def _snap_plan_to_beats(plan: ShortPlan, music_path: str) -> ShortPlan:
             for c in plan.clips
         ]
         snapped = snap_clips_to_beats(
-            windows, beats, strategy="kill_on_beat", tolerance_seconds=_SNAP_TOLERANCE_SECONDS
+            windows, beats, strategy="end_on_beat", tolerance_seconds=_SNAP_TOLERANCE_SECONDS
         )
     except Exception as exc:
         _log.warning("beat-snap failed (non-fatal, rendering unsnapped): %s", exc)
@@ -852,11 +852,7 @@ def _snap_plan_to_beats(plan: ShortPlan, music_path: str) -> ShortPlan:
         clips=tuple(
             c
             if c.anchor_offset_seconds is None
-            else replace(
-                c,
-                start_seconds=s.new_start_seconds,
-                anchor_offset_seconds=c.anchor_offset_seconds + s.shift_seconds,
-            )
+            else replace(c, end_seconds=s.new_end_seconds)
             for c, s in zip(plan.clips, snapped.clips, strict=True)
         ),
     )
@@ -873,7 +869,7 @@ def render_short(
     beat_flash_source: str | None = None,
     game: str | None = None,
     max_seconds: float | None = None,
-    snap_to_beats: bool = False,
+    snap_to_beats: bool | None = None,
     burn_title: bool = True,
     title_optional: bool = False,
 ) -> tuple[bool, str | None]:
@@ -893,8 +889,9 @@ def render_short(
     stay at the config default. `None` uses the config setting.
 
     `snap_to_beats` (montage with music only) moves each anchored clip's
-    start so its payoff lands on a beat; off by default, which leaves the
-    render exactly as before.
+    END onto a beat (starts never move); None follows
+    `settings.shorts_beat_sync_enabled` (off by default, which leaves the
+    render exactly as before).
 
     `burn_title` (default True) controls whether the title overlay is
     drawn. `title_optional` is resolved from settings at the entry point.
@@ -904,6 +901,8 @@ def render_short(
     """
     if not plan.clips:
         return False, "empty plan"
+    if snap_to_beats is None:
+        snap_to_beats = settings.shorts_beat_sync_enabled
     if snap_to_beats and mode == "montage" and music_path:
         plan = _snap_plan_to_beats(plan, music_path)
 

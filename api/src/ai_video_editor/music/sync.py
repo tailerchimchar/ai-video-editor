@@ -3,6 +3,7 @@
 Open/closed: `_SYNC_STRATEGIES` maps a strategy name to a function.
 Different montage vibes = different strategies:
   - `kill_on_beat`   — each clip's anchor lands on the nearest beat
+  - `end_on_beat`    — each clip's END lands on the nearest beat; starts never move
   - `drop_on_hook`   — reserved (align the first clip's start to a drop)
   - `beat_length_cut`— reserved (trim each clip to an integer number of beats)
 
@@ -153,6 +154,42 @@ def _snap_kill_on_beat(
     return snapped
 
 
+_MIN_CLIP_SECONDS = 0.5
+
+
+def _snap_end_on_beat(
+    clips: list[ClipWindow],
+    beats: tuple[float, ...],
+    *,
+    tolerance_seconds: float,
+) -> list[SnappedClip]:
+    """Move only each clip's END onto the nearest beat of the montage timeline.
+
+    Starts are never touched (a fight window's start is fixed). A clip whose
+    nearest beat is further than `tolerance_seconds` away, or whose snap
+    would leave it shorter than `_MIN_CLIP_SECONDS`, is left unchanged.
+    """
+    snapped: list[SnappedClip] = []
+    montage_t = 0.0
+    for clip in clips:
+        end_in_montage = montage_t + clip.duration
+        target_beat = _nearest_beat(end_in_montage, beats)
+        shift = target_beat - end_in_montage
+        if abs(shift) > tolerance_seconds or clip.duration + shift < _MIN_CLIP_SECONDS:
+            shift = 0.0
+        snapped.append(
+            SnappedClip(
+                original=clip,
+                new_start_seconds=clip.start_seconds,
+                new_end_seconds=clip.end_seconds + shift,
+                shift_seconds=shift,
+                beat_time_seconds=target_beat,
+            )
+        )
+        montage_t += clip.duration + shift
+    return snapped
+
+
 def _snap_beat_length_cut(
     clips: list[ClipWindow],
     beats: tuple[float, ...],
@@ -179,6 +216,7 @@ _SYNC_STRATEGIES: dict[
     Callable[[list[ClipWindow], tuple[float, ...]], list[SnappedClip]],
 ] = {
     "kill_on_beat": _snap_kill_on_beat,
+    "end_on_beat": _snap_end_on_beat,
     "beat_length_cut": _snap_beat_length_cut,
 }
 
