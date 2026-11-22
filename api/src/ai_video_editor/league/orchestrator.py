@@ -18,6 +18,7 @@ summary (`ok | no_match | rate_limited | api_error | disabled`).
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timezone
 
@@ -25,6 +26,41 @@ from ..config import settings
 from .calibrate import align_offset
 from .candidates.riot import detect_riot_events
 from .ocr import verify_offset
+from .riot_timeline import DRIFT_WARN_S, offset_drift_s, pre_pad_for_drift, record_offset
+
+_log = logging.getLogger(__name__)
+
+# Fight bounds from riot.py are in riot.py's recording seconds
+# (game clock + RIOT_SYNC_OFFSET_SECONDS); shifted here to the calibrated offset.
+_FIGHT_KEYS = ("fight_start_s", "fight_end_s", "game_end_s")
+_MIN_KILLS_PER_HALF = 2
+
+
+def _drift_pre_pad(kills: list[float], offset: float, energy, duration: float) -> float | None:
+    """R3 piecewise check: align each half of the recording separately; a
+    disagreement > 3 s widens the pre-pad to 8 s. Returns the widened pad, or
+    None when the halves agree or there is too little signal to judge.
+    Never raises: a drift-check failure must not break candidates."""
+    if energy is None or duration <= 0:
+        return None
+    half = duration / 2.0
+    first = [k for k in kills if k + offset < half]
+    if len(first) < _MIN_KILLS_PER_HALF or len(kills) - len(first) < _MIN_KILLS_PER_HALF:
+        return None
+
+    def align(rng: tuple[float, float]) -> float:
+        lo, hi = rng
+        return align_offset([k for k in kills if lo <= k + offset < hi], energy)[0]
+
+    try:
+        drift = offset_drift_s(align, duration_s=duration)
+    except Exception as e:  # optional diagnostic
+        _log.warning("Riot offset drift check skipped: %s", e)
+        return None
+    if drift <= DRIFT_WARN_S:
+        return None
+    _log.warning("Riot offset drift %.1fs between recording halves; widening pre-pad", drift)
+    return pre_pad_for_drift(drift)
 
 
 def gather_lol_candidates(
@@ -71,6 +107,12 @@ def gather_lol_candidates(
     # Optional manual nudge on top of whatever the calibration produced.
     offset += settings.riot_sync_offset_seconds
     pad = settings.analyze_window_padding
+    fight_shift = offset - settings.riot_sync_offset_seconds
+    wide_pre_pad = _drift_pre_pad(kills, offset, energy, duration)
+    try:
+        record_offset(video_id, offset)
+    except OSError as e:
+        _log.warning("Riot cache offset update skipped: %s", e)
 
     for r in riot_rows:
         gc = r["metadata"]["riot_event_ms"] / 1000.0
@@ -83,6 +125,11 @@ def gather_lol_candidates(
         meta["offset_quality"] = quality
         meta["offset_source"] = offset_source
         meta["ocr_check"] = ocr_check
+        for key in _FIGHT_KEYS:
+            if meta.get(key) is not None:
+                meta[key] = round(meta[key] + fight_shift, 2)
+        if wide_pre_pad is not None:
+            meta["pre_pad_s"] = wide_pre_pad
         rows.append(
             {
                 "id": str(uuid.uuid4()),
