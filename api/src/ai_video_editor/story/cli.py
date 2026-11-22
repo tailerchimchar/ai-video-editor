@@ -1,0 +1,183 @@
+"""`story-render` CLI: wire the panel round, Riot cache, lane and mic files
+into `plan_story` + `render_story`.
+
+    story-render --asset ID --round <panel folder name or path> [--no-cards] [--out DIR]
+
+Inputs: `WORKSPACE/panel/<round>/gaming-expert.json` story beats (and
+`clips.json` to place clip-relative beats), `WORKSPACE/riot/<asset>/`
+{match,timeline,meta,lane}.json, `WORKSPACE/mic/<asset>.json`.
+Output (default): `WORKSPACE/story/<round>/`.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import sqlite3
+import sys
+from pathlib import Path
+
+from ..config import settings
+from ..league.lane import lane_summary_path, parse_lane_frames
+from ..league.lane_models import LaneMinute, LaneSummary
+from ..league.riot_timeline import RiotTimeline, _from_cache, cache_dir_for, load_cached
+from ..refs import normalize_clip_ref
+from .planner import Beat, plan_story
+from .render import StoryRenderError, render_story
+
+_log = logging.getLogger(__name__)
+
+
+def _read_json(path: Path):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _ref_seconds(ref: str) -> float | None:
+    norm = normalize_clip_ref(ref)
+    m, _, rest = norm.partition("m")
+    if not (m.isdigit() and rest.endswith("s") and rest[:-1].isdigit()):
+        return None
+    return float(int(m) * 60 + int(rest[:-1]))
+
+
+def _clip_windows(round_path: Path) -> dict[str, tuple[float, float]]:
+    out: dict[str, tuple[float, float]] = {}
+    for c in _read_json(round_path / "clips.json") or []:
+        if not isinstance(c, dict) or c.get("start_seconds") is None:
+            continue
+        ref = normalize_clip_ref(Path(str(c.get("file", ""))).stem)
+        out[ref] = (float(c["start_seconds"]), float(c.get("end_seconds") or c["start_seconds"]))
+    return out
+
+
+def _entry_beats(entry: dict, clips: dict[str, tuple[float, float]]) -> list[Beat]:
+    ref = normalize_clip_ref(str(entry.get("clip_ref", "")))
+    clip = clips.get(ref)
+    point = _ref_seconds(ref)
+    out: list[Beat] = []
+    for raw in entry.get("story_beats") or []:
+        text = raw.get("beat") if isinstance(raw, dict) else raw
+        if not isinstance(text, str) or not text.strip():
+            continue
+        if isinstance(raw, dict) and raw.get("t_start") is not None:
+            start = float(raw["t_start"])
+            end = float(raw.get("t_end", start))
+            if clip and start < clip[0]:  # clip-relative beat
+                start, end = start + clip[0], end + clip[0]
+        elif clip:
+            start, end = clip
+        elif point is not None:
+            start = end = point
+        else:
+            _log.warning("story beat %r has no time and clip %r is unknown", text, ref)
+            continue
+        out.append(Beat(t_start=start, t_end=end, beat=text.strip()))
+    return out
+
+
+def load_beats(round_path: Path) -> list[Beat]:
+    """Gaming-expert story beats in recording seconds. Beats with `t_start`
+    below their clip's start are clip-relative and shifted by it; beats
+    without times take the clip window (or the ref's time as a point)."""
+    raw = _read_json(round_path / "gaming-expert.json")
+    entries = raw.get("clips") if isinstance(raw, dict) else raw
+    clips = _clip_windows(round_path)
+    beats: list[Beat] = []
+    for entry in entries or []:
+        if isinstance(entry, dict):
+            beats += _entry_beats(entry, clips)
+    return beats
+
+
+def load_timeline(asset_id: str) -> RiotTimeline | None:
+    cached = load_cached(cache_dir_for(asset_id))
+    return _from_cache(cached) if cached is not None else None
+
+
+def load_lane(asset_id: str) -> LaneSummary | None:
+    """`lane.json` when present, else parsed from the cached match + timeline."""
+    data = _read_json(lane_summary_path(asset_id))
+    if isinstance(data, dict):
+        minutes = [LaneMinute(**m) for m in data.get("minutes") or []]
+        return LaneSummary(**{**data, "minutes": minutes})
+    cached = load_cached(cache_dir_for(asset_id))
+    if cached is None:
+        return None
+    match, timeline, meta = cached
+    try:
+        return parse_lane_frames(
+            match,
+            timeline,
+            owner_puuid=meta["owner_puuid"],
+            offset_s=float(meta.get("offset_s") or 0.0),
+        )
+    except (ValueError, KeyError) as e:
+        _log.warning("lane summary unavailable for %s: %s", asset_id, e)
+        return None
+
+
+def load_mic_stream(asset_id: str) -> int | None:
+    """Audio-relative mic stream index (`0:a:<idx>`), None when unknown."""
+    data = _read_json(Path(settings.workspace_dir) / "mic" / f"{asset_id}.json")
+    idx = data.get("stream_index") if isinstance(data, dict) else None
+    return int(idx) if isinstance(idx, int) else None
+
+
+def asset_path(asset_id: str) -> str | None:
+    conn = sqlite3.connect(settings.database_path)
+    try:
+        row = conn.execute("SELECT path FROM assets WHERE id = ?", (asset_id,)).fetchone()
+    except sqlite3.Error:
+        row = None
+    finally:
+        conn.close()
+    return row[0] if row else None
+
+
+def round_dir(round_arg: str) -> Path:
+    p = Path(round_arg)
+    return p if p.is_dir() else Path(settings.workspace_dir) / "panel" / round_arg
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(prog="story-render", description=__doc__.splitlines()[0])
+    ap.add_argument("--asset", required=True, help="asset id")
+    ap.add_argument("--round", required=True, help="panel round folder name or path")
+    ap.add_argument("--no-cards", action="store_true", help="skip chapter title cards")
+    ap.add_argument("--out", help="output dir (default WORKSPACE/story/<round>/)")
+    ap.add_argument("--source", help="source video path (default: the asset's path)")
+    ap.add_argument("--review", action="store_true", help="0.25 fps critic, $5 story budget")
+    args = ap.parse_args(argv)
+
+    rnd = round_dir(args.round)
+    timeline = load_timeline(args.asset)
+    if timeline is None:
+        print(f"no usable Riot timeline cached for asset {args.asset}", file=sys.stderr)
+        return 2
+    src = args.source or asset_path(args.asset)
+    if not src:
+        print(f"asset {args.asset} not found; pass --source", file=sys.stderr)
+        return 2
+    plan = plan_story(
+        timeline,
+        load_beats(rnd),
+        load_lane(args.asset),
+        mic_stream=load_mic_stream(args.asset),
+        asset_id=args.asset,
+    )
+    out_dir = Path(args.out) if args.out else Path(settings.workspace_dir) / "story" / rnd.name
+    try:
+        story = render_story(src, plan, out_dir, cards=not args.no_cards, review=args.review)
+    except StoryRenderError as e:
+        print(f"story render failed: {e}", file=sys.stderr)
+        return 1
+    print(f"{story} ({len(plan.chapters)} chapters, {plan.total_s:.0f}s, audio={plan.audio})")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

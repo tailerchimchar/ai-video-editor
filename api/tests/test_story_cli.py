@@ -1,0 +1,119 @@
+"""story-render CLI: reads the panel round, Riot cache, lane and mic files."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from ai_video_editor.config import settings
+from ai_video_editor.league.riot_timeline import RiotTimeline, TimelineEvent
+from ai_video_editor.story import cli
+
+
+@pytest.fixture
+def ws(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "workspace_dir", tmp_path / "ws")
+    return tmp_path / "ws"
+
+
+def _write(path: Path, data) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+
+def _one_kill_timeline() -> RiotTimeline:
+    kill = TimelineEvent("kill", 1400.0, 1400.0, [], {})
+    return RiotTimeline("NA1_1", "high", 0.0, None, [kill], [])
+
+
+def test_load_beats_recording_seconds_and_refs(tmp_path):
+    _write(
+        tmp_path / "gaming-expert.json",
+        [
+            {
+                "clip_ref": "06_kill_23m05s",
+                "story_beats": [{"t_start": 1395.0, "t_end": 1410.0, "beat": "Neeko pick"}],
+            },
+            {"clip_ref": "30m00s", "story_beats": ["The close"]},
+        ],
+    )
+    beats = cli.load_beats(tmp_path)
+    assert [(b.t_start, b.t_end, b.beat) for b in beats] == [
+        (1395.0, 1410.0, "Neeko pick"),
+        (1800.0, 1800.0, "The close"),
+    ]
+
+
+def test_load_beats_clip_relative_offsets_by_clips_json(tmp_path):
+    _write(tmp_path / "clips.json", [{"file": "01_kill_14m32s.mp4", "start_seconds": 870.0,
+                                      "end_seconds": 892.5}])  # fmt: skip
+    _write(
+        tmp_path / "gaming-expert.json",
+        [
+            {
+                "clip_ref": "14m32s",
+                "story_beats": [{"t_start": 2.0, "t_end": 6.0, "beat": "Dive"}, "Cleanup"],
+            }
+        ],
+    )
+    beats = cli.load_beats(tmp_path)
+    assert [(b.t_start, b.t_end) for b in beats] == [(872.0, 876.0), (870.0, 892.5)]
+
+
+def test_mic_stream_read_from_workspace(ws):
+    assert cli.load_mic_stream("a1") is None
+    _write(ws / "mic" / "a1.json", {"stream_index": 2, "method": "title", "activity": {}})
+    assert cli.load_mic_stream("a1") == 2
+
+
+def test_round_dir_accepts_name_or_path(ws, tmp_path):
+    assert cli.round_dir("2026-11-22_jhin") == ws / "panel" / "2026-11-22_jhin"
+    assert cli.round_dir(str(tmp_path)) == tmp_path
+
+
+def test_main_wires_plan_and_render(ws, tmp_path, monkeypatch):
+    rnd = ws / "panel" / "r1"
+    _write(rnd / "gaming-expert.json", [{"clip_ref": "23m15s", "story_beats": [
+        {"t_start": 1395.0, "t_end": 1410.0, "beat": "Neeko pick"}]}])  # fmt: skip
+    _write(ws / "mic" / "a1.json", {"stream_index": 1})
+    tl = _one_kill_timeline()
+    monkeypatch.setattr(cli, "load_timeline", lambda asset_id: tl)
+    monkeypatch.setattr(cli, "load_lane", lambda asset_id: None)
+    monkeypatch.setattr(cli, "asset_path", lambda asset_id: "C:/src.mp4")
+    seen = {}
+
+    def fake_render(src, plan, out_dir, *, cards, review):
+        seen.update(src=src, plan=plan, out_dir=out_dir, cards=cards, review=review)
+        return Path(out_dir) / "story.mp4"
+
+    monkeypatch.setattr(cli, "render_story", fake_render)
+    assert cli.main(["--asset", "a1", "--round", "r1", "--no-cards"]) == 0
+    assert seen["src"] == "C:/src.mp4"
+    assert seen["out_dir"] == ws / "story" / "r1"
+    assert seen["cards"] is False
+    assert seen["plan"].asset_id == "a1"
+    assert seen["plan"].mic_stream == 1
+    assert [c.title for c in seen["plan"].chapters] == ["Neeko pick"]
+
+
+def test_main_fails_without_timeline(ws, monkeypatch):
+    _write(ws / "panel" / "r1" / "gaming-expert.json", [])
+    monkeypatch.setattr(cli, "load_timeline", lambda asset_id: None)
+    assert cli.main(["--asset", "a1", "--round", "r1"]) == 2
+
+
+def test_main_reports_render_failure(ws, monkeypatch):
+    from ai_video_editor.story.render import StoryRenderError
+
+    _write(ws / "panel" / "r1" / "gaming-expert.json", [])
+    tl = _one_kill_timeline()
+    monkeypatch.setattr(cli, "load_timeline", lambda asset_id: tl)
+    monkeypatch.setattr(cli, "load_lane", lambda asset_id: None)
+
+    def boom(*a, **k):
+        raise StoryRenderError("chapter 1 failed")
+
+    monkeypatch.setattr(cli, "render_story", boom)
+    assert cli.main(["--asset", "a1", "--round", "r1", "--source", "C:/x.mp4"]) == 1
