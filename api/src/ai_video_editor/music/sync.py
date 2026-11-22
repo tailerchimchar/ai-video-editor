@@ -44,6 +44,8 @@ class ClipWindow:
     anchor_offset_seconds: float
     """Where in the clip (relative to start) the highlight moment sits.
     E.g. a 10s clip with the kill at t=6s from clip-start → 6.0."""
+    snappable: bool = True
+    """False for clips whose window must not be trimmed (end_on_beat leaves them as-is)."""
 
     @property
     def duration(self) -> float:
@@ -175,7 +177,11 @@ def _snap_end_on_beat(
         end_in_montage = montage_t + clip.duration
         target_beat = _nearest_beat(end_in_montage, beats)
         shift = target_beat - end_in_montage
-        if abs(shift) > tolerance_seconds or clip.duration + shift < _MIN_CLIP_SECONDS:
+        if (
+            not clip.snappable
+            or abs(shift) > tolerance_seconds
+            or clip.duration + shift < _MIN_CLIP_SECONDS
+        ):
             shift = 0.0
         snapped.append(
             SnappedClip(

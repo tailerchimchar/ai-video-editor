@@ -83,13 +83,22 @@ def _clip_path(base_dir: Path, file: str) -> Path:
 
 
 def _refuse_owner_recs(path: Path) -> None:
-    """Raise when the render's sibling index.json says its music is owner_recs."""
+    """Fail closed on music provenance.
+
+    Raises for `music_folder == "owner_recs"`, and for a render under the
+    shorts output tree whose sibling index.json is missing, unreadable, not a
+    dict or lacks `music_folder`. Files elsewhere (highlights clips, per-edit
+    outputs) carry no music and pass.
+    """
     try:
         sidecar = json.loads((path.parent / "index.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return
+        sidecar = None
     if isinstance(sidecar, dict) and sidecar.get("music_folder") == "owner_recs":
         raise OwnerRecsMusicError(f"refused: owner_recs music ({path.name})")
+    in_shorts = inside(path, settings.workspace_dir / "shorts")
+    if in_shorts and not (isinstance(sidecar, dict) and "music_folder" in sidecar):
+        raise OwnerRecsMusicError(f"refused: unknown music provenance ({path.name})")
 
 
 def _upload(uploader: Uploader | None, path: Path, name: str, subfolder: str) -> str | None:

@@ -50,9 +50,12 @@ def music_root() -> Path:
 
 def read_licences(folder: Folder) -> dict[str, dict]:
     f = music_root() / folder / LICENCE_FILE
+    if not f.is_file():
+        return {}
     try:
         data = json.loads(f.read_text(encoding="utf-8"))
     except (OSError, ValueError):
+        _log.warning("%s is unreadable or not valid JSON; treating as empty", f)
         return {}
     return data if isinstance(data, dict) else {}
 

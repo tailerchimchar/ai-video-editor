@@ -135,6 +135,8 @@ def download_music(
 
     Raises `ValueError` if no strategy matches the URL pattern.
     """
+    if folder == "owner_recs" and not licence:
+        raise ValueError("downloading into owner_recs requires a licence entry")
     stem = name or _cache_key(url)
     out_path = _music_dir(folder) / f"{stem}.mp3"
     # Local-path shortcut — no cache to check.

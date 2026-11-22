@@ -41,6 +41,24 @@ def test_never_shrinks_clip_below_half_second() -> None:
     assert snapped.clips[0].new_end_seconds == 0.8
 
 
+def test_unanchored_clips_do_not_skew_later_snaps() -> None:
+    # Two unanchored 10 s clips stay as they are (timeline 0-20); the anchored
+    # clip then ends at 20.0 + 5.2 = 25.2 -> beat 25.0, measured on the real timeline.
+    plain = ClipWindow(
+        file="u.mp4",
+        start_seconds=0.0,
+        end_seconds=10.0,
+        anchor_offset_seconds=5.0,
+        snappable=False,
+    )
+    snapped = snap_clips_to_beats(
+        [plain, plain, _w(0.0, 5.2)], (10.4, 20.3, 25.0), strategy="end_on_beat"
+    )
+    a, b, c = snapped.clips
+    assert a.new_end_seconds == 10.0 and b.new_end_seconds == 10.0
+    assert c.new_end_seconds == pytest.approx(5.0)
+
+
 # ----- render_short wiring (ffmpeg stubbed) ---------------------------------
 
 _BEATS = tuple(i * 0.5 for i in range(200))

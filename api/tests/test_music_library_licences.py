@@ -89,6 +89,19 @@ def test_legacy_flat_file_is_reused_as_royalty_free_with_warning(
     assert "licence" in caplog.text
 
 
+def test_corrupt_licence_json_warns(music_root, caplog) -> None:
+    _put(music_root, "royalty_free", "a.mp3", _LIC)
+    (music_root / "royalty_free" / "licence.json").write_text("{not json")
+    with caplog.at_level(logging.WARNING):
+        assert library.list_tracks("royalty_free") == []
+    assert "not valid JSON" in caplog.text
+
+
+def test_owner_recs_download_requires_licence(music_root) -> None:
+    with pytest.raises(ValueError, match="licence"):
+        download_music("https://youtu.be/a", folder="owner_recs")
+
+
 def test_unknown_folder_rejected(music_root) -> None:
     with pytest.raises(ValueError, match="folder"):
         download_music("https://youtu.be/a", folder="mine")

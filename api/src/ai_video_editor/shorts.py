@@ -838,6 +838,7 @@ def _snap_plan_to_beats(plan: ShortPlan, music_path: str) -> ShortPlan:
                     if c.anchor_offset_seconds is None
                     else c.anchor_offset_seconds
                 ),
+                snappable=c.anchor_offset_seconds is not None,
             )
             for c in plan.clips
         ]
@@ -1018,6 +1019,24 @@ def _highlights_folder_for_asset(asset: dict, candidates: list[dict]) -> Path | 
     return folder if folder.is_dir() else None
 
 
+def _write_music_provenance(folder: Path, music_path: str | None) -> None:
+    """Record which licensed music folder a render used in `index.json`
+    (`music_folder`: royalty_free / owner_recs / null when no music or an
+    unlicensed path). The Drive guard fails closed without this key."""
+    from .music.library import music_folder_of
+
+    idx = folder / "index.json"
+    try:
+        data = json.loads(idx.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    data["music_path"] = music_path
+    data["music_folder"] = music_folder_of(music_path) if music_path else None
+    idx.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
 def _write_index_md(
     folder: Path,
     *,
@@ -1072,6 +1091,7 @@ def _write_index_md(
             lines.append(f"Error: {r.error}")
         lines.append("")
     (folder / "index.md").write_text("\n".join(lines), encoding="utf-8")
+    _write_music_provenance(folder, music_path)
 
 
 def build_shorts(
@@ -1899,6 +1919,7 @@ def _write_cross_asset_index_md(
         if not result.ok:
             lines.append(f"Error: {result.error}")
     (folder / "index.md").write_text("\n".join(lines), encoding="utf-8")
+    _write_music_provenance(folder, music_path)
 
 
 def preview_cross_asset_montage(
@@ -2612,6 +2633,7 @@ def _write_outplayed_index_md(
         if not result.ok:
             lines.append(f"Error: {result.error}")
     (folder / "index.md").write_text("\n".join(lines), encoding="utf-8")
+    _write_music_provenance(folder, music_path)
 
 
 def preview_outplayed_montage(
@@ -3107,19 +3129,7 @@ def _write_custom_index_md(
         if not result.ok:
             lines.append(f"Error: {result.error}")
     (folder / "index.md").write_text("\n".join(lines), encoding="utf-8")
-
-
-def _write_custom_index_json(folder: Path, *, name: str, music_path: str | None) -> None:
-    """Machine-readable sidecar. `music_folder` lets the Drive guard refuse
-    renders that carry owner_recs (label) music."""
-    from .music.library import music_folder_of
-
-    sidecar = {
-        "name": name,
-        "music_path": music_path,
-        "music_folder": music_folder_of(music_path) if music_path else None,
-    }
-    (folder / "index.json").write_text(json.dumps(sidecar, indent=2), encoding="utf-8")
+    _write_music_provenance(folder, music_path)
 
 
 def build_custom_montage(
@@ -3286,7 +3296,6 @@ def build_custom_montage(
         music_path=resolved_music,
         beat_flash_source=beat_flash_source,
     )
-    _write_custom_index_json(out_folder, name=resolved_name, music_path=resolved_music)
 
     return {
         "ok": True,
