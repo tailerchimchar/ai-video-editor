@@ -28,7 +28,13 @@ _LABEL = re.compile(r"(?i)mic|microphone|voice|input|commentary")
 _RATIO = 1.5  # winner must beat the runner-up by this factor
 _RATE = 16000
 _FRAME = 320  # 20 ms at 16 kHz
-_RMS_THRESHOLD = 500.0  # int16 units
+# Activity is level independent: each stream's frame RMS is divided by that
+# stream's own 95th-percentile RMS, and a frame is active above this fraction
+# (about -12 dB under the stream's loud frames). Below _RMS_FLOOR (int16 units)
+# a stream is digital silence and scores 0.
+_RMS_PERCENTILE = 95
+_REL_THRESHOLD = 0.25
+_RMS_FLOOR = 1.0
 _SAMPLE_SECONDS = 20
 
 
@@ -90,14 +96,16 @@ def speech_activity(
     windows: tuple[float, ...] = (0.1, 0.5, 0.8),
     duration: float | None = None,
 ) -> float:
-    """Fraction of 20 ms frames above an RMS threshold across three 20 s samples.
+    """Fraction of 20 ms frames whose RMS is at least `_REL_THRESHOLD` of the
+    stream's own 95th-percentile frame RMS, across three 20 s samples, so a
+    very quiet mic with speech bursts scores like a loud one.
 
     `duration` (seconds) avoids a second ffprobe call when the caller knows it."""
     if duration is None:
         duration = _probe_duration(path)
     if duration <= 0:
         return 0.0
-    loud = total = 0
+    chunks: list[np.ndarray] = []
     for frac in windows:
         start = max(0.0, min(duration * frac, duration - _SAMPLE_SECONDS))
         cmd = [
@@ -117,17 +125,26 @@ def speech_activity(
         if n == 0:
             continue
         frames = samples[: n * _FRAME].astype(np.float64).reshape(n, _FRAME)
-        rms = np.sqrt((frames**2).mean(axis=1))
-        loud += int((rms > _RMS_THRESHOLD).sum())
-        total += n
-    return loud / total if total else 0.0
+        chunks.append(np.sqrt((frames**2).mean(axis=1)))
+    if not chunks:
+        return 0.0
+    rms = np.concatenate(chunks)
+    ref = float(np.percentile(rms, _RMS_PERCENTILE))
+    if ref < _RMS_FLOOR:
+        return 0.0
+    return float((rms / ref >= _REL_THRESHOLD).mean())
 
 
 def pick_mic_stream(
     streams: list[AudioStream], activity: dict[int, float], *, min_activity: float
 ) -> tuple[int | None, str]:
-    if settings.mic_stream_override is not None:
-        return settings.mic_stream_override, "override"
+    override = settings.mic_stream_override
+    if override is not None:
+        # Never defeats the single-stream fallback; an out-of-range index is
+        # not trusted either (fail closed).
+        if len(streams) >= 2 and 0 <= override < len(streams):
+            return override, "override"
+        return None, "none"
     for s in streams:
         if _LABEL.search(s.title or "") or _LABEL.search(s.handler or ""):
             return s.index, "label"

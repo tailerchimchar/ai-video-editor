@@ -68,6 +68,11 @@ def test_mic_stream_read_from_workspace(ws):
     assert cli.load_mic_stream("a1") == 2
 
 
+def test_mic_stream_none_when_meta_has_error(ws):
+    _write(ws / "mic" / "a1.json", {"stream_index": 2, "method": "override", "error": "x"})
+    assert cli.load_mic_stream("a1") is None
+
+
 def test_round_dir_accepts_name_or_path(ws, tmp_path):
     assert cli.round_dir("2026-11-22_jhin") == ws / "panel" / "2026-11-22_jhin"
     assert cli.round_dir(str(tmp_path)) == tmp_path

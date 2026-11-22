@@ -8,6 +8,7 @@ import subprocess
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from ai_video_editor.candidates import mic_track, transcribe_backends
 from ai_video_editor.candidates.mic_track import AudioStream, pick_mic_stream
@@ -50,8 +51,20 @@ def test_pick_none_single_stream(monkeypatch):
 
 
 def test_override_wins(monkeypatch):
+    monkeypatch.setattr(settings, "mic_stream_override", 2)
+    streams = [_s(0), _s(1, title="Mic"), _s(2)]
+    assert pick_mic_stream(streams, {}, min_activity=0.05) == (2, "override")
+
+
+def test_override_ignored_for_single_stream(monkeypatch):
+    # Review Focus 1: an override must not defeat the single-stream fallback.
+    monkeypatch.setattr(settings, "mic_stream_override", 2)
+    assert pick_mic_stream([_s(0)], {0: 0.4}, min_activity=0.05) == (None, "none")
+
+
+def test_override_out_of_range_is_none(monkeypatch):
     monkeypatch.setattr(settings, "mic_stream_override", 3)
-    assert pick_mic_stream([_s(0), _s(1, title="Mic")], {}, min_activity=0.05) == (3, "override")
+    assert pick_mic_stream([_s(0), _s(1)], {}, min_activity=0.05) == (None, "none")
 
 
 def test_extract_audio_maps_stream(monkeypatch, tmp_path):
@@ -119,6 +132,34 @@ def test_speech_activity_fraction(monkeypatch):
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     assert abs(mic_track.speech_activity("v.mp4", 1) - 0.5) < 0.01
+
+
+def _activity_with(monkeypatch, pcm: bytes) -> float:
+    def fake_run(cmd, **kw):
+        if "-show_entries" in cmd:
+            return SimpleNamespace(
+                returncode=0, stdout=json.dumps({"format": {"duration": "200"}}), stderr=""
+            )
+        return SimpleNamespace(returncode=0, stdout=pcm, stderr=b"")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    return mic_track.speech_activity("v.mp4", 1)
+
+
+def test_speech_activity_is_level_independent(monkeypatch):
+    """A -70 dB mic with speech bursts scores like a loud one: each stream is
+    normalised by its own 95th-percentile frame RMS."""
+    rng = np.random.default_rng(0)
+    burst = rng.normal(0, 8000, 16000)
+    wave = np.concatenate([burst, np.zeros(16000), burst * 0.6, np.zeros(16000)])
+    loud = _activity_with(monkeypatch, wave.astype(np.int16).tobytes())
+    quiet = _activity_with(monkeypatch, (wave * 0.001).astype(np.int16).tobytes())
+    assert loud == pytest.approx(0.5, abs=0.02)
+    assert quiet == pytest.approx(loud, abs=0.02)
+
+
+def test_speech_activity_digital_silence_is_zero(monkeypatch):
+    assert _activity_with(monkeypatch, np.zeros(32000, dtype=np.int16).tobytes()) == 0.0
 
 
 def test_transcript_slice_filters_speaker(tmp_path):

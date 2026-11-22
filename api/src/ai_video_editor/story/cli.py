@@ -157,9 +157,12 @@ def load_lane(asset_id: str) -> LaneSummary | None:
 
 
 def load_mic_stream(asset_id: str) -> int | None:
-    """Audio-relative mic stream index (`0:a:<idx>`), None when unknown."""
+    """Audio-relative mic stream index (`0:a:<idx>`), None when unknown or
+    when the mic pass recorded an `error` (its pick was never transcribed)."""
     data = _read_json(Path(settings.workspace_dir) / "mic" / f"{asset_id}.json")
-    idx = data.get("stream_index") if isinstance(data, dict) else None
+    if not isinstance(data, dict) or data.get("error"):
+        return None
+    idx = data.get("stream_index")
     return int(idx) if isinstance(idx, int) else None
 
 
