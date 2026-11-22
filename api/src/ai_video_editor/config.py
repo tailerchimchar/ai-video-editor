@@ -60,6 +60,9 @@ class Settings(BaseSettings):
     # length of each chapter title card.
     story_budget_usd: float = 5.0
     story_game_audio_volume: float = 0.35
+    # Owner mic tracks record very quiet (~-70 dB mean vs a -24 dB game mix);
+    # single-pass loudnorm per chapter brings the mic up before the mix.
+    story_mic_loudnorm: bool = True
     story_card_seconds: float = 2.5
     # Digest voice paraphrase (grokbot/voice.py): one short Haiku call per
     # digest clip with transcript speech; counted in the dollar ledger.

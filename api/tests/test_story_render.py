@@ -18,7 +18,9 @@ from ai_video_editor.config import settings
 from ai_video_editor.story import render
 from ai_video_editor.story.planner import Chapter, StoryPlan
 
-MIX = "[0:a:2]volume=1.0[m];[0:a:0]volume=0.35[g];[m][g]amix=inputs=2:duration=first:normalize=0[a]"
+GAME_LEG = "[0:a:0]volume=0.35[g];[m][g]amix=inputs=2:duration=first:normalize=0[a]"
+MIX = "[0:a:2]loudnorm=I=-16:TP=-1.5:LRA=11[m];" + GAME_LEG
+MIX_PLAIN = "[0:a:2]volume=1.0[m];" + GAME_LEG
 
 
 def _plan(mic: int | None = 2, chapters: list[Chapter] | None = None) -> StoryPlan:
@@ -62,7 +64,8 @@ def fake_ffmpeg(monkeypatch, tmp_path):
     return calls
 
 
-def test_chapter_filter_mixes_mic_over_game():
+def test_chapter_filter_mixes_mic_over_game(monkeypatch):
+    monkeypatch.setattr(settings, "story_mic_loudnorm", True)
     cmd = render.chapter_cmd("src.mp4", 10.0, 20.0, "out.mp4", mic_stream=2)
     fc = cmd[cmd.index("-filter_complex") + 1]
     assert MIX in fc
@@ -73,6 +76,14 @@ def test_chapter_filter_mixes_mic_over_game():
     assert cmd[cmd.index("[v]") - 1] == "-map"
     assert "-ar" in cmd and cmd[cmd.index("-ar") + 1] == "48000"
     assert cmd[-1] == "out.mp4"
+
+
+def test_mic_loudnorm_off_uses_plain_volume_leg(monkeypatch):
+    monkeypatch.setattr(settings, "story_mic_loudnorm", False)
+    cmd = render.chapter_cmd("src.mp4", 10.0, 20.0, "out.mp4", mic_stream=2)
+    fc = cmd[cmd.index("-filter_complex") + 1]
+    assert MIX_PLAIN in fc
+    assert "loudnorm" not in fc
 
 
 def test_no_mic_uses_game_audio_only():
@@ -180,6 +191,7 @@ def _probe_duration(path: Path) -> float:
 def test_real_ffmpeg_renders_two_chapters(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "workspace_dir", tmp_path / "ws")
     monkeypatch.setattr(settings, "ffmpeg_path", "ffmpeg")
+    monkeypatch.setattr(settings, "story_mic_loudnorm", True)
     monkeypatch.setattr(settings, "ffmpeg_video_codec", "libx264")
     monkeypatch.setattr(settings, "ffmpeg_video_codec_opts", "-preset ultrafast -crf 30")
     src = tmp_path / "src.mp4"

@@ -29,6 +29,8 @@ WIDTH, HEIGHT, FPS = 1920, 1080, 30
 REVIEW_FPS = 0.25
 CARD_INTRO_NAME = "_story_card"
 CARD_TIMEOUT_S = 60.0
+# Single-pass EBU R128 normalisation of the (very quiet) owner mic.
+MIC_LOUDNORM = "loudnorm=I=-16:TP=-1.5:LRA=11"
 _VIDEO_CHAIN = f"[0:v]scale={WIDTH}:{HEIGHT},setsar=1,fps={FPS}[v]"
 
 
@@ -57,12 +59,14 @@ def _encode_opts() -> list[str]:
 
 
 def audio_filter(mic_stream: int | None) -> str:
-    """Mic on top of ducked game audio; game audio alone when no mic is known."""
+    """Mic (loudness-normalised when `story_mic_loudnorm`) on top of ducked game
+    audio; game audio alone when no mic is known."""
     if mic_stream is None:
         return "[0:a:0]anull[a]"
     game = settings.story_game_audio_volume
+    mic = MIC_LOUDNORM if settings.story_mic_loudnorm else "volume=1.0"
     return (
-        f"[0:a:{mic_stream}]volume=1.0[m];[0:a:0]volume={game}[g];"
+        f"[0:a:{mic_stream}]{mic}[m];[0:a:0]volume={game}[g];"
         "[m][g]amix=inputs=2:duration=first:normalize=0[a]"
     )
 
