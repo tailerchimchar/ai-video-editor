@@ -151,6 +151,43 @@ def _event_override(event_type: str | None) -> tuple[float, float] | None:
     return settings.event_window_overrides.get(event_type)
 
 
+FIGHT_PRE_S = 4.0
+FIGHT_POST_S = 3.0
+GAME_END_REACH_S = 25.0
+
+
+def fight_window(
+    meta: dict,
+    suggested: tuple[float | None, float | None] | None,
+    duration: float,
+    cap: float,
+) -> tuple[float, float]:
+    """Pure window from fight bounds (candidates with fight_start_s/fight_end_s).
+
+    Pads the fight, extends to the game end when within reach, widens (never
+    narrows) to the ranker's suggestion, clamps to [0, duration], then
+    front-trims to `cap` so the payoff survives.
+    """
+    pre = float(meta.get("pre_pad_s", FIGHT_PRE_S))
+    fight_end = float(meta["fight_end_s"])
+    start = float(meta["fight_start_s"]) - pre
+    end = fight_end + FIGHT_POST_S
+    game_end = meta.get("game_end_s")
+    if game_end is not None and 0 <= float(game_end) - fight_end <= GAME_END_REACH_S:
+        end = float(game_end) + 1.0
+    if suggested:
+        if suggested[0] is not None:
+            start = min(start, suggested[0])
+        if suggested[1] is not None:
+            end = max(end, suggested[1])
+    start = max(0.0, start)
+    if duration > 0:  # unknown duration (0.0): leave the end unclamped, like _clamp
+        end = min(duration, end)
+    if end - start > cap:
+        start = end - cap
+    return round(start, 2), round(end, 2)
+
+
 def _window_anchor(cand: dict, r: dict, duration: float) -> tuple[float, float]:
     """Center on the exact event moment ± per-event (or global) pre/post,
     then extend to whatever wider window the ranker suggested.
@@ -168,6 +205,16 @@ def _window_anchor(cand: dict, r: dict, duration: float) -> tuple[float, float]:
     can't produce a 5-minute clip.
     """
     meta = cand.get("metadata") or {}
+    if meta.get("fight_start_s") is not None and meta.get("fight_end_s") is not None:
+        s0, e0 = r.get("suggested_start_seconds"), r.get("suggested_end_seconds")
+        sug = (
+            float(s0) if s0 is not None else None,
+            float(e0) if e0 is not None else None,
+        )
+        fs, fe = fight_window(meta, sug, duration, float(settings.highlight_max_seconds))
+        if 0.0 <= fs < fe:
+            return fs, fe
+        # Bounds fell outside the recording: take today's path for this candidate.
     anchor = meta.get("anchor_seconds")
     if anchor is None:
         anchor = (cand.get("start_seconds", 0) + cand.get("end_seconds", 0)) / 2
