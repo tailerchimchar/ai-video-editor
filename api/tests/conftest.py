@@ -60,6 +60,20 @@ def _no_live_workspace_writes(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(settings, "game_hints_dir", root / "game_hints")
 
 
+@pytest.fixture(autouse=True)
+def _pinned_settings(monkeypatch):
+    """Content-direction knobs are tuned in the live `.env` (and may be set in
+    the shell); tests pin the code defaults so results never depend on them."""
+    from ai_video_editor.config import settings
+
+    monkeypatch.setattr(settings, "shorts_beat_sync_enabled", False)
+    monkeypatch.setattr(settings, "mic_stream_override", None)
+    monkeypatch.setattr(settings, "hp_reader_shadow", False)
+    monkeypatch.setattr(settings, "hp_reader_enabled", False)
+    monkeypatch.setattr(settings, "story_mic_loudnorm", True)
+    monkeypatch.setattr(settings, "story_budget_usd", 5.0)
+
+
 # ----- shared Grok Bot fakes -----
 
 
