@@ -478,7 +478,9 @@ def test_leaky_digest_never_reaches_jev(round_dir):
 
 def test_digest_rewritten_with_drive_ids_is_scanned_again(round_dir):
     def leaky_ids(name, subfolder):
-        return "sk-ant-" + "a1B2c3D4e5F6g7H8i9J0k1" if name.endswith(".mp4") else ids(name, subfolder)
+        return (
+            "sk-ant-" + "a1B2c3D4e5F6g7H8i9J0k1" if name.endswith(".mp4") else ids(name, subfolder)
+        )
 
     up = FakeUploader(ids=leaky_ids)
     with pytest.raises(pub.SecretLeakError):
