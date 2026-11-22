@@ -1718,6 +1718,7 @@ def compile_custom_montage(
     beat_flash_source: str | None = None,
     use_clip_analyzer: bool | None = None,
     max_seconds: float | None = None,
+    burn_title: bool | None = None,
 ) -> dict:
     """Compile ONE montage from an EXPLICIT list of clip paths — mix
     from ANYWHERE: Outplayed folder, analyzed highlights folders,
@@ -1727,6 +1728,11 @@ def compile_custom_montage(
     compile only. Default (config) is 180s -- long enough for a full
     Valorant round. Pass e.g. 60 for a hype short cap or 300 for a
     Spike Rush match. Omit to use the config default.
+
+    `burn_title` controls whether the title overlay is drawn. When
+    MONTAGE_TITLE_OPTIONAL is off (default), this parameter is ignored
+    and titles always appear. When the flag is on, pass False to skip
+    the title overlay.
 
     This is the "hey, take these specific clips and put them together"
     flow — complements (does not replace) the automated
@@ -1748,6 +1754,8 @@ def compile_custom_montage(
         first to fetch from YouTube)
       - `beat_flash` + `beat_flash_source`: same as other compile
         tools — `kills` default, `downbeats` / `beats` also available
+      - `burn_title`: True (default) burns the title overlay. When
+        MONTAGE_TITLE_OPTIONAL is on, pass False to skip the overlay.
 
     Output: `WORKSPACE/shorts/_custom/<name>/<name>.mp4` + `index.md`.
     Missing / unreadable paths are skipped with a warning; the montage
@@ -1772,6 +1780,8 @@ def compile_custom_montage(
         body["use_clip_analyzer"] = use_clip_analyzer
     if max_seconds is not None:
         body["max_seconds"] = max_seconds
+    if burn_title is not None:
+        body["burn_title"] = burn_title
     with _client() as c:
         job_id = c.post(f"{API}/shorts/custom_montage", json=body).json()[
             "job_id"

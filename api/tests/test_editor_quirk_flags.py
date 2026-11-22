@@ -148,60 +148,54 @@ class TestMontageTitleOptOut:
 class TestCaptionFontsizeScale:
     """Caption fontsize scaling relative to 1080p reference height."""
 
-    def test_flag_off_fontsize_unchanged(self, monkeypatch) -> None:
-        """With CAPTION_FONTSIZE_SCALE=False (default), fontsize is used as-is."""
-        from ai_video_editor.config import settings
+    def test_flag_off_fontsize_unchanged(self) -> None:
+        """With scale_enabled=False (default), fontsize is used as-is."""
         from ai_video_editor.edits import caption_filters
-
-        monkeypatch.setattr(settings, "caption_fontsize_scale_enabled", False)
 
         segments = [
             {"text": "Hello", "start_seconds": 0.0, "end_seconds": 2.0, "style": {"fontsize": 100}},
         ]
-        result = caption_filters(segments, clip_start_offset=0.0)
+        result = caption_filters(segments, clip_start_offset=0.0, scale_enabled=False)
         # Fontsize should be exactly 100 as requested
         assert "fontsize=100" in result
 
-    def test_flag_off_ignores_output_height(self, monkeypatch) -> None:
+    def test_flag_off_ignores_output_height(self) -> None:
         """With flag OFF, output_height param is ignored."""
-        from ai_video_editor.config import settings
         from ai_video_editor.edits import caption_filters
-
-        monkeypatch.setattr(settings, "caption_fontsize_scale_enabled", False)
 
         segments = [
             {"text": "Test", "start_seconds": 0.0, "end_seconds": 1.0, "style": {"fontsize": 80}},
         ]
         # Pass output_height but it should be ignored
-        result = caption_filters(segments, clip_start_offset=0.0, output_height=720)
+        result = caption_filters(
+            segments, clip_start_offset=0.0, output_height=720, scale_enabled=False
+        )
         assert "fontsize=80" in result
 
-    def test_flag_on_scales_for_720_output(self, monkeypatch) -> None:
+    def test_flag_on_scales_for_720_output(self) -> None:
         """With flag ON and output_height=720, fontsize scales down from 1080 ref."""
-        from ai_video_editor.config import settings
         from ai_video_editor.edits import caption_filters
-
-        monkeypatch.setattr(settings, "caption_fontsize_scale_enabled", True)
 
         segments = [
             {"text": "Test", "start_seconds": 0.0, "end_seconds": 1.0, "style": {"fontsize": 90}},
         ]
         # 720 / 1080 = 0.667, so fontsize 90 -> 60
-        result = caption_filters(segments, clip_start_offset=0.0, output_height=720)
+        result = caption_filters(
+            segments, clip_start_offset=0.0, output_height=720, scale_enabled=True
+        )
         assert "fontsize=60" in result
 
-    def test_flag_on_scales_for_1920_output(self, monkeypatch) -> None:
+    def test_flag_on_scales_for_1920_output(self) -> None:
         """With flag ON and output_height=1920, fontsize scales up from 1080 ref."""
-        from ai_video_editor.config import settings
         from ai_video_editor.edits import caption_filters
-
-        monkeypatch.setattr(settings, "caption_fontsize_scale_enabled", True)
 
         segments = [
             {"text": "Test", "start_seconds": 0.0, "end_seconds": 1.0, "style": {"fontsize": 60}},
         ]
         # 1920 / 1080 = 1.778, so fontsize 60 -> ~107 (rounded)
-        result = caption_filters(segments, clip_start_offset=0.0, output_height=1920)
+        result = caption_filters(
+            segments, clip_start_offset=0.0, output_height=1920, scale_enabled=True
+        )
         # Allow for small rounding variance (106-108 are acceptable)
         import re
 
@@ -210,25 +204,21 @@ class TestCaptionFontsizeScale:
         fontsize = int(match.group(1))
         assert 105 <= fontsize <= 108, f"Expected scaled fontsize ~107, got {fontsize}"
 
-    def test_flag_on_1080_output_unchanged(self, monkeypatch) -> None:
+    def test_flag_on_1080_output_unchanged(self) -> None:
         """With flag ON and output_height=1080 (reference), fontsize is unchanged."""
-        from ai_video_editor.config import settings
         from ai_video_editor.edits import caption_filters
-
-        monkeypatch.setattr(settings, "caption_fontsize_scale_enabled", True)
 
         segments = [
             {"text": "Test", "start_seconds": 0.0, "end_seconds": 1.0, "style": {"fontsize": 72}},
         ]
-        result = caption_filters(segments, clip_start_offset=0.0, output_height=1080)
+        result = caption_filters(
+            segments, clip_start_offset=0.0, output_height=1080, scale_enabled=True
+        )
         assert "fontsize=72" in result
 
-    def test_flag_on_clamps_max_fontsize_for_width(self, monkeypatch) -> None:
+    def test_flag_on_clamps_max_fontsize_for_width(self) -> None:
         """With flag ON, fontsize is clamped so text width fits with margin."""
-        from ai_video_editor.config import settings
         from ai_video_editor.edits import caption_filters
-
-        monkeypatch.setattr(settings, "caption_fontsize_scale_enabled", True)
 
         # Very large fontsize that would clip on 720px wide output
         segments = [
@@ -240,7 +230,11 @@ class TestCaptionFontsizeScale:
             },
         ]
         result = caption_filters(
-            segments, clip_start_offset=0.0, output_height=1280, output_width=720
+            segments,
+            clip_start_offset=0.0,
+            output_height=1280,
+            output_width=720,
+            scale_enabled=True,
         )
         # Extract the fontsize from the filter string
         import re
@@ -251,35 +245,57 @@ class TestCaptionFontsizeScale:
         # Should be clamped below the requested 200 to fit
         assert fontsize < 200
 
-    def test_flag_on_default_output_height_uses_1080(self, monkeypatch) -> None:
-        """With flag ON but no output_height specified, defaults to 1080 (no change)."""
-        from ai_video_editor.config import settings
+    def test_flag_on_default_output_height_uses_1080(self) -> None:
+        """With flag ON but default output dimensions (1920x1080), fontsize unchanged."""
         from ai_video_editor.edits import caption_filters
-
-        monkeypatch.setattr(settings, "caption_fontsize_scale_enabled", True)
 
         segments = [
             {"text": "Test", "start_seconds": 0.0, "end_seconds": 1.0, "style": {"fontsize": 50}},
         ]
-        # No output_height -> defaults to 1080 -> no scaling
-        result = caption_filters(segments, clip_start_offset=0.0)
+        # Default output_height=1080, output_width=1920 -> no scaling
+        result = caption_filters(segments, clip_start_offset=0.0, scale_enabled=True)
         assert "fontsize=50" in result
 
-    def test_flag_off_filter_graph_byte_identical(self, monkeypatch) -> None:
-        """With flag OFF, filter graph is byte-for-byte identical to pre-change."""
-        from ai_video_editor.config import settings
-        from ai_video_editor.edits import caption_filters
+    def test_flag_off_filter_graph_byte_identical(self) -> None:
+        """With flag OFF, filter graph is byte-for-byte identical.
 
-        monkeypatch.setattr(settings, "caption_fontsize_scale_enabled", False)
+        The output is the same regardless of output dimensions when scaling is disabled.
+        """
+        from ai_video_editor.edits import caption_filters
 
         segments = [
             {"text": "Hello World", "start_seconds": 1.0, "end_seconds": 3.0},
         ]
 
-        # Both calls should produce identical output
-        result1 = caption_filters(segments, clip_start_offset=0.0)
-        result2 = caption_filters(segments, clip_start_offset=0.0, output_height=720)
+        # Both calls should produce identical output with scale_enabled=False
+        result1 = caption_filters(segments, clip_start_offset=0.0, scale_enabled=False)
+        result2 = caption_filters(
+            segments, clip_start_offset=0.0, output_height=720, scale_enabled=False
+        )
         assert result1 == result2
+
+    def test_text_wrapping_on_long_text(self) -> None:
+        """With flag ON and long text, text wraps onto multiple lines."""
+        from ai_video_editor.edits import caption_filters
+
+        segments = [
+            {
+                "text": "This is a really long caption that should wrap onto two lines",
+                "start_seconds": 0.0,
+                "end_seconds": 2.0,
+                "style": {"fontsize": 60},
+            },
+        ]
+        result = caption_filters(
+            segments,
+            clip_start_offset=0.0,
+            output_height=1280,
+            output_width=720,
+            scale_enabled=True,
+        )
+        # Text should be wrapped (contains escaped newline)
+        # The escaped newline in drawtext could be \n or \\n depending on escaping
+        assert "\\n" in result or "\n" in result.replace("\\n", "\n")
 
 
 # ---------------------------------------------------------------------

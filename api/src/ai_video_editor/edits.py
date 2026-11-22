@@ -488,43 +488,88 @@ def resolve_caption_style(style: dict | None) -> dict:
     return base
 
 
-def _scale_fontsize(
+def _wrap_text(text: str, fontsize: int, max_width: int, max_lines: int = 2) -> tuple[str, int]:
+    """Wrap text onto multiple lines if needed, then shrink if still too wide.
+
+    Returns (wrapped_text, final_fontsize). Lines are separated by newlines
+    for ffmpeg drawtext's multi-line support.
+
+    Pure function: no settings access.
+    """
+    char_width_ratio = 0.6
+    min_fontsize = 24
+
+    def line_width(line: str, fs: int) -> float:
+        return len(line) * fs * char_width_ratio
+
+    words = text.split()
+    if not words:
+        return text, fontsize
+
+    def wrap_at_fontsize(fs: int) -> list[str]:
+        lines: list[str] = []
+        current: list[str] = []
+        for word in words:
+            test_line = " ".join([*current, word])
+            if line_width(test_line, fs) <= max_width:
+                current.append(word)
+            else:
+                if current:
+                    lines.append(" ".join(current))
+                current = [word]
+        if current:
+            lines.append(" ".join(current))
+        return lines
+
+    lines = wrap_at_fontsize(fontsize)
+    if len(lines) <= max_lines:
+        max_line_width = max(line_width(ln, fontsize) for ln in lines)
+        if max_line_width <= max_width:
+            return "\n".join(lines), fontsize
+
+    for fs in range(fontsize - 1, min_fontsize - 1, -1):
+        lines = wrap_at_fontsize(fs)
+        if len(lines) <= max_lines:
+            max_line_width = max(line_width(ln, fs) for ln in lines)
+            if max_line_width <= max_width:
+                return "\n".join(lines), fs
+
+    lines = wrap_at_fontsize(min_fontsize)[:max_lines]
+    return "\n".join(lines), min_fontsize
+
+
+def scale_fontsize_for_output(
     fontsize: int,
     text: str,
-    output_height: int | None,
-    output_width: int | None,
-) -> int:
-    """Scale fontsize relative to 1080px reference and clamp to fit frame.
+    output_height: int,
+    output_width: int,
+    *,
+    scale_enabled: bool,
+) -> tuple[str, int]:
+    """Scale fontsize relative to 1080px reference and wrap/clamp to fit frame.
 
-    When CAPTION_FONTSIZE_SCALE_ENABLED is off, returns fontsize unchanged.
-    When on:
+    Pure function: `scale_enabled` is passed in by the caller (resolved from
+    settings at the entry point).
+
+    When scale_enabled is False, returns (text, fontsize) unchanged.
+    When True:
       1. Scale by output_height / 1080 (reference height).
-      2. Clamp so estimated text width fits inside frame with 10% margin.
+      2. Wrap onto up to 2 lines if needed.
+      3. Shrink fontsize as a last resort (min 24px).
 
-    The width estimation uses a rough heuristic (~0.6 chars per fontsize
-    pixel for typical fonts) since we don't have access to actual font
-    metrics in pure Python.
+    Returns (possibly_wrapped_text, final_fontsize).
     """
-    if not settings.caption_fontsize_scale_enabled:
-        return fontsize
+    if not scale_enabled:
+        return text, fontsize
 
     ref_height = 1080
-    height = output_height or ref_height
-    width = output_width or (height * 9 // 16)  # Assume 9:16 aspect
-
-    scale_factor = height / ref_height
+    scale_factor = output_height / ref_height
     scaled = round(fontsize * scale_factor)
 
-    char_width_ratio = 0.6
     margin_ratio = 0.10
-    max_text_width = width * (1.0 - 2 * margin_ratio)
-    estimated_text_width = len(text) * scaled * char_width_ratio
+    max_width = int(output_width * (1.0 - 2 * margin_ratio))
 
-    if estimated_text_width > max_text_width and len(text) > 0:
-        max_fontsize = int(max_text_width / (len(text) * char_width_ratio))
-        scaled = min(scaled, max(12, max_fontsize))
-
-    return scaled
+    return _wrap_text(text, scaled, max_width, max_lines=2)
 
 
 def caption_filters(
@@ -532,8 +577,9 @@ def caption_filters(
     clip_start_offset: float,
     *,
     fontfile: str | None = None,
-    output_height: int | None = None,
-    output_width: int | None = None,
+    output_height: int = 1080,
+    output_width: int = 1920,
+    scale_enabled: bool = False,
 ) -> str:
     """Build a `drawtext` chain — one filter per segment.
 
@@ -544,10 +590,11 @@ def caption_filters(
     Each segment's `style` field (optional) picks the preset and any
     per-segment overrides. Segments with no style use `default`.
 
-    When CAPTION_FONTSIZE_SCALE_ENABLED is on, `output_height` and
-    `output_width` are used to scale fontsize relative to a 1080px
-    reference and clamp to fit the frame. When off (default), fontsize
-    is used as-is for backward compatibility.
+    `output_height` and `output_width` are the actual output dimensions.
+    For 9:16_hud that is 720x1280. When `scale_enabled` is True, fontsize
+    scales relative to a 1080px reference height and text is wrapped/clamped
+    to fit the frame. When False (default), fontsize is used as-is for
+    backward compatibility.
 
     This function REPLACES the old `caption_filters` + `caption_filters_tiktok`
     pair — both modes are now driven by the same code with different
@@ -558,16 +605,15 @@ def caption_filters(
     default_ff = _escape_fontfile_path(fontfile)
     parts: list[str] = []
     for s in segments or []:
-        text = _escape_drawtext((s.get("text") or "").strip())
-        if not text:
+        raw_text = (s.get("text") or "").strip()
+        if not raw_text:
             continue
         style = resolve_caption_style(s.get("style"))
         raw_fontsize = int(style["fontsize"])
-        # Scale fontsize when flag is enabled; pass-through when disabled
-        fontsize = _scale_fontsize(raw_fontsize, text, output_height, output_width)
-        # Per-segment font override -- pass `font_path` for a specific
-        # font (e.g. `settings.caption_emoji_font_path` when the segment
-        # is an emoji glyph). Falls back to the caption default.
+        processed_text, fontsize = scale_fontsize_for_output(
+            raw_fontsize, raw_text, output_height, output_width, scale_enabled=scale_enabled
+        )
+        escaped_text = _escape_drawtext(processed_text)
         seg_font = s.get("font_path")
         ff = _escape_fontfile_path(seg_font) if seg_font else default_ff
         min_dur = float(style.get("min_duration_seconds") or 0.1)
@@ -576,7 +622,7 @@ def caption_filters(
         parts.append(
             "drawtext="
             f"fontfile='{ff}'"  # single-quote so Windows 'C:/...' stays literal
-            f":text='{text}'"
+            f":text='{escaped_text}'"
             f":fontsize={fontsize}:fontcolor={style['color']}"
             f":borderw={int(style['border_width'])}:bordercolor={style['border_color']}"
             f":x=(w-text_w)/2:y={style['y_position']}"
@@ -653,12 +699,22 @@ def caption_filters_tiktok(
     clip_start_offset: float,
     *,
     fontfile: str | None = None,
+    output_height: int = 1080,
+    output_width: int = 1920,
+    scale_enabled: bool = False,
 ) -> str:
     """DEPRECATED: legacy alias for `caption_filters` with TikTok-style
     explosion. New callers should pass already-exploded + styled segments
     to `caption_filters` directly."""
     exploded = explode_segments_to_words(segments, style_preset="tiktok")
-    return caption_filters(exploded, clip_start_offset, fontfile=fontfile)
+    return caption_filters(
+        exploded,
+        clip_start_offset,
+        fontfile=fontfile,
+        output_height=output_height,
+        output_width=output_width,
+        scale_enabled=scale_enabled,
+    )
 
 
 def _run_ffmpeg(cmd: list[str]) -> tuple[bool, str | None]:
@@ -761,9 +817,20 @@ def apply_caption(
     segments: list[dict],
     aspect: str,
     game: str | None = None,
+    scale_enabled: bool = False,
 ) -> tuple[bool, str | None]:
     segs = hud_caption_segments(segments) if aspect == HUD_ASPECT else segments
-    caps = caption_filters(segs, clip_start_offset=start)
+    if aspect == HUD_ASPECT or aspect == "9:16":
+        out_w, out_h = 720, 1280
+    else:
+        out_w, out_h = 1920, 1080
+    caps = caption_filters(
+        segs,
+        clip_start_offset=start,
+        output_height=out_h,
+        output_width=out_w,
+        scale_enabled=scale_enabled,
+    )
     if aspect == HUD_ASPECT:
         # Caption after layout so HUD_CAPTION_Y / y_position are output coords.
         return _apply_with_hud(

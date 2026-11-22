@@ -276,6 +276,7 @@ def _build_clip_filterchain(
     label_number: int | None = None,
     *,
     scale_to_1080p: bool = False,
+    caption_scale_enabled: bool = False,
 ) -> str:
     """Compose the per-clip ffmpeg filtergraph.
 
@@ -334,12 +335,29 @@ def _build_clip_filterchain(
                     "text": eff["text"],
                 }
             )
-    cap = caption_filters(segs_to_render, clip_start_offset=clip["start_seconds"])
+
+    if aspect in ("9:16", "9:16_hud"):
+        out_w, out_h = 720, 1280
+    else:
+        out_w, out_h = 1920, 1080
+    cap = caption_filters(
+        segs_to_render,
+        clip_start_offset=clip["start_seconds"],
+        output_height=out_h,
+        output_width=out_w,
+        scale_enabled=caption_scale_enabled,
+    )
     if cap:
         chain.append(cap)
     if overlay_segs:
         # Overlay captions always render segment-style regardless of mode.
-        ov = caption_filters(overlay_segs, clip_start_offset=clip["start_seconds"])
+        ov = caption_filters(
+            overlay_segs,
+            clip_start_offset=clip["start_seconds"],
+            output_height=out_h,
+            output_width=out_w,
+            scale_enabled=caption_scale_enabled,
+        )
         if ov:
             chain.append(ov)
 
@@ -367,6 +385,8 @@ def _render_clip_part(
     aspect: str,
     fade_seconds: float,
     label_number: int | None = None,
+    *,
+    caption_scale_enabled: bool = False,
 ) -> tuple[Path, bool, str | None]:
     """Encode one clip from the spec to a part file named by clip-id.
 
@@ -400,6 +420,7 @@ def _render_clip_part(
             fade_seconds,
             label_number,
             scale_to_1080p=settings.zoom_scale_to_1080p_enabled,
+            caption_scale_enabled=caption_scale_enabled,
         ),
         "-c:v",
         settings.ffmpeg_video_codec,
@@ -553,6 +574,7 @@ def render_spec(
     dirty_clip_ids: set[str] | None = None,
     *,
     cleanup: bool = True,
+    caption_scale_enabled: bool | None = None,
 ) -> dict:
     """Render (or re-render) a compilation spec into `folder/compilation.mp4`.
 
@@ -565,6 +587,9 @@ def render_spec(
     `_parts/` after a successful concat — keeps the workspace from
     growing as edits remove/insert clips. Tests that inspect raw
     cache state pass `cleanup=False`.
+
+    `caption_scale_enabled` controls fontsize scaling. If None, falls back
+    to settings.caption_fontsize_scale_enabled.
     """
     folder = Path(folder)
     parts_dir = folder / "_parts"
@@ -573,6 +598,11 @@ def render_spec(
     aspect = spec.get("aspect", "16:9")
     fade_seconds = float(spec.get("fade_seconds", 0.3))
     show_numbers = bool(spec.get("show_clip_numbers", False))
+    cap_scale = (
+        caption_scale_enabled
+        if caption_scale_enabled is not None
+        else settings.caption_fontsize_scale_enabled
+    )
     parts: list[dict] = []
     for idx, clip in enumerate(spec["clips"], start=1):
         # Cached part filename embeds the label state — toggling labels
@@ -585,7 +615,12 @@ def render_spec(
         )
         if needs_render:
             _, ok, err = _render_clip_part(
-                clip, parts_dir, aspect, fade_seconds, label_number=label_n
+                clip,
+                parts_dir,
+                aspect,
+                fade_seconds,
+                label_number=label_n,
+                caption_scale_enabled=cap_scale,
             )
         else:
             ok, err = True, None
