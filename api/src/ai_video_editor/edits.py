@@ -8,8 +8,9 @@ without ffmpeg.
 
 Aspect is configurable per render — `"16:9"` is a passthrough,
 `"9:16"` does a center crop + scale to 720x1280 for TikTok/Reels.
-`"9:16_hud"` (flag-gated via `HUD_ASPECT_ENABLED`) runs the effect
-then the existing `cropped_hud_9x16` layout so minimap/scoreline survive.
+`"9:16_hud"` (flag-gated via `HUD_ASPECT_ENABLED`) runs zoom/focus
+then the existing `cropped_hud_9x16` layout so minimap/scoreline survive;
+captions are burned after that layout in output-frame coordinates.
 """
 
 from __future__ import annotations
@@ -21,8 +22,8 @@ from .config import settings
 
 # Flag-gated vertical aspect that preserves HUD via cropped_hud_9x16.
 HUD_ASPECT = "9:16_hud"
-# Top-band caption y for 9:16_hud (source coords before the HUD layout).
-# Default `h-th-60` lands on the ability bar after vertical conversion.
+# Top-band caption y for 9:16_hud — output-frame coords (720x1280) after
+# the HUD layout. Default `h-th-60` lands on the ability bar / minimap.
 HUD_CAPTION_Y = "h/8"
 
 # ROI presets are expressed as ffmpeg crop-friendly fractional
@@ -138,22 +139,37 @@ def build_hud_aspect_filter_complex(
     effect_vf: str,
     *,
     game: str | None = None,
+    caption_vf: str = "",
 ) -> str:
-    """Chain a linear `-vf` effect into `cropped_hud_9x16` (filter_complex).
+    """Chain zoom/focus → `cropped_hud_9x16` → optional caption drawtext.
 
     Pure filter builder — reuses the existing HUD layout; does not
-    duplicate overlay geometry. `effect_vf` is a comma-joined chain with
-    no labels (e.g. crop+scale, drawtext, geq). Empty / ``"null"`` skips
-    the effect and returns the HUD graph alone.
+    duplicate overlay geometry.
 
-    Entry is still driven from input 0; exit label is ``[out]``.
+    Order matters:
+      - `effect_vf` (crop/scale, geq, …) runs BEFORE the HUD layout so
+        zoom/focus still operate in source coordinates.
+      - `caption_vf` (drawtext) runs AFTER the layout's ``[out]`` so
+        ``y_position`` / ``HUD_CAPTION_Y`` are 720x1280 output-frame
+        coords and captions are not copied into the blur/HUD crops.
+
+    Empty / ``"null"`` for either side skips that stage. Entry is still
+    driven from input 0; exit label is ``[out]``.
     """
     hud = cropped_hud_9x16(game=game)
-    if not effect_vf or effect_vf == "null":
-        return hud
-    # Apply the effect once, then feed that stream into the HUD graph
-    # (which otherwise starts at [0:v]).
-    return f"[0:v]{effect_vf}[fx];" + hud.replace("[0:v]", "[fx]", 1)
+    if effect_vf and effect_vf != "null":
+        # Apply the effect once, then feed that stream into the HUD graph
+        # (which otherwise starts at [0:v]).
+        graph = f"[0:v]{effect_vf}[fx];" + hud.replace("[0:v]", "[fx]", 1)
+    else:
+        graph = hud
+    if caption_vf and caption_vf != "null":
+        if not graph.endswith("[out]"):
+            raise ValueError("HUD graph must end with [out] before caption")
+        # Relabel layout exit, then burn captions on the composed frame.
+        graph = graph[: -len("[out]")] + "[hud]"
+        graph = f"{graph};[hud]{caption_vf}[out]"
+    return graph
 
 
 def cropped_hud_9x16(
@@ -624,9 +640,10 @@ def _apply_with_hud(
     end: float,
     effect_vf: str,
     game: str | None,
+    caption_vf: str = "",
 ) -> tuple[bool, str | None]:
-    """Run `effect_vf` then `cropped_hud_9x16` via `-filter_complex`."""
-    fc = build_hud_aspect_filter_complex(effect_vf, game=game)
+    """Run zoom/focus → `cropped_hud_9x16` → optional caption via `-filter_complex`."""
+    fc = build_hud_aspect_filter_complex(effect_vf, game=game, caption_vf=caption_vf)
     cmd = [
         settings.ffmpeg_path,
         "-y",
@@ -699,13 +716,15 @@ def apply_caption(
     segs = hud_caption_segments(segments) if aspect == HUD_ASPECT else segments
     caps = caption_filters(segs, clip_start_offset=start)
     if aspect == HUD_ASPECT:
+        # Caption after layout so HUD_CAPTION_Y / y_position are output coords.
         return _apply_with_hud(
             asset_path,
             out_path,
             start=start,
             end=end,
-            effect_vf=caps or "null",
+            effect_vf="null",
             game=game,
+            caption_vf=caps or "null",
         )
     chain = [caps]
     tail = aspect_filter(aspect)
