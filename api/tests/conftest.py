@@ -33,6 +33,9 @@ def isolate_grokbot(monkeypatch) -> None:
 
     for field in GROKBOT_SECRET_FIELDS:
         monkeypatch.setattr(settings, field, "")
+    # Cadence knobs are tuned in the live .env (daily heartbeat); tests pin the defaults.
+    monkeypatch.setattr(settings, "grokbot_heartbeat_seconds", 300)
+    monkeypatch.setattr(settings, "grokbot_runner_poll_seconds", 60)
     sinks.reset_sinks()
 
 

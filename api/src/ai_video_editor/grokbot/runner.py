@@ -217,6 +217,9 @@ class Runner:
         # Guards `state`: the heartbeat thread reads it while a tick runs.
         self.lock = threading.RLock()
         self._heartbeat_sent = False
+        # No heartbeat at startup: every launch (reboots included) would wake
+        # the Lead and cost a turn. The first one waits a full interval.
+        self.state.last_heartbeat = self._clock()
         self._wrote = False
         self._outcomes: list[str] = []
         self._prior: dict[str, str] = {}
@@ -598,10 +601,7 @@ class Runner:
 
     # -- heartbeat -----------------------------------------------------
     def heartbeat_due(self) -> bool:
-        return (
-            not self._heartbeat_sent
-            or self._clock() - self.state.last_heartbeat >= settings.grokbot_heartbeat_seconds
-        )
+        return self._clock() - self.state.last_heartbeat >= settings.grokbot_heartbeat_seconds
 
     def heartbeat(self) -> None:
         with self.lock:

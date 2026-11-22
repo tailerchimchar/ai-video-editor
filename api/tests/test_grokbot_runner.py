@@ -168,6 +168,8 @@ def test_deferred_kinds_are_ledgered_not_executed(h):
 
 
 def test_heartbeat_payload_and_cadence(h):
+    assert not h.runner.heartbeat_due()  # never at startup
+    h.clock.t += 301
     assert h.runner.heartbeat_due()
     h.runner.heartbeat()
     p = h.events[-1].payload
@@ -257,6 +259,7 @@ def test_heartbeat_survives_failing_tick(h):
 
     h.repo.pull = boom
     run_once(h.runner)
+    h.clock.t += 301
     heartbeat_once(h.runner)
     assert "heartbeat" in names(h)
 

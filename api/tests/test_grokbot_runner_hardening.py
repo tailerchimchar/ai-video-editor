@@ -205,6 +205,7 @@ def test_heartbeat_thread_runs_while_tick_is_blocked(tmp_path):
     ticker = threading.Thread(target=h.runner.tick, daemon=True)
     ticker.start()
     stop = threading.Event()
+    h.clock.t += 301  # a heartbeat is due (never at startup)
     start_heartbeat(h.runner, stop, interval=0.01)
     deadline = time.monotonic() + 2
     while "heartbeat" not in names(h) and time.monotonic() < deadline:
