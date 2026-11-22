@@ -254,3 +254,155 @@ def test_secret_in_digest_uploads_nothing_and_names_pattern(round_dir):
         run(round_dir, uploader=up)
     assert up.uploads == []
     assert "sk-ant-" not in str(ei.value)
+
+
+# --- digest v2 wiring ---
+
+from ai_video_editor.league.riot_timeline import RiotTimeline, TimelineEvent  # noqa: E402
+
+
+def _fake_timeline():
+    return RiotTimeline(
+        match_id="m",
+        confidence="medium",
+        offset_s=10.0,
+        game_end_s=None,
+        events=[TimelineEvent("kill", 870.0, 880.0, ["you (Jhin)", "enemy Diana"], {})],
+        owner_frames=[],
+    )
+
+
+def test_publish_passes_injected_digest_inputs(round_dir):
+    sliced = []
+
+    def slices(s, e):
+        sliced.append((s, e))
+        return "some speech"
+
+    run(
+        round_dir,
+        timeline=_fake_timeline(),
+        transcript_slices=slices,
+        paraphrase=lambda t: "The player reacts to the turn.",
+        energy=lambda s, e: "laughter",
+    )
+    saved = dg.Digest.model_validate_json((round_dir / "digest.json").read_text())
+    c = saved.clips[0]
+    assert c.voice == "The player reacts to the turn."
+    assert [(e.type, e.t_in_clip) for e in c.events] == [("kill", 10.0)]
+    assert c.match_confidence == "medium" and c.energy == "laughter"
+    assert sliced == [(870.0, 892.5), (1255.0, 1280.0), (1800.0, 1815.0)]
+
+
+def test_paraphrase_leaking_transcript_is_refused(round_dir):
+    up = FakeUploader()
+    with pytest.raises(pub.DigestLeakError):
+        run(
+            round_dir,
+            uploader=up,
+            transcript_slices=lambda s, e: "unrelated words",
+            paraphrase=lambda t: "they cried wave perf at it",
+        )
+    assert up.uploads == []
+
+
+def _cli(round_dir, monkeypatch, *extra):
+    seen = {}
+    monkeypatch.setattr(pub, "publish_round", lambda rd, **kw: seen.update(kw) or {})
+    monkeypatch.setattr(pub, "_load_timeline", lambda asset_id, game: ("tl", asset_id, game))
+    pub.main([str(round_dir), "--game", "league", "--no-jev", *extra])
+    return seen
+
+
+def test_cli_with_asset_id_wires_timeline_slicer_and_paraphrase(round_dir, monkeypatch):
+    seen = _cli(round_dir, monkeypatch, "--asset-id", "a1")
+    assert seen["timeline"] == ("tl", "a1", "league")
+    assert callable(seen["transcript_slices"]) and callable(seen["paraphrase"])
+    assert callable(seen["energy"])
+    assert seen["paraphrase"].keywords == {"asset_id": "a1"}
+
+
+def test_cli_no_paraphrase_skips_haiku(round_dir, monkeypatch):
+    seen = _cli(round_dir, monkeypatch, "--asset-id", "a1", "--no-paraphrase")
+    assert seen["paraphrase"] is None
+    assert seen["timeline"] == ("tl", "a1", "league")
+
+
+def test_cli_without_asset_id_adds_nothing(round_dir, monkeypatch):
+    seen = _cli(round_dir, monkeypatch)
+    assert [seen.get(k) for k in ("timeline", "transcript_slices", "paraphrase", "energy")] == [
+        None
+    ] * 4
+
+
+@pytest.fixture
+def asset_db(tmp_path, monkeypatch):
+    import sqlite3
+
+    path = tmp_path / "a.db"
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "CREATE TABLE assets (id TEXT, filename TEXT, path TEXT, game TEXT, "
+        "duration_seconds REAL)"
+    )
+    conn.execute("INSERT INTO assets VALUES ('a1', 'f.mp4', 'C:/x/f.mp4', 'lol', 1900.0)")
+    conn.execute(
+        "CREATE TABLE transcripts (video_id TEXT, start_seconds REAL, end_seconds REAL, "
+        "text TEXT, sentiment_score REAL)"
+    )
+    conn.execute("INSERT INTO transcripts VALUES ('a1', 10.0, 12.0, 'haha', 0.7)")
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(settings, "database_path", path)
+    return path
+
+
+def test_load_timeline_binds_asset_row_and_duration(asset_db, monkeypatch):
+    from ai_video_editor.league import riot_timeline
+    from ai_video_editor.league.candidates import riot
+
+    calls = {}
+
+    def fake_inputs(asset, duration, **kw):
+        calls["asset"], calls["duration"] = asset, duration
+        return None
+
+    def fake_load(asset_id, *, fetch, cache_dir=None):
+        calls["asset_id"] = asset_id
+        return ("timeline", fetch())
+
+    monkeypatch.setattr(riot, "fetch_timeline_inputs", fake_inputs)
+    monkeypatch.setattr(riot_timeline, "load_or_fetch", fake_load)
+    assert pub._load_timeline("a1", "league") == ("timeline", None)
+    assert calls["asset_id"] == "a1" and calls["duration"] == 1900.0
+    assert calls["asset"]["path"] == "C:/x/f.mp4" and calls["asset"]["game"] == "lol"
+
+
+def test_load_timeline_failure_is_none(asset_db, monkeypatch):
+    from ai_video_editor.league import riot_timeline
+    from ai_video_editor.league.candidates import riot
+
+    def boom(*a, **k):
+        raise RuntimeError("riot down")
+
+    monkeypatch.setattr(riot, "fetch_timeline_inputs", boom)
+    monkeypatch.setattr(riot_timeline, "load_or_fetch", lambda a, *, fetch, **k: fetch())
+    assert pub._load_timeline("a1", "league") is None
+    assert pub._load_timeline("missing", "league") is None
+    monkeypatch.setattr(riot_timeline, "load_or_fetch", boom)
+    assert pub._load_timeline("a1", "league") is None
+
+
+def test_load_timeline_skips_non_league(monkeypatch):
+    from ai_video_editor.league import riot_timeline
+
+    monkeypatch.setattr(riot_timeline, "load_or_fetch", lambda *a, **k: pytest.fail("fetched"))
+    assert pub._load_timeline("a1", "valorant") is None
+
+
+def test_digest_inputs_energy_uses_window_sentiment(asset_db):
+    inputs = pub._digest_inputs("a1", "league", paraphrase=False, load_timeline=lambda a, g: None)
+    assert inputs["energy"](9.0, 13.0) == "laughter"  # mean sentiment 0.7, loudness unknown
+    assert inputs["energy"](50.0, 60.0) == "unknown"
+    assert inputs["transcript_slices"](9.0, 13.0) == "haha"
+    assert inputs["paraphrase"] is None
