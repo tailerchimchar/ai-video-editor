@@ -206,6 +206,22 @@ def test_vlm_backend_capped_asset_is_unavailable_not_a_crash(monkeypatch):
     assert ("api",) not in log
 
 
+def test_vlm_backend_ledger_error_is_unavailable_not_a_crash(monkeypatch):
+    from ai_video_editor.vlm.backends import anthropic_backend as ab
+    from ai_video_editor.vlm.backends.base import VLMUnavailableError
+
+    log: list = []
+    backend = _vlm_backend(monkeypatch, log)
+
+    def locked(a):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(ab, "check_budget", locked)
+    with pytest.raises(VLMUnavailableError):
+        backend.call(frames=[], system_prompt="s", user_prompt="u")
+    assert ("api",) not in log
+
+
 def test_select_backend_threads_asset_id():
     from ai_video_editor.vlm.client import select_backend
 
