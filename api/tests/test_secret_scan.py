@@ -63,3 +63,12 @@ def test_main_exit_codes_and_masking(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "dirty.txt:1 xai" in out
     assert FAKE["xai"] not in out
+
+
+def test_ts_pattern_needs_a_left_boundary():
+    assert ss.scan_text("shorts_" + "a1b2c3d4" * 8) == []
+
+
+def test_typesafe_heuristic_is_case_insensitive_and_ignores_paths():
+    assert ("typesafe", 1) in ss.scan_text("typesafe_key: " + "x" * 44)
+    assert ss.scan_text("TYPESAFE file C:/Users/a/" + "x" * 44) == []

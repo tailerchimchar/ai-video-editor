@@ -29,10 +29,11 @@ PATTERNS: dict[str, re.Pattern] = {
     "langfuse_public": re.compile(r"pk-lf-[a-f0-9-]{20,}"),
     "langfuse_secret": re.compile(r"sk-lf-[a-f0-9-]{20,}"),
     "xai": re.compile(r"xai-[A-Za-z0-9]{30,}"),
-    "typesafe": re.compile(r"ts_[A-Za-z0-9]{24,}"),
+    "typesafe": re.compile(r"(?<![A-Za-z0-9])ts_[A-Za-z0-9]{24,}"),
 }
 # Any long token on a line that mentions TYPESAFE is treated as a TypeSafe key.
-_TYPESAFE_LINE = re.compile(r"[A-Za-z0-9_-]{40,}")
+_TYPESAFE_LINE = re.compile(r"(?<![A-Za-z0-9_/\\.-])[A-Za-z0-9_-]{40,}(?![A-Za-z0-9_/\\.-])")
+_TYPESAFE_WORD = re.compile(r"(?i)typesafe")
 
 
 class Hit(NamedTuple):
@@ -48,7 +49,11 @@ def scan_text(text: str) -> list[tuple[str, int]]:
         for name, pat in PATTERNS.items():
             if pat.search(line):
                 hits.append((name, n))
-        if "TYPESAFE" in line and _TYPESAFE_LINE.search(line) and ("typesafe", n) not in hits:
+        if (
+            _TYPESAFE_WORD.search(line)
+            and _TYPESAFE_LINE.search(line)
+            and ("typesafe", n) not in hits
+        ):
             hits.append(("typesafe", n))
     return hits
 

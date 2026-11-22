@@ -73,7 +73,8 @@ def _ledger_conn(db_path: Path | None) -> sqlite3.Connection:
 def check_budget(asset_id: str | None, *, db_path: Path | None = None) -> None:
     """Raise SpendCapError when this asset's paid calls already cost >= the cap.
 
-    None asset_id means no accounting, so no check.
+    None asset_id means no accounting, so no check. Check-then-act is not
+    atomic: concurrent calls can overshoot the cap by one request.
     """
     if asset_id is None:
         return

@@ -277,6 +277,7 @@ def build_highlights(asset: dict, rankings: list[dict], candidates: list[dict]) 
                 event_type=event,
                 source=cand.get("source"),
                 anchor_seconds=meta.get("anchor_seconds"),
+                asset_id=asset.get("id"),
             )
             clip_entry: dict = {
                 "file": fname if loop_result.ok else None,

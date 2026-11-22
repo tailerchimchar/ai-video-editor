@@ -113,6 +113,7 @@ def validate_and_cut(
     backend: VLMBackend | None = None,
     max_iter: int | None = None,
     n_frames: int | None = None,
+    asset_id: str | None = None,
 ) -> ClipLoopResult:
     """Cut → validate → retry loop for a single candidate.
 
@@ -120,7 +121,7 @@ def validate_and_cut(
     single cut with a `skip_vlm_unavailable`-style verdict — the clip
     is written and the compile continues.
     """
-    backend = backend or select_backend()
+    backend = backend or select_backend(asset_id=asset_id)
     max_iter = max_iter or settings.vlm_max_clip_iter
     n_frames = n_frames or settings.vlm_frame_samples_clip
     duration = get_duration_seconds(source_path)
@@ -252,6 +253,7 @@ def review_and_apply_compilation(
     max_passes: int | None = None,
     n_frames: int | None = None,
     apply_fixes_fn=None,
+    asset_id: str | None = None,
 ) -> CompLoopResult:
     """Sample → review → apply → re-render, up to `max_passes`.
 
@@ -269,7 +271,7 @@ def review_and_apply_compilation(
     `unapplied` list attributes (or a dict with those keys) plus,
     ideally, `new_path` if the re-render moved the compilation file.
     """
-    backend = backend or select_backend()
+    backend = backend or select_backend(asset_id=asset_id)
     max_passes = max_passes or settings.vlm_max_comp_iter
     n_frames = n_frames or settings.vlm_frame_samples_comp
 

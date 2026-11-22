@@ -88,9 +88,10 @@ def validate_clip(
     clip_duration: float,
     n_frames: int,
     backend: VLMBackend | None = None,
+    asset_id: str | None = None,
 ) -> ClipVerdict:
     """Ask the VLM to verdict-check one cut clip. Never raises."""
-    backend = backend or select_backend()
+    backend = backend or select_backend(asset_id=asset_id)
     system_prompt, resolved_hints = build_clip_system_prompt(game)
     user_prompt = build_clip_user_prompt(
         event_type=event_type,
@@ -145,9 +146,10 @@ def validate_compilation(
     total_duration_seconds: float,
     n_frames: int,
     backend: VLMBackend | None = None,
+    asset_id: str | None = None,
 ) -> CompilationReview:
     """Ask the VLM to review a rendered compilation. Never raises."""
-    backend = backend or select_backend()
+    backend = backend or select_backend(asset_id=asset_id)
     system_prompt, resolved_hints = build_comp_system_prompt(game)
     user_prompt = build_comp_user_prompt(
         clip_count=clip_count,

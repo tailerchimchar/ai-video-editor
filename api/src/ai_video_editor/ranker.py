@@ -14,6 +14,7 @@ The model never watches video; it ranks structured metadata.
 """
 
 import json
+import logging
 
 from pydantic import BaseModel
 
@@ -27,6 +28,8 @@ from .anthropic_surface import (
 )
 from .config import settings
 from .models import RankedCandidate
+
+_log = logging.getLogger(__name__)
 
 # Frozen — no timestamps/IDs/per-request data, so it forms a stable
 # cacheable prefix (90%+ cache-hit on second call onward).
@@ -128,7 +131,10 @@ def rank_candidates(
         messages=[{"role": "user", "content": payload}],
         output_format=_RankerOutput,
     )
-    record_spend(asset_id, "rank", settings.ranker_model, response.usage)
+    try:
+        record_spend(asset_id, "rank", settings.ranker_model, response.usage)
+    except Exception as exc:  # a paid answer must not be lost to accounting
+        _log.warning("spend ledger write failed: %s", exc)
     results = response.parsed_output.results
 
     record_generation(

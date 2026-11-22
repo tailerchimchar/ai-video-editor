@@ -25,7 +25,7 @@ from pathlib import Path
 
 import anthropic
 
-from ...anthropic_surface import check_budget, record_spend
+from ...anthropic_surface import SpendCapError, check_budget, record_spend
 from ...config import settings
 from .base import VLMBackend, VLMUnavailableError
 
@@ -116,7 +116,11 @@ class AnthropicBackend(VLMBackend):
             for p in frames
         ]
         content.append({"type": "text", "text": user_prompt})
-        check_budget(self.asset_id)
+        try:
+            check_budget(self.asset_id)
+        except SpendCapError as exc:
+            # The VLM loops degrade on VLMUnavailableError only; a capped asset skips VLM.
+            raise VLMUnavailableError(str(exc)) from exc
         try:
             resp = client.messages.create(
                 model=self.model,
@@ -139,7 +143,10 @@ class AnthropicBackend(VLMBackend):
             _log.warning("anthropic vlm call failed: %s", exc)
             raise VLMUnavailableError(f"anthropic API error: {exc!s}") from exc
         self._active_model = getattr(resp, "model", None) or self.model
-        record_spend(self.asset_id, "vlm", self.model, resp.usage)
+        try:
+            record_spend(self.asset_id, "vlm", self.model, resp.usage)
+        except Exception as exc:  # a paid answer must not be lost to accounting
+            _log.warning("spend ledger write failed: %s", exc)
         # Extract text from the first text block. Anthropic vision replies
         # are always a single-text-block response for our prompt shape.
         for block in resp.content:
