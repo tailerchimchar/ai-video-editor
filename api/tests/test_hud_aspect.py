@@ -13,6 +13,7 @@ import pytest
 
 from ai_video_editor.config import settings
 from ai_video_editor.edits import (
+    _DEFAULT_STYLE,
     HUD_ASPECT,
     HUD_CAPTION_Y,
     apply_caption,
@@ -21,6 +22,7 @@ from ai_video_editor.edits import (
     build_hud_aspect_filter_complex,
     caption_filters,
     hud_caption_segments,
+    lol_scoreline_overlay_rect,
     validate_edit_aspect,
     zoom_upscale_filter,
 )
@@ -77,10 +79,29 @@ def test_hud_valorant_variant_chosen() -> None:
 
 
 def test_hud_caption_default_y_is_top_band() -> None:
+    assert HUD_CAPTION_Y == "40"
     segs = hud_caption_segments([{"text": "clutch", "start_seconds": 0.0, "end_seconds": 1.0}])
     filt = caption_filters(segs, clip_start_offset=0.0)
     assert f"y={HUD_CAPTION_Y}" in filt
+    assert "y=h/8" not in filt
     assert "y=h-th-60" not in filt
+
+
+def test_default_hud_caption_clears_scoreline_overlay() -> None:
+    """Default caption band must not intersect the LoL score HUD rect.
+
+    Uses `lol_scoreline_overlay_rect` (layout's own letterbox math) and
+    the default caption fontsize — no hard-coded scoreline y.
+    """
+    caption_y = int(HUD_CAPTION_Y)
+    caption_h = int(_DEFAULT_STYLE["fontsize"])
+    caption_bottom = caption_y + caption_h
+    _sx, score_y, _sw, score_h = lol_scoreline_overlay_rect()
+    # Vertical clearance: caption fully above the scoreline strip.
+    assert caption_bottom <= score_y, (
+        f"default caption [{caption_y},{caption_bottom}) overlaps "
+        f"scoreline [{score_y},{score_y + score_h})"
+    )
 
 
 def test_hud_caption_explicit_y_wins() -> None:
@@ -319,9 +340,9 @@ def test_apply_caption_9_16_hud_renders_720x1280_and_top_band(tmp_path, monkeypa
     )
     assert ok, err
 
-    # y=h/8 → 160; fontsize 48 → glyph spans ~160..208. Crop that strip.
-    top_with = _gray_crop_luma_sum(with_cap, y=140, h=90)
-    top_without = _gray_crop_luma_sum(no_cap, y=140, h=90)
+    # Default y=40; fontsize 48 → glyph spans ~40..88. Crop that strip.
+    top_with = _gray_crop_luma_sum(with_cap, y=30, h=70)
+    top_without = _gray_crop_luma_sum(no_cap, y=30, h=70)
     assert top_with > top_without + 500, (
         f"expected caption luma in top band; with={top_with} without={top_without}"
     )
