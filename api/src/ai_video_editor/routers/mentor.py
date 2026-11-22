@@ -1,7 +1,9 @@
 """Mentor router — the memory flywheel.
 
 `POST /mentor/record_correction` — user or Claude appends a structured
-editorial correction. Persisted to `vlm/game_hints/<game>_examples.jsonl`;
+editorial correction. Persisted to `<GAME_HINTS_DIR>/<game>_examples.jsonl`
+(default `<workspace>/game_hints`; the package's `vlm/game_hints/` is only a
+read-only seed);
 the next compile picks it up automatically via `load_game_hints`, and a
 correction entering the rendered top-K changes `effective_prompt_version`
 so cached analyzer sidecars refresh.

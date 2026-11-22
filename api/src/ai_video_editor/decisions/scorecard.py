@@ -45,12 +45,39 @@ def _confirmed_format(rule: str) -> str | None:
     return None
 
 
+_REF = re.compile(r"\d+m\d+s")
+
+
+def _refs(text: str) -> set[str]:
+    """Normalised refs in a clip_ref: correction refs are file names, sometimes
+    several joined by `;`/`,` (`02_hype_callout_6m33s.mp4; 04_assist_9m41s.mp4`),
+    audit refs are bare (`6m33s`). Each part yields its `NmNNs` refs, or
+    itself when it has none (opaque ids)."""
+    out: set[str] = set()
+    for part in re.split(r"[;,]", text):
+        part = part.strip()
+        if part:
+            out |= set(_REF.findall(part)) or {part}
+    return out
+
+
+def _matches(record: AnswerRecord, correction: dict) -> bool:
+    """Same clip: shared normalised ref, and same round when both sides name one."""
+    ref = correction.get("clip_ref")
+    if not ref or not record.clip_ref:
+        return False
+    c_round = correction.get("round")
+    if record.round is not None and c_round is not None and str(c_round) != record.round:
+        return False
+    return bool(_refs(str(ref)) & _refs(record.clip_ref))
+
+
 def score(records: list[AnswerRecord], corrections: list[dict]) -> Scorecard:
-    bad_refs = {c.get("clip_ref") for c in corrections if _not_a_keeper(c) and c.get("clip_ref")}
+    bad = [c for c in corrections if _not_a_keeper(c)]
     disagreements: list[dict] = []
 
     kept = [r for r in records if r.value is True and r.clip_ref]
-    wrong = [r for r in kept if r.clip_ref in bad_refs]
+    wrong = [r for r in kept if any(_matches(r, c) for c in bad)]
     for r in wrong:
         disagreements.append(
             {"kind": "keep", "clip_ref": r.clip_ref, "jev": True, "owner": "not a keeper"}

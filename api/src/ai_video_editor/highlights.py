@@ -188,6 +188,39 @@ def fight_window(
     return round(start, 2), round(end, 2)
 
 
+def _fight_bounds(cand: dict) -> tuple[float, float] | None:
+    """The candidate's (fight_start_s, fight_end_s), or None when fight
+    windows are disabled or the candidate carries no bounds."""
+    if not settings.fight_windows_enabled:
+        return None
+    meta = cand.get("metadata") or {}
+    fs, fe = meta.get("fight_start_s"), meta.get("fight_end_s")
+    if fs is None or fe is None:
+        return None
+    return float(fs), float(fe)
+
+
+def _merge_same_fight(kept: list[dict], cand_by_id: dict) -> tuple[list[dict], dict]:
+    """Drop kept rankings whose candidate shares fight bounds with an
+    earlier one, so one fight yields one clip (not kill + multikill + death
+    copies of the same window). The survivor is the highest-hype ranking
+    (ties keep input order); returns (survivors, {survivor_id: [merged ids]})."""
+    order = sorted(kept, key=lambda r: -float(r.get("hype_score") or 0))
+    seen: dict[tuple[float, float], str] = {}
+    merged: dict[str, list[str]] = {}
+    drop: set[int] = set()
+    for r in order:
+        bounds = _fight_bounds(cand_by_id.get(r.get("candidate_id"), {}))
+        if bounds is None:
+            continue
+        if bounds in seen:
+            merged.setdefault(seen[bounds], []).append(r.get("candidate_id"))
+            drop.add(id(r))
+        else:
+            seen[bounds] = r.get("candidate_id")
+    return [r for r in kept if id(r) not in drop], merged
+
+
 def _window_anchor(cand: dict, r: dict, duration: float) -> tuple[float, float]:
     """Center on the exact event moment ± per-event (or global) pre/post,
     then extend to whatever wider window the ranker suggested.
@@ -205,7 +238,7 @@ def _window_anchor(cand: dict, r: dict, duration: float) -> tuple[float, float]:
     can't produce a 5-minute clip.
     """
     meta = cand.get("metadata") or {}
-    if meta.get("fight_start_s") is not None and meta.get("fight_end_s") is not None:
+    if _fight_bounds(cand) is not None:
         s0, e0 = r.get("suggested_start_seconds"), r.get("suggested_end_seconds")
         sug = (
             float(s0) if s0 is not None else None,
@@ -286,6 +319,7 @@ def build_highlights(asset: dict, rankings: list[dict], candidates: list[dict]) 
     # feels like a coherent recap instead of a hype-shuffled montage.
     # For a hype-first compile, use compile_highlights(order="hook"|
     # "hype") — that's the layer where ordering choices belong.
+    kept, merged = _merge_same_fight(kept, cand_by_id)
     kept.sort(key=lambda r: float(r.get("suggested_start_seconds", 0)))
 
     rel = relative_folder(asset, candidates)
@@ -358,6 +392,8 @@ def build_highlights(asset: dict, rankings: list[dict], candidates: list[dict]) 
                     "error": err,
                 }
             )
+        if merged.get(r.get("candidate_id")):
+            clips[-1]["merged_candidates"] = merged[r.get("candidate_id")]
 
     written = sum(1 for c in clips if c["ok"])
     game, _, _ = _parse_name(asset)

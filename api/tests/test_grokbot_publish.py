@@ -457,3 +457,33 @@ def test_cli_end_to_end_no_paraphrase(round_dir, monkeypatch, asset_db, capsys):
     assert paraphrased == []
     assert saved.clips[0].voice == "Quillfeather opens with a bold dive"
     assert saved.clips[0].energy == "hype_rising"
+
+
+def test_leaky_digest_never_reaches_jev(round_dir):
+    asked = []
+
+    def ask_many(items):
+        asked.append(items)
+        return [Answer(value="hype", probability=0.8, backend="jev") for _ in items]
+
+    with pytest.raises(pub.DigestLeakError):
+        run(
+            round_dir,
+            ask_many=ask_many,
+            transcript_slices=lambda s, e: "unrelated words",
+            paraphrase=lambda t: "they cried kited the wave perf at it",
+        )
+    assert asked == []
+
+
+def test_digest_rewritten_with_drive_ids_is_scanned_again(round_dir):
+    def leaky_ids(name, subfolder):
+        return (
+            "sk-ant-" + "a1B2c3D4e5F6g7H8i9J0k1" if name.endswith(".mp4") else ids(name, subfolder)
+        )
+
+    up = FakeUploader(ids=leaky_ids)
+    with pytest.raises(pub.SecretLeakError):
+        run(round_dir, uploader=up)
+    assert [u for u in up.uploads if "digest" in str(u)] == []
+    assert not (round_dir / "digest.json").exists()

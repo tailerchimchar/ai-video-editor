@@ -13,6 +13,7 @@ same way.
 """
 
 import contextlib
+import logging
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,6 +35,8 @@ except Exception:  # langfuse optional
     def get_client():  # type: ignore[misc]
         return None
 
+
+_log = logging.getLogger(__name__)
 
 _calls: dict[str, int] = {}
 
@@ -102,15 +105,27 @@ def record_spend(
     *,
     db_path: Path | None = None,
 ) -> float | None:
-    """Write one ledger row and return its cost (None if the model has no price).
+    """Write one ledger row and return its cost.
 
+    A model missing from MODEL_PRICES_USD_PER_MTOK is costed conservatively
+    at the table's highest input and highest output price (so the per-asset
+    cap still trips) and a warning is logged; `model` is recorded as given.
+    The cost is None only when the price table is empty.
     Nothing is written when `asset_id` is None.
     """
     if asset_id is None:
         return None
     tokens_in = int(getattr(usage, "input_tokens", 0) or 0)
     tokens_out = int(getattr(usage, "output_tokens", 0) or 0)
-    price = settings.model_prices_usd_per_mtok.get(model)
+    prices = settings.model_prices_usd_per_mtok
+    price = prices.get(model)
+    if price is None:
+        _log.warning(
+            "spend ledger: no price for model %r; costing at the most expensive listed price",
+            model,
+        )
+        if prices:
+            price = (max(p[0] for p in prices.values()), max(p[1] for p in prices.values()))
     cost = None if price is None else (tokens_in * price[0] + tokens_out * price[1]) / 1_000_000
     conn = _ledger_conn(db_path)
     try:

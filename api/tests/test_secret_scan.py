@@ -26,9 +26,27 @@ def test_every_pattern_hits_with_line_number(name):
     assert (name, 2) in hits
 
 
+KEYISH = "aB3x" * 11  # 44 chars, mixed case with digits
+
+
 def test_typesafe_long_token_on_typesafe_line():
-    assert ("typesafe", 1) in ss.scan_text("TYPESAFE_KEY=" + "x" * 44)
-    assert ss.scan_text("x" * 44) == []
+    assert ("typesafe", 1) in ss.scan_text("TYPESAFE_KEY=" + KEYISH)
+    assert ("typesafe", 1) in ss.scan_text("TYPESAFE_KEY=tsk-live-" + "9f3k2m8q" * 5)
+    assert ss.scan_text(KEYISH) == []
+
+
+def test_typesafe_ignores_identifiers_containing_the_word():
+    ident = "test_typesafe_heuristic_is_case_insensitive_and_ignores_paths"
+    assert ss.scan_text(f"def {ident}():") == []
+    assert ss.scan_text("from x import typesafe_decision_model_backend_adapter_v") == []
+    assert ss.scan_text("    TypeSafeDecisionModelBackendAdapterForJevAnswers()") == []
+
+
+def test_typesafe_ignores_git_shas_near_the_word():
+    sha = "9736bdb0c4e1f2a3b4c5d6e7f8091a2b3c4d5e6f"
+    assert len(sha) == 40
+    assert ss.scan_text(f"pinned typesafe client at {sha}") == []
+    assert ss.scan_text(f"# TypeSafe key rotated, see {KEYISH}") == []
 
 
 def test_clean_text_has_no_hits():
@@ -70,5 +88,5 @@ def test_ts_pattern_needs_a_left_boundary():
 
 
 def test_typesafe_heuristic_is_case_insensitive_and_ignores_paths():
-    assert ("typesafe", 1) in ss.scan_text("typesafe_key: " + "x" * 44)
-    assert ss.scan_text("TYPESAFE file C:/Users/a/" + "x" * 44) == []
+    assert ("typesafe", 1) in ss.scan_text("typesafe_key: " + KEYISH)
+    assert ss.scan_text("TYPESAFE file C:/Users/a/" + KEYISH) == []

@@ -167,6 +167,15 @@ def _digest_inputs(
     }
 
 
+def _refuse_secrets(local: Path) -> None:
+    """Delete the local digest and raise when it holds a secret-like string."""
+    hits = scan_paths([local])
+    if hits:
+        local.unlink(missing_ok=True)
+        found = ", ".join(f"{h.pattern}@{h.line}" for h in hits)
+        raise SecretLeakError(f"secret-like string in digest ({found})")
+
+
 def publish_round(
     round_dir: Path,
     *,
@@ -206,6 +215,14 @@ def publish_round(
     if compilation_id and api is not None:
         digest.compilation_version = str(api.plan_version(compilation_id))
 
+    # Round-wide transcript check BEFORE Jev: no voice text that fails it
+    # may reach TypeSafe.
+    transcript = round_dir / "transcript.json"
+    if transcript.is_file():
+        leaks = digest_leaks(digest, transcript)
+        if leaks:
+            raise DigestLeakError(f"digest leaks {len(leaks)} transcript fragment(s)")
+
     asker = _default_ask_many() if ask_many is None else (ask_many or None)
     if asker is not None and digest.clips:
         try:
@@ -213,20 +230,10 @@ def publish_round(
         except Exception as e:  # enrichment is optional; the digest still ships
             logger.warning("publish: Jev annotation failed: %s", e)
 
-    transcript = round_dir / "transcript.json"
-    if transcript.is_file():
-        leaks = digest_leaks(digest, transcript)
-        if leaks:
-            raise DigestLeakError(f"digest leaks {len(leaks)} transcript fragment(s)")
-
     # Scan the serialised digest before anything is uploaded.
     local = round_dir / "digest.json"
     local.write_text(digest.model_dump_json(indent=2), encoding="utf-8")
-    hits = scan_paths([local])
-    if hits:
-        local.unlink(missing_ok=True)
-        found = ", ".join(f"{h.pattern}@{h.line}" for h in hits)
-        raise SecretLeakError(f"secret-like string in digest ({found})")
+    _refuse_secrets(local)
 
     files = _clip_files(round_dir, clips_dir)
     roots = (settings.workspace_dir, settings.outplayed_media_dir)
@@ -243,6 +250,7 @@ def publish_round(
         clip_ids[clip.ref] = clip.drive
 
     local.write_text(digest.model_dump_json(indent=2), encoding="utf-8")
+    _refuse_secrets(local)  # again: the rewrite added Drive ids
     digest_id = _upload(
         uploader, local, f"{round_dir.name}-digest.json", f"digests/{_round_date(round_dir.name)}"
     )

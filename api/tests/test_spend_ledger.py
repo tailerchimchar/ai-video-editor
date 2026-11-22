@@ -38,14 +38,32 @@ def test_cost_math_sonnet(db):
     ]
 
 
-def test_unknown_model_writes_row_with_null_cost(db):
-    assert (
-        record_spend(
-            "a1", "rank", "mystery", SimpleNamespace(input_tokens=10, output_tokens=5), db_path=db
-        )
-        is None
+def test_unknown_model_costed_at_max_price_warns_and_trips_cap(db, monkeypatch, caplog):
+    monkeypatch.setattr(
+        settings,
+        "model_prices_usd_per_mtok",
+        {"cheap": (1.0, 15.0), "pricey": (3.0, 5.0)},
     )
-    assert _rows(db) == [("a1", "rank", "mystery", 10, 5, None)]
+    monkeypatch.setattr(settings, "cost_cap_per_asset_usd", 2.0)
+    with caplog.at_level("WARNING", logger="ai_video_editor.anthropic_surface"):
+        cost = record_spend(
+            "a1",
+            "rank",
+            "mystery",
+            SimpleNamespace(input_tokens=500_000, output_tokens=100_000),
+            db_path=db,
+        )
+    assert cost == pytest.approx((500_000 * 3.0 + 100_000 * 15.0) / 1_000_000)  # $3.00
+    assert "mystery" in caplog.text
+    assert _rows(db) == [("a1", "rank", "mystery", 500_000, 100_000, pytest.approx(3.0))]
+    with pytest.raises(SpendCapError):
+        check_budget("a1", db_path=db)
+
+
+def test_unknown_model_with_empty_price_table_is_null(db, monkeypatch):
+    monkeypatch.setattr(settings, "model_prices_usd_per_mtok", {})
+    usage = SimpleNamespace(input_tokens=10, output_tokens=5)
+    assert record_spend("a1", "rank", "mystery", usage, db_path=db) is None
 
 
 def test_no_asset_id_writes_nothing(db):
@@ -183,6 +201,22 @@ def test_vlm_backend_capped_asset_is_unavailable_not_a_crash(monkeypatch):
         raise SpendCapError("over cap")
 
     monkeypatch.setattr(ab, "check_budget", capped)
+    with pytest.raises(VLMUnavailableError):
+        backend.call(frames=[], system_prompt="s", user_prompt="u")
+    assert ("api",) not in log
+
+
+def test_vlm_backend_ledger_error_is_unavailable_not_a_crash(monkeypatch):
+    from ai_video_editor.vlm.backends import anthropic_backend as ab
+    from ai_video_editor.vlm.backends.base import VLMUnavailableError
+
+    log: list = []
+    backend = _vlm_backend(monkeypatch, log)
+
+    def locked(a):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(ab, "check_budget", locked)
     with pytest.raises(VLMUnavailableError):
         backend.call(frames=[], system_prompt="s", user_prompt="u")
     assert ("api",) not in log

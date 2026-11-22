@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import sqlite3
 import time
 from pathlib import Path
 
@@ -118,8 +119,9 @@ class AnthropicBackend(VLMBackend):
         content.append({"type": "text", "text": user_prompt})
         try:
             check_budget(self.asset_id)
-        except SpendCapError as exc:
-            # The VLM loops degrade on VLMUnavailableError only; a capped asset skips VLM.
+        except (SpendCapError, sqlite3.Error) as exc:
+            # The VLM loops degrade on VLMUnavailableError only: a capped asset
+            # (or an unreadable ledger) skips VLM instead of crashing the cut.
             raise VLMUnavailableError(str(exc)) from exc
         try:
             resp = client.messages.create(
