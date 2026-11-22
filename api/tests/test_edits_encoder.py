@@ -8,7 +8,7 @@ from ai_video_editor.config import settings
 def argv(monkeypatch):
     monkeypatch.setattr(settings, "ffmpeg_video_codec_opts", "-preset slow -crf 18")
     seen: list[list[str]] = []
-    monkeypatch.setattr(edits, "_run_ffmpeg", lambda cmd: (seen.append(cmd) or (True, None)))
+    monkeypatch.setattr(edits, "_run_ffmpeg", lambda cmd: seen.append(cmd) or (True, None))
     return seen
 
 
