@@ -850,9 +850,7 @@ def _snap_plan_to_beats(plan: ShortPlan, music_path: str) -> ShortPlan:
     return replace(
         plan,
         clips=tuple(
-            c
-            if c.anchor_offset_seconds is None
-            else replace(c, end_seconds=s.new_end_seconds)
+            c if c.anchor_offset_seconds is None else replace(c, end_seconds=s.new_end_seconds)
             for c, s in zip(plan.clips, snapped.clips, strict=True)
         ),
     )
@@ -3111,6 +3109,19 @@ def _write_custom_index_md(
     (folder / "index.md").write_text("\n".join(lines), encoding="utf-8")
 
 
+def _write_custom_index_json(folder: Path, *, name: str, music_path: str | None) -> None:
+    """Machine-readable sidecar. `music_folder` lets the Drive guard refuse
+    renders that carry owner_recs (label) music."""
+    from .music.library import music_folder_of
+
+    sidecar = {
+        "name": name,
+        "music_path": music_path,
+        "music_folder": music_folder_of(music_path) if music_path else None,
+    }
+    (folder / "index.json").write_text(json.dumps(sidecar, indent=2), encoding="utf-8")
+
+
 def build_custom_montage(
     *,
     clip_paths: list[str],
@@ -3275,6 +3286,7 @@ def build_custom_montage(
         music_path=resolved_music,
         beat_flash_source=beat_flash_source,
     )
+    _write_custom_index_json(out_folder, name=resolved_name, music_path=resolved_music)
 
     return {
         "ok": True,

@@ -75,7 +75,12 @@ def _render(clip: ShortClip, **kwargs) -> list[str]:
         patch("ai_video_editor.music.analysis.load_or_analyze", return_value=analysis),
     ):
         ok, err = render_short(
-            plan, Path("out") / "s.mp4", mode="montage", music_path="s.mp3", beat_flash=False, **kwargs
+            plan,
+            Path("out") / "s.mp4",
+            mode="montage",
+            music_path="s.mp3",
+            beat_flash=False,
+            **kwargs,
         )
     assert ok, err
     return captured[0]
