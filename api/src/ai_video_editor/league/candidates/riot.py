@@ -462,6 +462,7 @@ def _attach_fight_metadata(rows: list[dict], tl: RiotTimeline | None) -> None:
         if f is not None:
             meta["fight_start_s"] = round(f.start_s, 2)
             meta["fight_end_s"] = round(f.end_s, 2)
+            meta["fight_opens_with_ally_death"] = f.events[0].kind in ("ally_death", "death")
         meta["game_end_s"] = None if tl.game_end_s is None else round(tl.game_end_s, 2)
         meta["match_confidence"] = tl.confidence
 

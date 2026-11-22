@@ -25,6 +25,8 @@ from pydantic import BaseModel, Field
 
 from ..bucketing import _FORMAT_QUESTION, _INCLUDE_QUESTION
 from ..decisions import Answer, ask_many
+from ..league.lane_models import LaneSummary
+from ..refs import normalize_clip_ref
 
 if TYPE_CHECKING:
     from ..league.riot_timeline import OwnerFrame, RiotTimeline
@@ -79,6 +81,7 @@ class Digest(BaseModel):
     compilation_id: str | None = None
     compilation_version: str | None = None
     asset_id: str | None = None
+    lane: LaneSummary | None = None
 
 
 def _load(path: Path) -> Any:
@@ -97,7 +100,7 @@ def _by_ref(entries: Any) -> dict[str, dict]:
     if not isinstance(entries, list):
         return {}
     return {
-        e["clip_ref"]: e
+        normalize_clip_ref(e["clip_ref"]): e
         for e in entries
         if isinstance(e, dict) and isinstance(e.get("clip_ref"), str)
     }
@@ -196,6 +199,7 @@ def build_digest(
     transcript_slices: Callable[[float, float], str] | None = None,
     paraphrase: Callable[[str], str] | None = None,
     energy: Callable[[float, float], str] | None = None,
+    lane: LaneSummary | None = None,
 ) -> Digest:
     clips = _load(round_dir / "clips.json")
     clips = clips if isinstance(clips, list) else []
@@ -215,8 +219,9 @@ def build_digest(
             logger.warning("digest: skipping a clips.json entry without file/start/end")
             continue
         ref = _ref_from_file(clip["file"])
-        g = gaming.get(ref) or {}
-        v = viewer.get(ref) or {}
+        key = normalize_clip_ref(ref)
+        g = gaming.get(key) or {}
+        v = viewer.get(key) or {}
         start_s, end_s = clip["start_seconds"], clip["end_seconds"]
         out.append(
             DigestClip(
@@ -248,6 +253,7 @@ def build_digest(
         round=round_dir.name,
         clips=out,
         built_at=datetime.now(timezone.utc).isoformat(),
+        lane=lane,
     )
 
 

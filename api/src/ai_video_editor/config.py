@@ -9,6 +9,11 @@ class Settings(BaseSettings):
     outplayed_media_dir: Path
     workspace_dir: Path
     ffmpeg_path: str = "ffmpeg"
+    # Owner-mic track (candidates/mic_track.py). Override = audio-stream
+    # position (0:a:N) to force; min_activity = least speech-frame fraction
+    # for the activity heuristic to trust a stream.
+    mic_stream_override: int | None = None
+    mic_min_activity: float = 0.05
     database_path: Path = Path("ai_video_editor.db")
 
     # ffmpeg encoder used for compile/per-clip re-encodes. libx264 is the

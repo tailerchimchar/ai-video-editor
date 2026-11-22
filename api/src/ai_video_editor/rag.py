@@ -22,6 +22,7 @@ import numpy as np
 import sqlite_vec
 
 from .config import settings
+from .transcript_track import MIXED_TRACK_SQL
 
 _log = logging.getLogger(__name__)
 _model = None  # lazy fastembed singleton
@@ -79,8 +80,8 @@ async def index_asset_transcript(db, asset_id: str) -> dict:
     just returns 0 indexed and logs.
     """
     rows = await db.execute_fetchall(
-        "SELECT start_seconds, end_seconds, text FROM transcripts "
-        "WHERE video_id = ? ORDER BY start_seconds",
+        f"SELECT start_seconds, end_seconds, text FROM transcripts "
+        f"WHERE video_id = ? AND {MIXED_TRACK_SQL} ORDER BY start_seconds",
         (asset_id,),
     )
     segments = [dict(r) for r in rows]

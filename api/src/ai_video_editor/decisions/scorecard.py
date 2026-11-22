@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..config import settings
+from ..refs import normalize_clip_ref
 from .audit import AnswerRecord
 
 _FORMATS = ("hype", "story", "voice_over", "funny", "arc_montage")
@@ -45,19 +46,16 @@ def _confirmed_format(rule: str) -> str | None:
     return None
 
 
-_REF = re.compile(r"\d+m\d+s")
-
-
 def _refs(text: str) -> set[str]:
     """Normalised refs in a clip_ref: correction refs are file names, sometimes
     several joined by `;`/`,` (`02_hype_callout_6m33s.mp4; 04_assist_9m41s.mp4`),
     audit refs are bare (`6m33s`). Each part yields its `NmNNs` refs, or
-    itself when it has none (opaque ids)."""
+    itself when it has none (opaque ids), via `refs.normalize_clip_ref`."""
     out: set[str] = set()
     for part in re.split(r"[;,]", text):
         part = part.strip()
         if part:
-            out |= set(_REF.findall(part)) or {part}
+            out.add(normalize_clip_ref(part))
     return out
 
 
