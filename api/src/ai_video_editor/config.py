@@ -338,6 +338,13 @@ class Settings(BaseSettings):
     # `<workspace_dir>/decisions`.
     decisions_log_dir: Path | None = None
 
+    # --- HP-bar reader (cv/hp_bar.py), shadow mode ------------------------
+    # While False, scan_hp_shadow() only logs trade/escape events to
+    # <workspace_dir>/hp_shadow/<asset_id>.json; candidates/service.py adds
+    # nothing. Flip on after the log has been compared against real clips.
+    hp_reader_enabled: bool = False
+    hp_reader_step_s: float = 1.5
+
     # --- YouTube Shorts pipeline -----------------------------------------
     # `compile_shorts` reads the highlights folder, buckets clips by
     # narrative intent, and outputs 9:16 blur-fill shorts ready for
