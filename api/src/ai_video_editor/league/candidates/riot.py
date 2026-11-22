@@ -28,14 +28,32 @@ Endpoints used (Riot ACCOUNT-V1 / MATCH-V5, regional routing):
 
 import logging
 import re
+import time
+from collections.abc import Callable
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import httpx
 
 from ...config import settings
+from ..offset import SYNC_ONLY, calibrate_offset, sync_only_offset
+from ..riot_timeline import (
+    RiotTimeline,
+    cache_dir_for,
+    fight_containing,
+    fights,
+    game_window_ms,
+    load_cached,
+    parse_timeline,
+    save_cache,
+)
 
 _TIMEOUT = 10.0
+_RETRY_AFTER_CAP_S = 10.0
+# Seams for tests: the HTTP client factory and the 429 back-off sleep.
+_client_factory = httpx.Client
+_sleep = time.sleep
 _log = logging.getLogger(__name__)
 
 # Outplayed filenames: "<game>_MM-DD-YYYY_H-M-S-ms.mp4" — a local
@@ -103,13 +121,31 @@ def _base() -> str:
     return f"https://{settings.riot_region}.api.riotgames.com"
 
 
+def _retry_after_s(r: httpx.Response) -> float:
+    try:
+        wait = float(r.headers.get("Retry-After", "1"))
+    except ValueError:
+        wait = 1.0
+    return max(0.0, min(_RETRY_AFTER_CAP_S, wait))
+
+
 def _get(client: httpx.Client, path: str, **params) -> dict | list:
-    r = client.get(
-        _base() + path,
-        params=params or None,
-        headers={"X-Riot-Token": settings.riot_api_key},
-        timeout=_TIMEOUT,
-    )
+    """GET with one polite retry: on 429 sleep `Retry-After` (capped) and try
+    once more. A second 429 or any 5xx raises HTTPStatusError, which the
+    caller turns into a soft `rate_limited` / `api_error` with no rows."""
+
+    def once() -> httpx.Response:
+        return client.get(
+            _base() + path,
+            params=params or None,
+            headers={"X-Riot-Token": settings.riot_api_key},
+            timeout=_TIMEOUT,
+        )
+
+    r = once()
+    if r.status_code == 429:
+        _sleep(_retry_after_s(r))
+        r = once()
     r.raise_for_status()
     return r.json()
 
@@ -118,15 +154,11 @@ def _get(client: httpx.Client, path: str, **params) -> dict | list:
 def _game_window_ms(match_info: dict) -> tuple[int, int]:
     """(start_ms, end_ms) for a MATCH-V5 match `info` object, handling the
     historical gameDuration units quirk."""
-    info = match_info["info"]
-    start = int(info["gameStartTimestamp"])
-    end = info.get("gameEndTimestamp")
-    if end is not None:
-        return start, int(end)
-    dur = int(info.get("gameDuration", 0))
-    # Pre-patch-11.20 matches report gameDuration in ms; later ones in s.
-    dur_ms = dur if dur > 100_000 else dur * 1000
-    return start, start + dur_ms
+    window = game_window_ms(match_info)
+    if window is None:  # no end signal at all: zero-length game at its start
+        start = int(match_info["info"]["gameStartTimestamp"])
+        return start, start
+    return window
 
 
 def _our_participant(match_info: dict, puuid: str) -> dict | None:
@@ -315,38 +347,38 @@ def detect_riot_events(asset: dict, duration: float) -> tuple[list[dict], RiotSt
     if expected_start_ms is None:
         return [], "disabled"  # no parseable filename time → can't correlate
 
-    name, _, tag = settings.riot_id.partition("#")
     try:
-        with httpx.Client() as client:
-            acct = _get(client, f"/riot/account/v1/accounts/by-riot-id/{name}/{tag}")
-            puuid = acct["puuid"]
-            match_ids = _get(
-                client,
-                f"/lol/match/v5/matches/by-puuid/{puuid}/ids",
-                start=0,
-                count=settings.riot_match_lookback,
-            )
-            matches = [_get(client, f"/lol/match/v5/matches/{mid}") for mid in match_ids]
-            chosen, ds_ms, dd_ms = _correlate(expected_start_ms, duration_ms, matches)
-            if chosen is None:
+        asset_id = asset.get("id")
+        cdir = cache_dir_for(asset_id) if asset_id else None
+        cached = load_cached(cdir) if cdir is not None else None
+        if cached is not None:
+            chosen, timeline, meta = cached
+            puuid = meta.get("owner_puuid") or ""
+        else:
+            with _client_factory() as client:
+                live = _fetch_live(client, expected_start_ms, duration_ms)
+            if live is None:
                 return [], "no_match"
-            corr = {
-                "confidence": _confidence(ds_ms, dd_ms),
-                "delta_start_s": round(ds_ms / 1000, 1),
-                "delta_dur_s": round(dd_ms / 1000, 1),
-            }
-            match_id = chosen["metadata"]["matchId"]
-            timeline = _get(client, f"/lol/match/v5/matches/{match_id}/timeline")
-            result = _kill_candidates(
-                chosen,
-                timeline,
-                puuid,
-                duration,
-                settings.analyze_window_padding,
-                settings.riot_sync_offset_seconds,
-                corr,
-            )
-            return result, ("ok" if result else "no_match")
+            chosen, timeline, puuid = live
+        _, ds_ms, dd_ms = _correlate(expected_start_ms, duration_ms, [chosen])
+        corr = {
+            "confidence": _confidence(ds_ms, dd_ms),
+            "delta_start_s": round(ds_ms / 1000, 1),
+            "delta_dur_s": round(dd_ms / 1000, 1),
+        }
+        if cached is None and cdir is not None:
+            _write_cache(cdir, chosen, timeline, puuid, corr["confidence"])
+        result = _kill_candidates(
+            chosen,
+            timeline,
+            puuid,
+            duration,
+            settings.analyze_window_padding,
+            settings.riot_sync_offset_seconds,
+            corr,
+        )
+        _attach_fight_metadata(result, _safe_parse(chosen, timeline, puuid, corr["confidence"]))
+        return result, ("ok" if result else "no_match")
     except httpx.HTTPStatusError as e:
         status = "rate_limited" if e.response.status_code == 429 else "api_error"
         _log.warning("Riot source skipped (%s): %s", status, e)
@@ -355,4 +387,151 @@ def detect_riot_events(asset: dict, duration: float) -> tuple[list[dict], RiotSt
         _log.warning("Riot source skipped (api_error): %s", e)
         return [], "api_error"
 
-    return result
+
+def _fetch_live(
+    client: httpx.Client, expected_start_ms: int, duration_ms: int
+) -> tuple[dict, dict, str] | None:
+    """Account -> match lookback -> correlate -> timeline. Returns
+    (chosen_match, timeline, owner_puuid) or None when no match exists.
+    HTTP errors propagate to the caller."""
+    name, _, tag = settings.riot_id.partition("#")
+    acct = _get(client, f"/riot/account/v1/accounts/by-riot-id/{name}/{tag}")
+    puuid = acct["puuid"]
+    match_ids = _get(
+        client,
+        f"/lol/match/v5/matches/by-puuid/{puuid}/ids",
+        start=0,
+        count=settings.riot_match_lookback,
+    )
+    matches = [_get(client, f"/lol/match/v5/matches/{mid}") for mid in match_ids]
+    chosen, _, _ = _correlate(expected_start_ms, duration_ms, matches)
+    if chosen is None:
+        return None
+    match_id = chosen["metadata"]["matchId"]
+    timeline = _get(client, f"/lol/match/v5/matches/{match_id}/timeline")
+    return chosen, timeline, puuid
+
+
+def _write_cache(cdir, match: dict, timeline: dict, puuid: str, confidence: str) -> None:
+    """Persist the correlated match; a cache failure never breaks candidates.
+    Low-confidence picks are never written. The offset recorded here is the
+    uncalibrated sync offset, marked `sync_only`; the orchestrator overwrites
+    it with the calibrated one (`riot_timeline.record_offset`)."""
+    if confidence == "low":
+        return
+    try:
+        save_cache(
+            cdir,
+            match,
+            timeline,
+            match_id=match["metadata"]["matchId"],
+            confidence=confidence,
+            offset_s=settings.riot_sync_offset_seconds,
+            owner_puuid=puuid,
+            offset_source=SYNC_ONLY,
+        )
+    except (OSError, KeyError, TypeError) as e:
+        _log.warning("Riot cache write skipped: %s", e)
+
+
+def _safe_parse(match: dict, timeline: dict, puuid: str, confidence: str) -> RiotTimeline | None:
+    try:
+        return parse_timeline(
+            match,
+            timeline,
+            owner_puuid=puuid,
+            offset_s=settings.riot_sync_offset_seconds,
+            confidence=confidence,
+        )
+    except ValueError:
+        return None
+
+
+def _attach_fight_metadata(rows: list[dict], tl: RiotTimeline | None) -> None:
+    """Confidence gate (R4): a low-confidence match never yields fight data.
+    Otherwise every row gains `game_end_s` + `match_confidence`, and
+    `fight_start_s` / `fight_end_s` from the fight containing its anchor
+    (rows outside any fight, e.g. solo objectives, get no bounds). All in
+    the same recording seconds as `anchor_seconds`."""
+    if tl is None or tl.confidence == "low":
+        return
+    fight_list = fights(tl.events)
+    for r in rows:
+        meta = r["metadata"]
+        f = fight_containing(fight_list, float(meta["anchor_seconds"]))
+        if f is not None:
+            meta["fight_start_s"] = round(f.start_s, 2)
+            meta["fight_end_s"] = round(f.end_s, 2)
+        meta["game_end_s"] = None if tl.game_end_s is None else round(tl.game_end_s, 2)
+        meta["match_confidence"] = tl.confidence
+
+
+def fetch_timeline_inputs(
+    asset: dict, duration: float, *, energy_fn: Callable | None = None
+) -> tuple | None:
+    """`riot_timeline.load_or_fetch` fetch for an asset.
+
+    Returns (match, timeline, match_id, confidence, offset_s, owner_puuid,
+    offset_source) or None on any failure (unconfigured, not League, no
+    match, API error). `offset_s` comes from the same `calibrate_offset`
+    the candidate path uses, run on the same owner events, so timeline
+    seconds match clip seconds. Without a readable recording (`asset["path"]`)
+    the offset is the uncalibrated sync nudge and `offset_source` is
+    `sync_only`. `energy_fn(path, duration)` defaults to the audio module's
+    `energy_curve`.
+    """
+    if not (_configured() and _is_league(asset) and duration > 0):
+        return None
+    expected_start_ms = _expected_start_ms(asset.get("filename", ""))
+    if expected_start_ms is None:
+        return None
+    duration_ms = int(duration * 1000)
+    try:
+        with _client_factory() as client:
+            live = _fetch_live(client, expected_start_ms, duration_ms)
+    except Exception as e:  # non-fatal by contract
+        _log.warning("Riot timeline fetch skipped: %s", e)
+        return None
+    if live is None:
+        return None
+    chosen, timeline, puuid = live
+    _, ds_ms, dd_ms = _correlate(expected_start_ms, duration_ms, [chosen])
+    rows = _kill_candidates(
+        chosen,
+        timeline,
+        puuid,
+        duration,
+        settings.analyze_window_padding,
+        settings.riot_sync_offset_seconds,
+    )
+    kills = sorted(r["metadata"]["riot_event_ms"] / 1000.0 for r in rows)
+    cal = _calibrate_for_asset(asset, duration, kills, energy_fn)
+    return (
+        chosen,
+        timeline,
+        chosen["metadata"]["matchId"],
+        _confidence(ds_ms, dd_ms),
+        cal.offset_s,
+        puuid,
+        cal.source,
+    )
+
+
+def _calibrate_for_asset(asset: dict, duration: float, kills: list[float], energy_fn):
+    """Calibrated offset when the recording is readable (or a manual
+    override is set); otherwise the sync-only fallback."""
+    if settings.riot_offset_override_seconds is not None:
+        return calibrate_offset(kills, None, None)
+    path = asset.get("path")
+    if not (path and kills and Path(path).is_file()):
+        return sync_only_offset()
+    if energy_fn is None:
+        from ...candidates.audio import energy_curve as energy_fn
+    try:
+        energy = energy_fn(path, duration)
+    except Exception as e:  # decode failure -> same as no loudness curve
+        _log.warning("Riot offset: loudness decode failed: %s", e)
+        energy = None
+    if energy is None:  # no loudness curve -> nothing to calibrate against
+        return sync_only_offset()
+    return calibrate_offset(kills, energy, path)
