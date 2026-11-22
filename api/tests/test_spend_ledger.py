@@ -142,7 +142,7 @@ def test_ranker_survives_ledger_write_failure(monkeypatch):
             )
 
     monkeypatch.setattr(ranker, "make_client", lambda: SimpleNamespace(messages=FakeMessages()))
-    assert ranker.rank_candidates("league", [{"id": "c1"}], asset_id="a9") == 1
+    assert len(ranker.rank_candidates("league", [{"id": "c1"}], asset_id="a9")) == 1
 
 
 def _vlm_backend(monkeypatch, log, asset_id="a9"):
