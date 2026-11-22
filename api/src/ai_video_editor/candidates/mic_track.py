@@ -19,7 +19,8 @@ from pathlib import Path
 import numpy as np
 
 from ..config import settings
-from .transcribe_backends import TranscribeUnavailableError, _extract_audio, select_backend
+from .sentiment import score_sentiment
+from .transcribe_backends import _extract_audio, select_backend
 
 _log = logging.getLogger(__name__)
 
@@ -41,9 +42,6 @@ class AudioStream:
 
 
 def _ffprobe() -> str:
-    explicit = getattr(settings, "ffprobe_path", None)
-    if explicit:
-        return explicit
     ff = settings.ffmpeg_path
     name = Path(ff).name
     if name.lower().startswith("ffmpeg"):
@@ -76,7 +74,7 @@ def probe_audio_streams(path: str) -> list[AudioStream]:
     return out
 
 
-def _duration(path: str) -> float:
+def _probe_duration(path: str) -> float:
     cmd = [_ffprobe(), "-v", "error", "-show_entries", "format=duration", "-of", "json", path]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
@@ -86,10 +84,17 @@ def _duration(path: str) -> float:
 
 
 def speech_activity(
-    path: str, index: int, *, windows: tuple[float, ...] = (0.1, 0.5, 0.8)
+    path: str,
+    index: int,
+    *,
+    windows: tuple[float, ...] = (0.1, 0.5, 0.8),
+    duration: float | None = None,
 ) -> float:
-    """Fraction of 20 ms frames above an RMS threshold across three 20 s samples."""
-    duration = _duration(path)
+    """Fraction of 20 ms frames above an RMS threshold across three 20 s samples.
+
+    `duration` (seconds) avoids a second ffprobe call when the caller knows it."""
+    if duration is None:
+        duration = _probe_duration(path)
     if duration <= 0:
         return 0.0
     loud = total = 0
@@ -143,28 +148,32 @@ def transcribe_mic(asset: dict, duration: float) -> tuple[list[dict], dict]:
     activity: dict[int, float] = {}
     labelled = any(_LABEL.search((s.title or "") + " " + (s.handler or "")) for s in streams)
     if settings.mic_stream_override is None and not labelled and len(streams) >= 2:
-        activity = {s.index: speech_activity(path, s.index) for s in streams}
+        activity = {s.index: speech_activity(path, s.index, duration=duration) for s in streams}
     index, method = pick_mic_stream(streams, activity, min_activity=settings.mic_min_activity)
     meta = {"stream_index": index, "method": method, "activity": activity}
 
     segments: list[dict] = []
     if index is not None:
         if duration <= 0 or duration > settings.transcribe_max_seconds:
-            meta["skipped"] = "duration"
+            meta["error"] = "duration over cap or unknown"
         else:
             with tempfile.TemporaryDirectory(prefix="mic_stt_") as tmp:
                 wav = Path(tmp) / "mic.wav"
-                if _extract_audio(path, wav, stream_index=index):
+                if not _extract_audio(path, wav, stream_index=index):
+                    meta["error"] = "audio extract failed"
+                else:
                     try:
                         raw = select_backend().transcribe_raw(str(wav))
-                    except TranscribeUnavailableError as exc:
-                        _log.warning("mic: backend unavailable: %s", exc)
+                    except Exception as exc:  # backend failure must not erase prior rows
+                        _log.warning("mic: backend failed: %s", exc)
+                        meta["error"] = f"backend failed: {exc!s}"[:200]
                         raw = []
                     segments = [
                         {
                             "start_seconds": s.get("start_seconds"),
                             "end_seconds": s.get("end_seconds"),
                             "text": s["text"].strip(),
+                            "sentiment_score": score_sentiment(s["text"].strip()),
                             "words": s.get("words") or [],
                         }
                         for s in raw

@@ -29,6 +29,7 @@ from ..models import HighlightCandidate, RankResponse
 from ..rag import index_asset_transcript
 from ..rag import search as rag_search
 from ..ranker import rank_candidates
+from ..transcript_track import MIXED_TRACK_SQL
 
 router = APIRouter(tags=["analyze"])
 
@@ -62,8 +63,8 @@ async def _run_candidates_job(job_id: str, asset: dict) -> None:
         # sentiment_score) get scored on the fly — VADER is microseconds
         # per call, so this is cheaper than a separate backfill job.
         trows = await db.execute_fetchall(
-            "SELECT start_seconds, end_seconds, text, sentiment_score "
-            "FROM transcripts WHERE video_id = ? ORDER BY start_seconds",
+            f"SELECT start_seconds, end_seconds, text, sentiment_score "
+            f"FROM transcripts WHERE video_id = ? AND {MIXED_TRACK_SQL} ORDER BY start_seconds",
             (asset["id"],),
         )
         from ..candidates.sentiment import score_sentiment
@@ -440,6 +441,15 @@ async def _run_transcribe_mic_job(job_id: str, asset: dict) -> None:
                 db, job_id, output_path=f"no mic stream (method={meta['method']})", error=None
             )
             return
+        if meta.get("error"):
+            # Keep any prior owner rows; a transient failure must not erase them.
+            await finish_job(
+                db,
+                job_id,
+                output_path=f"owner transcript not updated ({meta['error']}); kept existing rows",
+                error=None,
+            )
+            return
 
         await db.execute(
             "DELETE FROM transcripts WHERE video_id = ? AND speaker = 'owner'", (asset["id"],)
@@ -456,7 +466,7 @@ async def _run_transcribe_mic_job(job_id: str, asset: dict) -> None:
                     s["start_seconds"],
                     s["end_seconds"],
                     s["text"],
-                    None,
+                    s.get("sentiment_score"),
                     json.dumps(s.get("words")) if s.get("words") else None,
                     now,
                 ),
@@ -497,8 +507,8 @@ async def get_transcript(asset_id: str):
     db = await get_db()
     try:
         rows = await db.execute_fetchall(
-            "SELECT start_seconds, end_seconds, text, words FROM transcripts "
-            "WHERE video_id = ? ORDER BY start_seconds",
+            f"SELECT start_seconds, end_seconds, text, words FROM transcripts "
+            f"WHERE video_id = ? AND {MIXED_TRACK_SQL} ORDER BY start_seconds",
             (asset_id,),
         )
     finally:

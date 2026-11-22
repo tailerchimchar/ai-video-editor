@@ -347,10 +347,10 @@ def asset_db(tmp_path, monkeypatch):
     conn.execute("INSERT INTO assets VALUES ('a1', 'f.mp4', 'C:/x/f.mp4', 'lol', 1900.0)")
     conn.execute(
         "CREATE TABLE transcripts (video_id TEXT, start_seconds REAL, end_seconds REAL, "
-        "text TEXT, sentiment_score REAL)"
+        "text TEXT, sentiment_score REAL, speaker TEXT)"
     )
-    conn.execute("INSERT INTO transcripts VALUES ('a1', 10.0, 12.0, 'haha', 0.7)")
-    conn.execute("INSERT INTO transcripts VALUES ('a1', 14.0, 15.0, 'go go go', 0.8)")
+    conn.execute("INSERT INTO transcripts VALUES ('a1', 10.0, 12.0, 'haha', 0.7, NULL)")
+    conn.execute("INSERT INTO transcripts VALUES ('a1', 14.0, 15.0, 'go go go', 0.8, NULL)")
     conn.commit()
     conn.close()
     monkeypatch.setattr(settings, "database_path", path)
@@ -433,7 +433,7 @@ def _e2e(round_dir, monkeypatch, asset_db, *extra):
     import sqlite3
 
     conn = sqlite3.connect(asset_db)
-    conn.execute("INSERT INTO transcripts VALUES ('a1', 871.0, 875.0, 'lets go push', 0.9)")
+    conn.execute("INSERT INTO transcripts VALUES ('a1', 871.0, 875.0, 'lets go push', 0.9, NULL)")
     conn.commit()
     conn.close()
     pub.main([str(round_dir), "--game", "league", "--no-jev", "--asset-id", "a1", *extra])

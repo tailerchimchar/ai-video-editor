@@ -14,6 +14,7 @@ from pathlib import Path
 
 from ..anthropic_surface import check_budget, make_client, record_spend, reserve_call
 from ..config import settings
+from ..transcript_track import MIXED_TRACK_SQL
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +99,7 @@ def window_sentiment(db_path: Path, video_id: str, start_s: float, end_s: float)
     """Mean `sentiment_score` of transcript rows overlapping the window; None if none."""
     rows = _rows(
         db_path,
-        f"SELECT AVG(sentiment_score) FROM transcripts {_OVERLAP}",
+        f"SELECT AVG(sentiment_score) FROM transcripts {_OVERLAP} AND {MIXED_TRACK_SQL}",
         (video_id, end_s, start_s),
     )
     return rows[0][0] if rows else None
