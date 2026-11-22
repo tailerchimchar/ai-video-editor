@@ -20,6 +20,7 @@ def _rules_backend(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "anthropic_api_key", "")
     monkeypatch.setattr(settings, "decisions_backend", "auto")
     monkeypatch.setattr(settings, "workspace_dir", tmp_path / "ws")
+    monkeypatch.setattr(settings, "decisions_log_dir", None)  # default: workspace/decisions
 
 
 def _lines(tmp_path):

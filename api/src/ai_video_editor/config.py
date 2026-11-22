@@ -319,6 +319,9 @@ class Settings(BaseSettings):
     # written. None -> `<workspace_dir>/game_hints`. The package's
     # vlm/game_hints/ is only a read-only seed when the file is absent.
     game_hints_dir: Path | None = None
+    # Where the Jev audit log (jev-<date>.jsonl) is written. None ->
+    # `<workspace_dir>/decisions`.
+    decisions_log_dir: Path | None = None
 
     # --- YouTube Shorts pipeline -----------------------------------------
     # `compile_shorts` reads the highlights folder, buckets clips by

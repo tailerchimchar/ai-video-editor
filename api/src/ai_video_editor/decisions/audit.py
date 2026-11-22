@@ -86,7 +86,7 @@ def log_answers(records: list[AnswerRecord], *, log_dir: Path | None = None) -> 
     if not records:
         return
     try:
-        directory = log_dir or settings.workspace_dir / "decisions"
+        directory = log_dir or settings.decisions_log_dir or settings.workspace_dir / "decisions"
         directory.mkdir(parents=True, exist_ok=True)
         day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         lines = "".join(

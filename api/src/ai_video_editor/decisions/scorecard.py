@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -60,7 +61,7 @@ def score(records: list[AnswerRecord], corrections: list[dict]) -> Scorecard:
     for r in (r for r in records if isinstance(r.value, str) and r.clip_ref):
         for c in corrections:
             rule = str(c.get("rule") or "")
-            if r.clip_ref not in rule:
+            if not re.search(rf"\b{re.escape(r.clip_ref)}\b", rule):
                 continue
             confirmed = _confirmed_format(rule.replace(r.clip_ref, ""))
             if confirmed is None:
@@ -104,19 +105,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--hints-dir", type=Path, default=None)
     args = parser.parse_args(argv)
 
-    log_dir = args.log_dir or settings.workspace_dir / "decisions"
+    log_dir = args.log_dir or settings.decisions_log_dir or settings.workspace_dir / "decisions"
     hints_dir = args.hints_dir or settings.game_hints_dir or settings.workspace_dir / "game_hints"
     records = []
     for path in sorted(log_dir.glob("jev-*.jsonl")) if log_dir.is_dir() else []:
         for row in _read_jsonl(path):
             try:
-                if row.get("backend") == "jev":
+                if isinstance(row, dict) and row.get("backend") == "jev":
                     records.append(AnswerRecord(**row))
-            except TypeError:
+            except (TypeError, AttributeError):
                 continue
     corrections = []
     for path in sorted(hints_dir.glob("*_examples.jsonl")) if hints_dir.is_dir() else []:
-        corrections.extend(_read_jsonl(path))
+        corrections.extend(r for r in _read_jsonl(path) if isinstance(r, dict))
 
     card = score(records, corrections)
     print(f"Jev answers scored:   {card.n_records}")
