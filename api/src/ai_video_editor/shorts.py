@@ -600,6 +600,8 @@ _LAYOUT_BUILDERS: dict[str, tuple[callable, tuple[str, ...]]] = {  # type: ignor
     # via cropped_hud_labels_for_game(game). The label tuple stored
     # here is the LoL default (backward-compat when game=None).
     "cropped_hud": (cropped_hud_9x16, CROPPED_HUD_9X16_LABELS),
+    # Owner-approved layout B: the per-edit HUD builder, per indexed clip.
+    "9:16_hud": (cropped_hud_9x16, CROPPED_HUD_9X16_LABELS),
 }
 
 
@@ -612,14 +614,19 @@ def _indexed_layout_chain(layout: str, i: int, *, game: str | None = None) -> st
 
     Raises `ValueError` for unknown layouts.
     """
-    from .edits import cropped_hud_labels_for_game
+    from .edits import build_hud_aspect_filter_complex, cropped_hud_labels_for_game
 
     if layout not in _LAYOUT_BUILDERS:
         raise ValueError(
             f"unknown shorts layout {layout!r}; expected one of {sorted(_LAYOUT_BUILDERS)}"
         )
-    if layout == "cropped_hud":
-        chain = cropped_hud_9x16(game=game).replace("[0:v]", f"[{i}:v]")
+    if layout in ("cropped_hud", "9:16_hud"):
+        base = (
+            build_hud_aspect_filter_complex("", game=game)
+            if layout == "9:16_hud"
+            else cropped_hud_9x16(game=game)
+        )
+        chain = base.replace("[0:v]", f"[{i}:v]")
         labels = cropped_hud_labels_for_game(game)
     else:
         builder, labels = _LAYOUT_BUILDERS[layout]
