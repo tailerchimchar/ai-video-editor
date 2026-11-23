@@ -24,13 +24,26 @@ def fixture_round(tmp_path):
 
 
 def _play(pid: str, first: float, last: float) -> Play:
+    from ai_video_editor.league.play_models import PlayFlags, PlayOwner, PlayWindow
+
     return Play(
         id=pid,
         type="skirmish",
+        phase="mid",
+        game_time=PlayTimes(first_kill_s=first + 17.0, last_kill_s=last + 17.0),
         recording_time=PlayTimes(first_kill_s=first, last_kill_s=last),
+        window=PlayWindow(),
+        zone="mid_lane",
         zone_relative="mid_lane",
-        sides=PlaySides(numbers="3v3"),
+        position=None,
+        sides=PlaySides(
+            allies=["Jhin", "Thresh", "Lee Sin"],
+            enemies=["MissFortune", "Nami", "Vi"],
+            numbers="3v3",
+        ),
+        owner=PlayOwner(involved=True, role="initiator_kill", kills=1, assists=1, died=False),
         result=PlayResult(enemy_deaths=2, ally_deaths=1, outcome="won"),
+        flags=PlayFlags(help_from_team=True),
     )
 
 
@@ -72,7 +85,7 @@ def test_attach_plays_overlap_fallback():
 def test_play_text_is_templated_and_passes_leak_check(fixture_round):
     gm = GameModel(plays=[_play("p1", 100, 110)])
     d = dg.build_digest(fixture_round, game="lol", game_model=gm)
-    assert d.game_model.plays[0].text == "3v3 skirmish in mid_lane, owner absent, won 2-for-1"
+    assert d.game_model.plays[0].text == "3v3 skirmish in mid_lane, owner initiator_kill, won 2-for-1"
     transcript = fixture_round / "transcript.json"
     transcript.write_text(
         json.dumps([{"start": 0, "end": 3, "text": "jhin kills miss fortune in mid lane"}]),

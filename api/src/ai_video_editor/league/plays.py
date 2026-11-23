@@ -230,7 +230,7 @@ def play_text(play: Play) -> str:
     r = play.result
     after = f", then {r.objective_after[0]}" if r.objective_after else ""
     return (
-        f"{play.sides.numbers} {play.type} in {play.zone}, owner {play.owner.role}, "
+        f"{play.sides.numbers} {play.type} in {play.zone_relative}, owner {play.owner.role}, "
         f"{r.outcome} {r.enemy_deaths}-for-{r.ally_deaths}{after}"
     )
 
