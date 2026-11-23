@@ -38,6 +38,7 @@ import logging
 import re
 import subprocess
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -887,8 +888,13 @@ def render_short(
     snap_to_beats: bool | None = None,
     burn_title: bool = True,
     title_optional: bool = False,
+    on_rendered: Callable[[ShortPlan], None] | None = None,
 ) -> tuple[bool, str | None]:
     """Render one short from its plan. Returns (ok, error_message_or_none).
+
+    `on_rendered`, when given, receives the plan actually rendered (after
+    any beat snap) once the render succeeds, so callers can time overlays
+    (e.g. the kaching) against the snapped clip ends.
 
     Uses ffmpeg with `-filter_complex`. Re-encodes (H.264 + AAC) because
     the blur-fill filter chain requires it. Bounded stderr keeps the
@@ -1002,6 +1008,8 @@ def render_short(
         return False, f"ffmpeg render failed: {exc}"
     if result.returncode != 0:
         return False, (result.stderr or "ffmpeg render failed")[-1500:]
+    if on_rendered is not None:
+        on_rendered(plan)
     return True, None
 
 
@@ -1374,6 +1382,7 @@ def _render_and_watch_refine(
     max_seconds: float | None = None,
     burn_title: bool = True,
     title_optional: bool = False,
+    on_rendered: Callable[[ShortPlan], None] | None = None,
 ) -> RenderResult:
     """Alt whole-comp refine loop -- watch the whole rendered montage
     with `watch_montage`, drop clips whose panels flag as negative
@@ -1390,22 +1399,40 @@ def _render_and_watch_refine(
     game_hint = asset.get("game")
     music_out = music_path if mode == "montage" else None
 
-    clip_names = [c.file for c in plan.clips]
-    clip_durations = [max(0.0, c.end_seconds - c.start_seconds) for c in plan.clips]
-
-    # Bag mutable state for the callback closures. `current_plan` gets
-    # rebuilt from the ORIGINAL plan's clips using kept-indices, so a
-    # dropped-clip pass never accumulates unexpected mutations.
+    # The loop drops whole units: consecutive segments of one play_id form a
+    # single unit (a play is never half-dropped); any other clip is its own.
     original_clips = plan.clips
+    groups: list[list[int]] = []
+    for i, c in enumerate(original_clips):
+        if groups and c.play_id is not None and original_clips[groups[-1][-1]].play_id == c.play_id:
+            groups[-1].append(i)
+        else:
+            groups.append([i])
+    clip_names = [
+        original_clips[g[0]].play_id
+        if original_clips[g[0]].play_id is not None
+        else original_clips[g[0]].file
+        for g in groups
+    ]
+    clip_durations = [
+        sum(
+            max(0.0, original_clips[i].end_seconds - original_clips[i].start_seconds)
+            for i in g
+        )
+        for g in groups
+    ]
+    state: dict = {"plan": plan}
 
-    def _do_render(kept_indices: list[int] | None) -> tuple[bool, str | None, Path]:
-        if kept_indices is None:
+    def _do_render(kept_groups: list[int] | None) -> tuple[bool, str | None, Path]:
+        if kept_groups is None:
             current = plan
         else:
+            # Rebuild from the ORIGINAL clips by index, so passes never compound.
             current = replace(
                 plan,
-                clips=tuple(original_clips[i] for i in kept_indices),
+                clips=tuple(original_clips[i] for g in kept_groups for i in groups[g]),
             )
+        state["plan"] = current
         ok, err = render_short(
             current,
             out_path,
@@ -1418,6 +1445,7 @@ def _render_and_watch_refine(
             max_seconds=max_seconds,
             burn_title=burn_title,
             title_optional=title_optional,
+            on_rendered=on_rendered,
         )
         return ok, err, out_path
 
@@ -1454,11 +1482,9 @@ def _render_and_watch_refine(
             },
         )
 
-    # Reconstruct the FINAL plan from the dropped-clip trail so
-    # downstream (index.md, extras) reflects what was actually rendered.
-    dropped_set = set(loop_result.dropped_clips)
-    final_clips = tuple(c for c in original_clips if c.file not in dropped_set)
-    final_plan = replace(plan, clips=final_clips) if final_clips else plan
+    # The plan of the last render, rebuilt by index (never by file name:
+    # every segment of a play shares one source file).
+    final_plan = state["plan"] if state["plan"].clips else plan
 
     verdict_map = {
         "ship_it": "pass",
@@ -1502,6 +1528,7 @@ def _render_and_refine(
     max_seconds: float | None = None,
     burn_title: bool = True,
     title_optional: bool = False,
+    on_rendered: Callable[[ShortPlan], None] | None = None,
 ) -> RenderResult:
     """Render → VLM whole-comp review → refine loop.
 
@@ -1537,6 +1564,7 @@ def _render_and_refine(
             max_seconds=max_seconds,
             burn_title=burn_title,
             title_optional=title_optional,
+            on_rendered=on_rendered,
         )
         if not ok:
             return RenderResult(
@@ -3356,6 +3384,11 @@ def build_custom_montage(
     # Currently opt-in and only wired here on the custom-compile path.
     resolved_burn_title = burn_title if burn_title is not None else True
     resolved_title_optional = settings.montage_title_optional
+    rendered: dict[str, ShortPlan] = {}
+
+    def _keep_rendered(p: ShortPlan) -> None:
+        rendered["plan"] = p
+
     if settings.shorts_watch_refine_enabled and run_vlm_check:
         result = _render_and_watch_refine(
             plan,
@@ -3371,6 +3404,7 @@ def build_custom_montage(
             max_seconds=max_seconds,
             burn_title=resolved_burn_title,
             title_optional=resolved_title_optional,
+            on_rendered=_keep_rendered,
         )
     else:
         result = _render_and_refine(
@@ -3387,10 +3421,12 @@ def build_custom_montage(
             max_seconds=max_seconds,
             burn_title=resolved_burn_title,
             title_optional=resolved_title_optional,
+            on_rendered=_keep_rendered,
         )
 
     if play_specs and result.ok:
-        _overlay_kaching(result.out_path, result.plan.clips)
+        # Time the kachings from the plan actually rendered (after beat snap).
+        _overlay_kaching(result.out_path, rendered.get("plan", result.plan).clips)
 
     _write_custom_index_md(
         out_folder,
