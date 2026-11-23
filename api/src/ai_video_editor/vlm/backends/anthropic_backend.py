@@ -43,7 +43,9 @@ class AnthropicBackend(VLMBackend):
         model: str | None = None,
         timeout_seconds: float | None = None,
         asset_id: str | None = None,
+        feature: str = "vlm",
     ) -> None:
+        self.feature = feature  # ledger label; callers may reassign per phase
         # Paid calls count against this asset's dollar cap (None = no accounting).
         self.asset_id = asset_id
         # Distinguish explicit empty-string (test-passes-no-key) from
@@ -146,7 +148,7 @@ class AnthropicBackend(VLMBackend):
             raise VLMUnavailableError(f"anthropic API error: {exc!s}") from exc
         self._active_model = getattr(resp, "model", None) or self.model
         try:
-            record_spend(self.asset_id, "vlm", self.model, resp.usage)
+            record_spend(self.asset_id, self.feature, self.model, resp.usage)
         except Exception as exc:  # a paid answer must not be lost to accounting
             _log.warning("spend ledger write failed: %s", exc)
         # Extract text from the first text block. Anthropic vision replies
