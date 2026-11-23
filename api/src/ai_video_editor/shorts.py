@@ -52,6 +52,7 @@ from .edits import (
     blur_fill_9x16,
     cropped_hud_9x16,
 )
+from .montage.plan import PlaySpec
 from .taxonomy import LEGACY_ALIASES, LEGACY_SLUGS, Phase, Topic
 
 _log = logging.getLogger(__name__)
@@ -178,6 +179,10 @@ class ShortClip:
 
     play_id: str | None = None
     """Game-understanding play this clip was cut from (montage v2)."""
+
+    kill_offsets_s: tuple[float, ...] = ()
+    """Every kill's offset within this clip (play segments); when set, flash and
+    sfx timing use these instead of the anchor/midpoint fallback."""
 
     locked_window: bool = False
     """True when the window is authoritative (a play window): the analyzer and
@@ -739,6 +744,10 @@ def _kill_times_in_montage(plan: ShortPlan) -> tuple[float, ...]:
     montage_t = 0.0
     for clip in plan.clips:
         duration = clip.end_seconds - clip.start_seconds
+        if clip.kill_offsets_s:
+            times.extend(montage_t + off for off in clip.kill_offsets_s)
+            montage_t += duration
+            continue
         offset = clip.anchor_offset_seconds
         if offset is None:
             offset = duration / 2.0
@@ -3103,35 +3112,36 @@ def _resolve_clip_path_for_custom(
     return p, duration
 
 
-def _play_spec_clip(path: Path, spec: dict) -> ShortClip:
+def _play_spec_clip(path: Path, spec) -> ShortClip:
     """One authoritative play segment: window as given, never re-analyzed."""
-    offsets = list(spec.get("kill_offsets_s") or [])
+    offsets = list(spec.kill_offsets_s)
     return ShortClip(
         file=path.name,
         path=path,
         event_type="play",
-        start_seconds=float(spec["start_seconds"]),
-        end_seconds=float(spec["end_seconds"]),
+        start_seconds=spec.start_seconds,
+        end_seconds=spec.end_seconds,
         hype_score=1.0,
         funny_score=0.0,
         story_score=0.5,
-        reason=f"play {spec.get('play_id')}",
-        anchor_offset_seconds=(offsets[-1] if spec.get("is_last") and offsets else None),
-        play_id=spec.get("play_id"),
+        reason=f"play {spec.play_id}",
+        anchor_offset_seconds=(offsets[-1] if spec.is_last and offsets else None),
+        play_id=spec.play_id,
+        kill_offsets_s=tuple(offsets),
         locked_window=True,
     )
 
 
-def _overlay_kaching(out_path: Path, play_specs: list[dict], clips: tuple[ShortClip, ...]) -> None:
+def _overlay_kaching(out_path: Path, clips: tuple[ShortClip, ...]) -> None:
     """Lay a kaching on every kill, at montage time after any beat-snap
     remapping (R9). Failure keeps the un-sfx'd render."""
     if not settings.story_kill_sfx:
         return
-    times: list[float] = []
-    montage_t = 0.0
-    for clip, spec in zip(clips, play_specs, strict=True):
-        times.extend(montage_t + off for off in (spec.get("kill_offsets_s") or []))
-        montage_t += clip.end_seconds - clip.start_seconds
+    times = (
+        list(_kill_times_in_montage(ShortPlan(_CUSTOM_BUCKET, clips, "", "", 1)))
+        if any(c.kill_offsets_s for c in clips)
+        else []
+    )
     if not times:
         return
     try:
@@ -3206,7 +3216,7 @@ def build_custom_montage(
     run_vlm_check: bool = True,
     max_seconds: float | None = None,
     burn_title: bool | None = None,
-    play_specs: list[dict] | None = None,
+    play_specs: list[PlaySpec] | list[dict] | None = None,
 ) -> dict:
     """Compile ONE montage from an EXPLICIT list of clip paths — no
     scanning, no ranking, no bucketing. Clips can come from anywhere:
@@ -3231,7 +3241,21 @@ def build_custom_montage(
     Output: `WORKSPACE/shorts/_custom/<name>/<name>.mp4` + `index.md`.
     """
     if play_specs:
-        clip_paths = [spec["clip_path"] for spec in play_specs]
+        from pydantic import ValidationError
+
+        validated: list = []
+        for i, raw in enumerate(play_specs):
+            try:
+                validated.append(PlaySpec.model_validate(raw))
+            except ValidationError as exc:
+                return {
+                    "ok": False,
+                    "error": f"play_specs[{i}]: {exc}",
+                    "shorts_written": 0,
+                    "shorts": [],
+                }
+        play_specs = validated
+        clip_paths = [spec.clip_path for spec in play_specs]
     if not clip_paths:
         return {
             "ok": False,
@@ -3366,7 +3390,7 @@ def build_custom_montage(
         )
 
     if play_specs and result.ok:
-        _overlay_kaching(result.out_path, kept_specs, result.plan.clips)
+        _overlay_kaching(result.out_path, result.plan.clips)
 
     _write_custom_index_md(
         out_folder,

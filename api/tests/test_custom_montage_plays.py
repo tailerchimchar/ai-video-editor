@@ -9,7 +9,6 @@ import pytest
 
 from ai_video_editor import shorts
 from ai_video_editor.config import settings
-from ai_video_editor.routers.shorts import CustomMontageBody
 
 
 def _specs():
@@ -123,5 +122,24 @@ def test_router_accepts_play_specs(client, monkeypatch):
     monkeypatch.setattr("ai_video_editor.routers.shorts._run_custom_job", fake_job)
     r = client.post("/api/v1/shorts/custom_montage", json={"play_specs": _specs()})
     assert r.status_code == 200, r.text
-    assert CustomMontageBody.model_validate(seen["body"]).play_specs == _specs()
+    assert [x.model_dump() for x in seen["body"].play_specs] == _specs()
     assert client.post("/api/v1/shorts/custom_montage", json={}).status_code == 400
+
+
+def test_malformed_spec_returns_clear_error(stubbed):
+    bad = _specs()
+    del bad[1]["start_seconds"]
+    res = shorts.build_custom_montage(clip_paths=[], name="m", play_specs=bad)
+    assert res["ok"] is False
+    assert res["error"].startswith("play_specs[1]:") and "start_seconds" in res["error"]
+    inverted = _specs()
+    inverted[0]["end_seconds"] = 5.0
+    res = shorts.build_custom_montage(clip_paths=[], name="m", play_specs=inverted)
+    assert res["ok"] is False and "play_specs[0]" in res["error"]
+    assert stubbed.plans == []
+
+
+def test_kill_times_in_montage_uses_every_kill(stubbed, monkeypatch):
+    shorts.build_custom_montage(clip_paths=[], name="m", play_specs=_specs(), run_vlm_check=False)
+    plan = stubbed.plans[0]
+    assert shorts._kill_times_in_montage(plan) == (4.0, 12.0, 16.0)

@@ -6,11 +6,30 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from pydantic import BaseModel, Field, model_validator
+
 from ..league.play_models import Play
 from ..league.plays import rank_plays
 
 _AFTER_KILL_S = 1.0
 _BEFORE_KILL_S = 1.5
+
+
+class PlaySpec(BaseModel):
+    """One authoritative play segment handed to `build_custom_montage`."""
+
+    clip_path: str
+    start_seconds: float
+    end_seconds: float
+    play_id: str
+    is_last: bool = False
+    kill_offsets_s: list[float] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _window_positive(self):
+        if self.end_seconds <= self.start_seconds:
+            raise ValueError("end_seconds must be greater than start_seconds")
+        return self
 
 
 @dataclass(frozen=True)

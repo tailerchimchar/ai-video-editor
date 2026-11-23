@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field
 from ..database import get_db
 from ..jobs import finish_job
 from ..models import RankResponse
+from ..montage.plan import PlaySpec
 from ..shorts import (
     _shorts_folder,
     build_cross_asset_montage,
@@ -545,7 +546,7 @@ class CustomMontageBody(BaseModel):
             "May be empty when `play_specs` is given."
         ),
     )
-    play_specs: list[dict] | None = Field(
+    play_specs: list[PlaySpec] | None = Field(
         default=None,
         description=(
             "Montage v2 play segments `{clip_path, start_seconds, end_seconds, "
