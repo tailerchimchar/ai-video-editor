@@ -309,3 +309,11 @@ def test_queue_format_digest_example_parses():
     assert c.energy != "unknown" and c.match_confidence != "none"
     raw = json.loads(block)["clips"][0]
     assert set(raw) == set(dg.DigestClip.model_fields)  # the example shows every field
+
+
+def test_dragon_soul_is_not_a_clip_event(fixture_round):
+    tl = _timeline()
+    soul = TimelineEvent("elite", 861.0, 871.0, [], {"monsterType": "DRAGON_SOUL", "teamId": 100})
+    tl.events.append(soul)
+    c = dg.build_digest(fixture_round, game="lol", timeline=tl).clips[0]
+    assert [e.type for e in c.events] == ["elite", "kill"]

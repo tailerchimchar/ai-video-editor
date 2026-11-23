@@ -142,10 +142,14 @@ def _match_confidence(timeline: RiotTimeline | None) -> str:
 
 
 def _events(timeline: RiotTimeline, start_s: float, end_s: float) -> list[DigestEvent]:
+    """Timeline events inside the clip window; dragon souls are skipped (a soul
+    is granted by the dragon kill already listed, not an event of its own)."""
     return [
         DigestEvent(type=e.kind, t_in_clip=round(e.t_rec_s - start_s, 3), actors=list(e.actors))
         for e in timeline.events
-        if e.t_rec_s is not None and start_s <= e.t_rec_s <= end_s
+        if e.t_rec_s is not None
+        and start_s <= e.t_rec_s <= end_s
+        and e.detail.get("monsterType") != "DRAGON_SOUL"
     ]
 
 
