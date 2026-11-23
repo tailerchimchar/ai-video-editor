@@ -68,9 +68,10 @@ def test_v2_digest_json_loads_with_game_model_absent():
 
 
 def test_attach_plays_links_clip_by_midpoint_then_overlap():
+    # No window yet: spans are first_kill - 8 .. last_kill + 3 (p14 1302-1315).
     gm = GameModel(plays=[_play("p14", 1310, 1312), _play("p15", 1395, 1410)])
     d = dg.attach_plays(_digest((1390, 1415), (1300, 1313), (1313.5, 1316), (50, 60)), gm)
-    assert [c.play_id for c in d.clips] == ["p15", "p14", None, None]
+    assert [c.play_id for c in d.clips] == ["p15", "p14", "p14", None]
     assert d.game_model is gm
     assert all(p.text for p in gm.plays)
 
@@ -80,6 +81,22 @@ def test_attach_plays_overlap_fallback():
     gm = GameModel(plays=[_play("p15", 1395, 1410)])
     d = dg.attach_plays(_digest((1350, 1410)), gm)
     assert d.clips[0].play_id == "p15"
+
+
+def test_attach_plays_single_kill_clip_containing_the_kill_is_a_hit():
+    # midpoint 485.5 is outside 492-503, but the clip holds the kill at 500.
+    gm = GameModel(plays=[_play("p03", 500, 500)])
+    d = dg.attach_plays(_digest((470, 501), (520, 540)), gm)
+    assert [c.play_id for c in d.clips] == ["p03", None]
+
+
+def test_attach_plays_uses_the_confirmed_window():
+    from ai_video_editor.league.play_models import PlayWindow
+
+    p = _play("p07", 600, 610)
+    p.window = PlayWindow(approach_s=570, engage_s=580, outcome_s=640, source="vlm")
+    d = dg.attach_plays(_digest((572, 590), (632, 650), (650, 700)), GameModel(plays=[p]))
+    assert [c.play_id for c in d.clips] == ["p07", "p07", None]
 
 
 def test_play_text_is_templated_and_passes_leak_check(fixture_round):

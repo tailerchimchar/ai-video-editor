@@ -27,7 +27,7 @@ from ..bucketing import _FORMAT_QUESTION, _INCLUDE_QUESTION
 from ..commentary import commentary_candidates
 from ..decisions import Answer, ask_many
 from ..league.lane_models import LaneSummary
-from ..league.play_models import GameModel
+from ..league.play_models import GameModel, Play
 from ..league.plays import play_text
 from ..refs import normalize_clip_ref
 
@@ -370,8 +370,7 @@ def build_digest(
 
 def attach_plays(digest: Digest, game: GameModel) -> Digest:
     """Set `digest.game_model`, template every play's text (R4) and link each
-    clip to a play: the play whose recording kill span holds the clip midpoint,
-    else the one overlapping the clip most, else None. Never raises."""
+    clip to a play (`_play_id_for`). Never raises."""
     try:
         for play in game.plays:
             play.text = play_text(play)
@@ -383,16 +382,33 @@ def attach_plays(digest: Digest, game: GameModel) -> Digest:
     return digest
 
 
+PLAY_LEAD_S = 8.0
+PLAY_TAIL_S = 3.0
+
+
+def _play_span(play: Play) -> tuple[float, float]:
+    """Recording-second span of a play: its confirmed window when it has
+    one, else first_kill - 8 .. last_kill + 3."""
+    w, t = play.window, play.recording_time
+    start = w.approach_s if w.approach_s is not None else t.first_kill_s - PLAY_LEAD_S
+    end = w.outcome_s if w.outcome_s is not None else t.last_kill_s + PLAY_TAIL_S
+    return start, end
+
+
 def _play_id_for(clip: DigestClip, game: GameModel) -> str | None:
+    """The play whose span holds the clip midpoint, or whose kill span the
+    clip contains; else the play overlapping the clip most; else None."""
     mid = (clip.start_s + clip.end_s) / 2
     for play in game.plays:
+        start, end = _play_span(play)
         t = play.recording_time
-        if t.first_kill_s <= mid <= t.last_kill_s:
+        kills_inside = clip.start_s <= t.first_kill_s and t.last_kill_s <= clip.end_s
+        if start <= mid <= end or kills_inside:
             return play.id
     best_id, best = None, 0.0
     for play in game.plays:
-        t = play.recording_time
-        overlap = min(clip.end_s, t.last_kill_s) - max(clip.start_s, t.first_kill_s)
+        start, end = _play_span(play)
+        overlap = min(clip.end_s, end) - max(clip.start_s, start)
         if overlap > best:
             best_id, best = play.id, overlap
     return best_id
