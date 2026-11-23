@@ -31,11 +31,20 @@ def is_eligible(play: Play) -> bool:
     return play.type == "skirmish" and play.result.enemy_deaths >= 3
 
 
-def pool_play(asset_id: str, play: Play, source: str, *, pad_s: float = 10.0) -> Path | None:
-    """Cut the padded play window into the pool. None when ineligible or failed."""
+def pool_play(
+    asset_id: str,
+    play: Play,
+    source: str,
+    *,
+    pad_s: float = 10.0,
+    month: str | None = None,
+) -> Path | None:
+    """Cut the padded play window into `month`'s pool (YYYY-MM, default this
+    month). None when ineligible or failed. The cut goes to a temp name and
+    is renamed on success; a failed cut leaves no file behind."""
     if not is_eligible(play):
         return None
-    folder = pool_dir()
+    folder = pool_dir(month)
     out = folder / f"{asset_id}_{play.id}.mp4"
     if out.exists():
         return out
@@ -43,10 +52,16 @@ def pool_play(asset_id: str, play: Play, source: str, *, pad_s: float = 10.0) ->
     start = max(0.0, (w.approach_s if w.approach_s is not None else rt.first_kill_s - 8.0) - pad_s)
     end = (w.outcome_s if w.outcome_s is not None else rt.last_kill_s + 3.0) + pad_s
     folder.mkdir(parents=True, exist_ok=True)
-    ok, err = trim_clip(source, str(out), start, end)
-    if not ok:
+    tmp = out.with_name(f"{out.stem}.part{out.suffix}")
+    try:
+        ok, err = trim_clip(source, str(tmp), start, end)
+    except Exception as exc:  # a crashed cut must not leave a partial file
+        ok, err = False, str(exc)
+    if not ok or not tmp.is_file():
+        tmp.unlink(missing_ok=True)
         _log.warning("month pool cut failed for %s: %s", play.id, err)
         return None
+    tmp.replace(out)
     index_path = folder / "index.json"
     entries: list[dict] = []
     if index_path.is_file():
@@ -67,6 +82,17 @@ def pool_play(asset_id: str, play: Play, source: str, *, pad_s: float = 10.0) ->
     )
     index_path.write_text(json.dumps(entries, indent=2), encoding="utf-8")
     return out
+
+
+def pool_game(
+    asset_id: str, plays: list[Play], source: str, *, month: str | None = None
+) -> list[Path]:
+    """Pool every eligible play of one game; returns the files written or kept."""
+    return [
+        out
+        for p in plays
+        if is_eligible(p) and (out := pool_play(asset_id, p, source, month=month)) is not None
+    ]
 
 
 def clear_pool(month: str | None = None) -> None:
