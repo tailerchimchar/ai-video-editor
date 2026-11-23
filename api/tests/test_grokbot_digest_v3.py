@@ -85,7 +85,8 @@ def test_attach_plays_overlap_fallback():
 def test_play_text_is_templated_and_passes_leak_check(fixture_round):
     gm = GameModel(plays=[_play("p1", 100, 110)])
     d = dg.build_digest(fixture_round, game="lol", game_model=gm)
-    assert d.game_model.plays[0].text == "3v3 skirmish in mid_lane, owner initiator_kill, won 2-for-1"
+    expected = "3v3 skirmish in mid_lane, owner initiator_kill, won 2-for-1"
+    assert d.game_model.plays[0].text == expected
     transcript = fixture_round / "transcript.json"
     transcript.write_text(
         json.dumps([{"start": 0, "end": 3, "text": "jhin kills miss fortune in mid lane"}]),
