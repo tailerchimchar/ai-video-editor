@@ -146,7 +146,8 @@ def test_budget_is_per_run_and_reports_delta(env):
     conn = sqlite3.connect(db)
     with conn:
         conn.execute(
-            "INSERT INTO spend_ledger (asset_id, feature, cost_usd) VALUES ('a1', 'play_confirm', 1.4)"
+            "INSERT INTO spend_ledger (asset_id, feature, cost_usd) "
+            "VALUES ('a1', 'play_confirm', 1.4)"
         )
     conn.close()
     model, args = _run(env, budget_usd=1.5)
