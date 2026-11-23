@@ -1,0 +1,74 @@
+# Play vocabulary (league). Loaded by the proposer, the confirmer prompt and the planner.
+# Override by placing a file of the same name in GAME_HINTS_DIR (or <workspace>/game_hints).
+
+teamfight:
+  phase: [early, mid, late]
+  propose: ">= 3 enemy deaths and >= 6 champions touched a kill"
+  start: {story: approach, montage: engage, fallback: "first_kill - 8"}
+  end: {rule: "outcome", max_after_last_kill_s: 20}
+  vlm_confirms: [type, numbers, outcome]
+  facts_from_riot: [sides, kills, deaths, objective_after]
+  examples: []
+
+skirmish:
+  phase: [early, mid, late]
+  propose: "everything else that has a kill"
+  start: {story: approach, montage: engage, fallback: "first_kill - 8"}
+  end: {rule: "outcome", max_after_last_kill_s: 20}
+  vlm_confirms: [type, numbers, outcome]
+  facts_from_riot: [sides, kills, deaths, objective_after]
+  examples: []
+
+objective_fight:
+  phase: [mid, late]
+  propose: "an elite kill within 30 s after, or the first kill inside the dragon or baron pit"
+  start: {story: approach, montage: engage, fallback: "first_kill - 8"}
+  end: {rule: "outcome", max_after_last_kill_s: 20}
+  vlm_confirms: [type, numbers, outcome]
+  facts_from_riot: [sides, kills, deaths, objective_after]
+  examples: []
+
+closeout:
+  phase: [late]
+  propose: ">= 3 enemy deaths within 60 s of game end"
+  start: {story: approach, montage: engage, fallback: "first_kill - 8"}
+  end: {rule: "outcome", max_after_last_kill_s: 20}
+  vlm_confirms: [type, numbers, outcome]
+  facts_from_riot: [sides, kills, deaths, objective_after]
+  examples: []
+
+gank:
+  phase: [early]
+  propose: "early phase, one kill, three champions, in a lane"
+  start: {story: approach, montage: engage, fallback: "first_kill - 8"}
+  end: {rule: "outcome", max_after_last_kill_s: 10}
+  vlm_confirms: [type, numbers, outcome]
+  facts_from_riot: [sides, kills, deaths, objective_after]
+  examples: []
+
+dive:
+  phase: [early, mid, late]
+  propose: "a kill within 800 units of a standing enemy or ally tower"
+  start: {story: approach, montage: engage, fallback: "first_kill - 8"}
+  end: {rule: "outcome", max_after_last_kill_s: 15}
+  vlm_confirms: [type, numbers, outcome]
+  facts_from_riot: [sides, kills, deaths, objective_after]
+  examples: []
+
+caught_out:
+  phase: [mid, late]
+  propose: "one ally death, no enemy death, victim alone by assisters, not in lane"
+  start: {story: approach, montage: engage, fallback: "first_kill - 8"}
+  end: {rule: "death + 2", max_after_last_kill_s: 2}
+  vlm_confirms: [type, numbers, outcome]
+  facts_from_riot: [sides, kills, deaths, objective_after]
+  examples: []
+
+trade:
+  phase: [early, mid]
+  propose: "no kill: HP reader when enabled, else the VLM sweep"
+  start: {story: approach, montage: engage, fallback: "first_kill - 8"}
+  end: {rule: "both back off", max_after_last_kill_s: 8}
+  vlm_confirms: [type, numbers, outcome]
+  facts_from_riot: [sides, kills, deaths, objective_after]
+  examples: []
