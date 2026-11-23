@@ -1,0 +1,1510 @@
+{
+  "digest_version": 3,
+  "game": {
+    "phases": {
+      "early": {
+        "start_s": 0,
+        "end_s": 840,
+        "ended_by": "14:00"
+      },
+      "mid": {
+        "start_s": 840,
+        "end_s": 1463.3
+      },
+      "late": {
+        "start_s": 1463.3,
+        "end_s": 2054,
+        "started_by": "first_baron"
+      }
+    },
+    "plays": [
+      {
+        "id": "p01",
+        "type": "skirmish",
+        "phase": "early",
+        "game_time": {
+          "first_kill_s": 163.8,
+          "last_kill_s": 167.8
+        },
+        "recording_time": {
+          "first_kill_s": 146.8,
+          "last_kill_s": 150.8
+        },
+        "window": {
+          "approach_s": null,
+          "engage_s": null,
+          "outcome_s": null,
+          "source": "vlm_pending",
+          "rule": "approach->outcome (story/shorts); engage->outcome (montage)"
+        },
+        "zone": "bot_lane",
+        "position": {
+          "x": 11916,
+          "y": 1733
+        },
+        "sides": {
+          "allies": [
+            "Galio",
+            "JarvanIV",
+            "Jhin",
+            "Viktor"
+          ],
+          "enemies": [
+            "MissFortune",
+            "Sion"
+          ],
+          "numbers": "4v2",
+          "numbers_source": "riot_lower_bound"
+        },
+        "owner": {
+          "involved": true,
+          "role": "initiator_kill",
+          "kills": 1,
+          "assists": 0,
+          "died": false
+        },
+        "result": {
+          "enemy_deaths": 1,
+          "ally_deaths": 1,
+          "outcome": "even",
+          "objective_after": [],
+          "building_after": []
+        },
+        "flags": {
+          "flank": null,
+          "help_from_team": true,
+          "soul_point": null
+        },
+        "confidence": {
+          "facts": "riot",
+          "window": "pending",
+          "flank": "vlm_pending"
+        },
+        "impressive": {
+          "numbers_faced": -1,
+          "score": null
+        }
+      },
+      {
+        "id": "p02",
+        "type": "skirmish",
+        "phase": "early",
+        "game_time": {
+          "first_kill_s": 391.6,
+          "last_kill_s": 391.6
+        },
+        "recording_time": {
+          "first_kill_s": 374.6,
+          "last_kill_s": 374.6
+        },
+        "window": {
+          "approach_s": null,
+          "engage_s": null,
+          "outcome_s": null,
+          "source": "vlm_pending",
+          "rule": "approach->outcome (story/shorts); engage->outcome (montage)"
+        },
+        "zone": "top_lane",
+        "position": {
+          "x": 1910,
+          "y": 11837
+        },
+        "sides": {
+          "allies": [
+            "Camille"
+          ],
+          "enemies": [
+            "Gangplank"
+          ],
+          "numbers": "1v1",
+          "numbers_source": "riot_lower_bound"
+        },
+        "owner": {
+          "involved": false,
+          "role": "absent",
+          "kills": 0,
+          "assists": 0,
+          "died": false
+        },
+        "result": {
+          "enemy_deaths": 1,
+          "ally_deaths": 0,
+          "outcome": "won",
+          "objective_after": [],
+          "building_after": []
+        },
+        "flags": {
+          "flank": null,
+          "help_from_team": false,
+          "soul_point": null
+        },
+        "confidence": {
+          "facts": "riot",
+          "window": "pending",
+          "flank": "vlm_pending"
+        },
+        "impressive": {
+          "numbers_faced": null,
+          "score": null
+        }
+      },
+      {
+        "id": "p03",
+        "type": "skirmish",
+        "phase": "early",
+        "game_time": {
+          "first_kill_s": 411.8,
+          "last_kill_s": 423.3
+        },
+        "recording_time": {
+          "first_kill_s": 394.8,
+          "last_kill_s": 406.3
+        },
+        "window": {
+          "approach_s": null,
+          "engage_s": null,
+          "outcome_s": null,
+          "source": "vlm_pending",
+          "rule": "approach->outcome (story/shorts); engage->outcome (montage)"
+        },
+        "zone": "bot_lane",
+        "position": {
+          "x": 13199,
+          "y": 2014
+        },
+        "sides": {
+          "allies": [
+            "Jhin",
+            "Viktor"
+          ],
+          "enemies": [
+            "MissFortune",
+            "Neeko",
+            "Rumble",
+            "Sion"
+          ],
+          "numbers": "2v4",
+          "numbers_source": "riot_lower_bound"
+        },
+        "owner": {
+          "involved": true,
+          "role": "caught_first",
+          "kills": 0,
+          "assists": 0,
+          "died": true
+        },
+        "result": {
+          "enemy_deaths": 0,
+          "ally_deaths": 2,
+          "outcome": "lost",
+          "objective_after": [],
+          "building_after": []
+        },
+        "flags": {
+          "flank": null,
+          "help_from_team": true,
+          "soul_point": null
+        },
+        "confidence": {
+          "facts": "riot",
+          "window": "pending",
+          "flank": "vlm_pending"
+        },
+        "impressive": {
+          "numbers_faced": 3,
+          "score": null
+        }
+      },
+      {
+        "id": "p04",
+        "type": "objective_fight",
+        "phase": "early",
+        "game_time": {
+          "first_kill_s": 462.4,
+          "last_kill_s": 462.4
+        },
+        "recording_time": {
+          "first_kill_s": 445.4,
+          "last_kill_s": 445.4
+        },
+        "window": {
+          "approach_s": null,
+          "engage_s": null,
+          "outcome_s": null,
+          "source": "vlm_pending",
+          "rule": "approach->outcome (story/shorts); engage->outcome (montage)"
+        },
+        "zone": "top_lane",
+        "position": {
+          "x": 1375,
+          "y": 11638
+        },
+        "sides": {
+          "allies": [
+            "Camille",
+            "JarvanIV"
+          ],
+          "enemies": [
+            "Gangplank"
+          ],
+          "numbers": "2v1",
+          "numbers_source": "riot_lower_bound"
+        },
+        "owner": {
+          "involved": false,
+          "role": "absent",
+          "kills": 0,
+          "assists": 0,
+          "died": false
+        },
+        "result": {
+          "enemy_deaths": 1,
+          "ally_deaths": 0,
+          "outcome": "won",
+          "objective_after": [
+            "HORDE"
+          ],
+          "building_after": []
+        },
+        "flags": {
+          "flank": null,
+          "help_from_team": true,
+          "soul_point": null
+        },
+        "confidence": {
+          "facts": "riot",
+          "window": "pending",
+          "flank": "vlm_pending"
+        },
+        "impressive": {
+          "numbers_faced": null,
+          "score": null
+        }
+      },
+      {
+        "id": "p05",
+        "type": "skirmish",
+        "phase": "early",
+        "game_time": {
+          "first_kill_s": 494.9,
+          "last_kill_s": 507.6
+        },
+        "recording_time": {
+          "first_kill_s": 477.9,
+          "last_kill_s": 490.6
+        },
+        "window": {
+          "approach_s": null,
+          "engage_s": null,
+          "outcome_s": null,
+          "source": "vlm_pending",
+          "rule": "approach->outcome (story/shorts); engage->outcome (montage)"
+        },
+        "zone": "top_river",
+        "position": {
+          "x": 3358,
+          "y": 10102
+        },
+        "sides": {
+          "allies": [
+            "Camille",
+            "Galio",
+            "JarvanIV",
+            "Viktor"
+          ],
+          "enemies": [
+            "MissFortune",
+            "Neeko",
+            "Rumble",
+            "Sion"
+          ],
+          "numbers": "4v4",
+          "numbers_source": "riot_lower_bound"
+        },
+        "owner": {
+          "involved": false,
+          "role": "absent",
+          "kills": 0,
+          "assists": 0,
+          "died": false
+        },
+        "result": {
+          "enemy_deaths": 2,
+          "ally_deaths": 1,
+          "outcome": "won",
+          "objective_after": [],
+          "building_after": []
+        },
+        "flags": {
+          "flank": null,
+          "help_from_team": true,
+          "soul_point": null
+        },
+        "confidence": {
+          "facts": "riot",
+          "window": "pending",
+          "flank": "vlm_pending"
+        },
+        "impressive": {
+          "numbers_faced": null,
+          "score": null
+        }
+      },
+      {
+        "id": "p06",
+        "type": "skirmish",
+        "phase": "early",
+        "game_time": {
+          "first_kill_s": 585.0,
+          "last_kill_s": 585.1
+        },
+        "recording_time": {
+          "first_kill_s": 568.0,
+          "last_kill_s": 568.1
+        },
+        "window": {
+          "approach_s": null,
+          "engage_s": null,
+          "outcome_s": null,
+          "source": "vlm_pending",
+          "rule": "approach->outcome (story/shorts); engage->outcome (montage)"
+        },
+        "zone": "bot_lane",
+        "position": {
+          "x": 9870,
+          "y": 883
+        },
+        "sides": {
+          "allies": [
+            "Galio",
+            "JarvanIV",
+            "Jhin"
+          ],
+          "enemies": [
+            "Gangplank"
+          ],
+          "numbers": "3v1",
+          "numbers_source": "riot_lower_bound"
+        },
+        "owner": {
+          "involved": true,
+          "role": "follow_up",
+          "kills": 0,
+          "assists": 1,
+          "died": false
+        },
+        "result": {
+          "enemy_deaths": 1,
+          "ally_deaths": 1,
+          "outcome": "even",
+          "objective_after": [],
+          "building_after": []
+        },
+        "flags": {
+          "flank": null,
+          "help_from_team": true,
+          "soul_point": null
+        },
+        "confidence": {
+          "facts": "riot",
+          "window": "pending",
+          "flank": "vlm_pending"
+        },
+        "impressive": {
+          "numbers_faced": -1,
+          "score": null
+        }
+      },
+      {
+        "id": "p07",
+        "type": "skirmish",
+        "phase": "early",
+        "game_time": {
+          "first_kill_s": 690.4,
+          "last_kill_s": 690.4
+        },
+        "recording_time": {
+          "first_kill_s": 673.4,
+          "last_kill_s": 673.4
+        },
+        "window": {
+          "approach_s": null,
+          "engage_s": null,
+          "outcome_s": null,
+          "source": "vlm_pending",
+          "rule": "approach->outcome (story/shorts); engage->outcome (montage)"
+        },
+        "zone": "top_lane",
+        "position": {
+          "x": 3096,
+          "y": 13796
+        },
+        "sides": {
+          "allies": [
+            "Camille"
+          ],
+          "enemies": [
+            "Gangplank"
+          ],
+          "numbers": "1v1",
+          "numbers_source": "riot_lower_bound"
+        },
+        "owner": {
+          "involved": false,
+          "role": "absent",
+          "kills": 0,
+          "assists": 0,
+          "died": false
+        },
+        "result": {
+          "enemy_deaths": 1,
+          "ally_deaths": 0,
+          "outcome": "won",
+          "objective_after": [],
+          "building_after": []
+        },
+        "flags": {
+          "flank": null,
+          "help_from_team": false,
+          "soul_point": null
+        },
+        "confidence": {
+          "facts": "riot",
+          "window": "pending",
+          "flank": "vlm_pending"
+        },
+        "impressive": {
+          "numbers_faced": null,
+          "score": null
+        }
+      },
+      {
+        "id": "p08",
+        "type": "objective_fight",
+        "phase": "early",
+        "game_time": {
+          "first_kill_s": 708.4,
+          "last_kill_s": 708.4
+        },
+        "recording_time": {
+          "first_kill_s": 691.4,
+          "last_kill_s": 691.4
+        },
+        "window": {
+          "approach_s": null,
+          "engage_s": null,
+          "outcome_s": null,
+          "source": "vlm_pending",
+          "rule": "approach->outcome (story/shorts); engage->outcome (montage)"
+        },
+        "zone": "dragon_pit",
+        "position": {
+          "x": 10811,
+          "y": 4556
+        },
+        "sides": {
+          "allies": [
+            "Galio",
+            "JarvanIV",
+            "Jhin",
+            "Viktor"
+          ],
+          "enemies": [
+            "Rumble"
+          ],
+          "numbers": "4v1",
+          "numbers_source": "riot_lower_bound"
+        },
+        "owner": {
+          "involved": true,
+          "role": "initiator_kill",
+          "kills": 1,
+          "assists": 0,
+          "died": false
+        },
+        "result": {
+          "enemy_deaths": 1,
+          "ally_deaths": 0,
+          "outcome": "won",
+          "objective_after": [
+            "DRAGON/FIRE_DRAGON"
+          ],
+          "building_after": []
+        },
+        "flags": {
+          "flank": null,
+          "help_from_team": true,
+          "soul_point": null
+        },
+        "confidence": {
+          "facts": "riot",
+          "window": "pending",
+          "flank": "vlm_pending"
+        },
+        "impressive": {
+          "numbers_faced": -2,
+          "score": null
+        }
+      },
+      {
+        "id": "p09",
+        "type": "caught_out",
+        "phase": "mid",
+        "game_time": {
+          "first_kill_s": 895.0,
+          "last_kill_s": 895.0
+        },
+        "recording_time": {
+          "first_kill_s": 878.0,
+          "last_kill_s": 878.0
+        },
+        "window": {
+          "approach_s": null,
+          "engage_s": null,
+          "outcome_s": null,
+          "source": "vlm_pending",
+          "rule": "approach->outcome (story/shorts); engage->outcome (montage)"
+        },
+        "zone": "mid_lane",
+        "position": {
+          "x": 7216,
+          "y": 7784
+        },
+        "sides": {
+          "allies": [
+            "Galio"
+          ],
+          "enemies": [
+            "MissFortune",
+            "Neeko",
+            "Sion"
+          ],
+          "numbers": "1v3",
+          "numbers_source": "riot_lower_bound"
+        },
+        "owner": {
+          "involved": false,
+          "role": "absent",
+          "kills": 0,
+          "assists": 0,
+          "died": false
+        },
+        "result": {
+          "enemy_deaths": 0,
+          "ally_deaths": 1,
+          "outcome": "lost",
+          "objective_after": [],
+          "building_after": [
+            "TOWER_BUILDING:BOT_LANE"
+          ]
+        },
+        "flags": {
+          "flank": null,
+          "help_from_team": false,
+          "soul_point": null
+        },
+        "confidence": {
+          "facts": "riot",
+          "window": "pending",
+          "flank": "vlm_pending"
+        },
+        "impressive": {
+          "numbers_faced": null,
+          "score": null
+        }
+      },
+      {
+        "id": "p10",
+        "type": "skirmish",
+        "phase": "mid",
+        "game_time": {
+          "first_kill_s": 941.4,
+          "last_kill_s": 947.7
+        },
+        "recording_time": {
+          "first_kill_s": 924.4,
+          "last_kill_s": 930.7
+        },
+        "window": {
+          "approach_s": null,
+          "engage_s": null,
+          "outcome_s": null,
+          "source": "vlm_pending",
+          "rule": "approach->outcome (story/shorts); engage->outcome (montage)"
+        },
+        "zone": "blue_top_jungle",
+        "position": {
+          "x": 4488,
+          "y": 8053
+        },
+        "sides": {
+          "allies": [
+            "Camille",
+            "Galio",
+            "JarvanIV",
+            "Jhin",
+            "Viktor"
+          ],
+          "enemies": [
+            "Neeko",
+            "Rumble"
+          ],
+          "numbers": "5v2",
+          "numbers_source": "riot_lower_bound"
+        },
+        "owner": {
+          "involved": true,
+          "role": "follow_up",
+          "kills": 0,
+          "assists": 1,
+          "died": false
+        },
+        "result": {
+          "enemy_deaths": 2,
+          "ally_deaths": 0,
+          "outcome": "won",
+          "objective_after": [],
+          "building_after": []
+        },
+        "flags": {
+          "flank": null,
+          "help_from_team": true,
+          "soul_point": null
+        },
+        "confidence": {
+          "facts": "riot",
+          "window": "pending",
+          "flank": "vlm_pending"
+        },
+        "impressive": {
+          "numbers_faced": -2,
+          "score": null
+        }
+      },
+      {
+        "id": "p11",
+        "type": "skirmish",
+        "phase": "mid",
+        "game_time": {
+          "first_kill_s": 1023.4,
+          "last_kill_s": 1037.3
+        },
+        "recording_time": {
+          "first_kill_s": 1006.4,
+          "last_kill_s": 1020.3
+        },
+        "window": {
+          "approach_s": null,
+          "engage_s": null,
+          "outcome_s": null,
+          "source": "vlm_pending",
+          "rule": "approach->outcome (story/shorts); engage->outcome (montage)"
+        },
+        "zone": "blue_bot_jungle",
+        "position": {
+          "x": 7112,
+          "y": 2818
+        },
+        "sides": {
+          "allies": [
+            "Galio",
+            "JarvanIV"
+          ],
+          "enemies": [
+            "MissFortune",
+            "Neeko",
+            "Rumble",
+            "Sion"
+          ],
+          "numbers": "2v4",
+          "numbers_source": "riot_lower_bound"
+        },
+        "owner": {
+          "involved": false,
+          "role": "absent",
+          "kills": 0,
+          "assists": 0,
+          "died": false
+        },
+        "result": {
+          "enemy_deaths": 1,
+          "ally_deaths": 1,
+          "outcome": "even",
+          "objective_after": [],
+          "building_after": []
+        },
+        "flags": {
+          "flank": null,
+          "help_from_team": true,
+          "soul_point": null
+        },
+        "confidence": {
+          "facts": "riot",
+          "window": "pending",
+          "flank": "vlm_pending"
+        },
+        "impressive": {
+          "numbers_faced": null,
+          "score": null
+        }
+      },
+      {
+        "id": "p12",
+        "type": "objective_fight",
+        "phase": "mid",
+        "game_time": {
+          "first_kill_s": 1094.8,
+          "last_kill_s": 1094.8
+        },
+        "recording_time": {
+          "first_kill_s": 1077.8,
+          "last_kill_s": 1077.8
+        },
+        "window": {
+          "approach_s": null,
+          "engage_s": null,
+          "outcome_s": null,
+          "source": "vlm_pending",
+          "rule": "approach->outcome (story/shorts); engage->outcome (montage)"
+        },
+        "zone": "dragon_pit",
+        "position": {
+          "x": 8923,
+          "y": 3938
+        },
+        "sides": {
+          "allies": [
+            "Galio"
+          ],
+          "enemies": [
+            "Gangplank",
+            "MissFortune",
+            "Rumble",
+            "Sion"
+          ],
+          "numbers": "1v4",
+          "numbers_source": "riot_lower_bound"
+        },
+        "owner": {
+          "involved": false,
+          "role": "absent",
+          "kills": 0,
+          "assists": 0,
+          "died": false
+        },
+        "result": {
+          "enemy_deaths": 0,
+          "ally_deaths": 1,
+          "outcome": "lost",
+          "objective_after": [
+            "DRAGON/AIR_DRAGON"
+          ],
+          "building_after": []
+        },
+        "flags": {
+          "flank": null,
+          "help_from_team": false,
+          "soul_point": null
+        },
+        "confidence": {
+          "facts": "riot",
+          "window": "pending",
+          "flank": "vlm_pending"
+        },
+        "impressive": {
+          "numbers_faced": null,
+          "score": null
+        }
+      },
+      {
+        "id": "p13",
+        "type": "skirmish",
+        "phase": "mid",
+        "game_time": {
+          "first_kill_s": 1152.2,
+          "last_kill_s": 1152.2
+        },
+        "recording_time": {
+          "first_kill_s": 1135.2,
+          "last_kill_s": 1135.2
+        },
+        "window": {
+          "approach_s": null,
+          "engage_s": null,
+          "outcome_s": null,
+          "source": "vlm_pending",
+          "rule": "approach->outcome (story/shorts); engage->outcome (montage)"
+        },
+        "zone": "mid_lane",
+        "position": {
+          "x": 6111,
+          "y": 6082
+        },
+        "sides": {
+          "allies": [
+            "Galio",
+            "JarvanIV",
+            "Jhin"
+          ],
+          "enemies": [
+            "MissFortune"
+          ],
+          "numbers": "3v1",
+          "numbers_source": "riot_lower_bound"
+        },
+        "owner": {
+          "involved": true,
+          "role": "initiator_kill",
+          "kills": 1,
+          "assists": 0,
+          "died": false
+        },
+        "result": {
+          "enemy_deaths": 1,
+          "ally_deaths": 0,
+          "outcome": "won",
+          "objective_after": [],
+          "building_after": []
+        },
+        "flags": {
+          "flank": null,
+          "help_from_team": true,
+          "soul_point": null
+        },
+        "confidence": {
+          "facts": "riot",
+          "window": "pending",
+          "flank": "vlm_pending"
+        },
+        "impressive": {
+          "numbers_faced": -1,
+          "score": null
+        }
+      },
+      {
+        "id": "p14",
+        "type": "skirmish",
+        "phase": "mid",
+        "game_time": {
+          "first_kill_s": 1327.1,
+          "last_kill_s": 1327.1
+        },
+        "recording_time": {
+          "first_kill_s": 1310.1,
+          "last_kill_s": 1310.1
+        },
+        "window": {
+          "approach_s": null,
+          "engage_s": null,
+          "outcome_s": null,
+          "source": "vlm_pending",
+          "rule": "approach->outcome (story/shorts); engage->outcome (montage)"
+        },
+        "zone": "mid_lane",
+        "position": {
+          "x": 4527,
+          "y": 4578
+        },
+        "sides": {
+          "allies": [
+            "Galio",
+            "JarvanIV",
+            "Jhin",
+            "Viktor"
+          ],
+          "enemies": [
+            "MissFortune"
+          ],
+          "numbers": "4v1",
+          "numbers_source": "riot_lower_bound"
+        },
+        "owner": {
+          "involved": true,
+          "role": "initiator_kill",
+          "kills": 1,
+          "assists": 0,
+          "died": false
+        },
+        "result": {
+          "enemy_deaths": 1,
+          "ally_deaths": 0,
+          "outcome": "won",
+          "objective_after": [],
+          "building_after": []
+        },
+        "flags": {
+          "flank": null,
+          "help_from_team": true,
+          "soul_point": null
+        },
+        "confidence": {
+          "facts": "riot",
+          "window": "pending",
+          "flank": "vlm_pending"
+        },
+        "impressive": {
+          "numbers_faced": -2,
+          "score": null
+        }
+      },
+      {
+        "id": "p15",
+        "type": "teamfight",
+        "phase": "mid",
+        "game_time": {
+          "first_kill_s": 1412.4,
+          "last_kill_s": 1426.9
+        },
+        "recording_time": {
+          "first_kill_s": 1395.4,
+          "last_kill_s": 1409.9
+        },
+        "window": {
+          "approach_s": null,
+          "engage_s": null,
+          "outcome_s": null,
+          "source": "vlm_pending",
+          "rule": "approach->outcome (story/shorts); engage->outcome (montage)"
+        },
+        "zone": "mid_lane",
+        "position": {
+          "x": 8536,
+          "y": 7611
+        },
+        "sides": {
+          "allies": [
+            "Camille",
+            "Galio",
+            "JarvanIV",
+            "Jhin",
+            "Viktor"
+          ],
+          "enemies": [
+            "Gangplank",
+            "MissFortune",
+            "Neeko",
+            "Rumble"
+          ],
+          "numbers": "5v4",
+          "numbers_source": "riot_lower_bound"
+        },
+        "owner": {
+          "involved": true,
+          "role": "initiator_kill",
+          "kills": 1,
+          "assists": 1,
+          "died": false
+        },
+        "result": {
+          "enemy_deaths": 4,
+          "ally_deaths": 1,
+          "outcome": "won",
+          "objective_after": [],
+          "building_after": []
+        },
+        "flags": {
+          "flank": null,
+          "help_from_team": true,
+          "soul_point": null
+        },
+        "confidence": {
+          "facts": "riot",
+          "window": "pending",
+          "flank": "vlm_pending"
+        },
+        "impressive": {
+          "numbers_faced": 0,
+          "score": null
+        }
+      },
+      {
+        "id": "p16",
+        "type": "teamfight",
+        "phase": "late",
+        "game_time": {
+          "first_kill_s": 1566.2,
+          "last_kill_s": 1581.2
+        },
+        "recording_time": {
+          "first_kill_s": 1549.2,
+          "last_kill_s": 1564.2
+        },
+        "window": {
+          "approach_s": null,
+          "engage_s": null,
+          "outcome_s": null,
+          "source": "vlm_pending",
+          "rule": "approach->outcome (story/shorts); engage->outcome (montage)"
+        },
+        "zone": "blue_bot_jungle",
+        "position": {
+          "x": 6147,
+          "y": 3788
+        },
+        "sides": {
+          "allies": [
+            "Camille",
+            "Galio",
+            "JarvanIV",
+            "Jhin",
+            "Viktor"
+          ],
+          "enemies": [
+            "Gangplank",
+            "MissFortune",
+            "Neeko",
+            "Rumble",
+            "Sion"
+          ],
+          "numbers": "5v5",
+          "numbers_source": "riot_lower_bound"
+        },
+        "owner": {
+          "involved": true,
+          "role": "follow_up",
+          "kills": 1,
+          "assists": 3,
+          "died": false
+        },
+        "result": {
+          "enemy_deaths": 5,
+          "ally_deaths": 3,
+          "outcome": "won",
+          "objective_after": [],
+          "building_after": [
+            "TOWER_BUILDING:MID_LANE",
+            "TOWER_BUILDING:MID_LANE"
+          ]
+        },
+        "flags": {
+          "flank": null,
+          "help_from_team": true,
+          "soul_point": null
+        },
+        "confidence": {
+          "facts": "riot",
+          "window": "pending",
+          "flank": "vlm_pending"
+        },
+        "impressive": {
+          "numbers_faced": 1,
+          "score": null
+        }
+      },
+      {
+        "id": "p17",
+        "type": "skirmish",
+        "phase": "late",
+        "game_time": {
+          "first_kill_s": 1723.2,
+          "last_kill_s": 1723.2
+        },
+        "recording_time": {
+          "first_kill_s": 1706.2,
+          "last_kill_s": 1706.2
+        },
+        "window": {
+          "approach_s": null,
+          "engage_s": null,
+          "outcome_s": null,
+          "source": "vlm_pending",
+          "rule": "approach->outcome (story/shorts); engage->outcome (montage)"
+        },
+        "zone": "top_lane",
+        "position": {
+          "x": 2129,
+          "y": 7454
+        },
+        "sides": {
+          "allies": [
+            "Galio",
+            "JarvanIV",
+            "Viktor"
+          ],
+          "enemies": [
+            "Rumble"
+          ],
+          "numbers": "3v1",
+          "numbers_source": "riot_lower_bound"
+        },
+        "owner": {
+          "involved": false,
+          "role": "absent",
+          "kills": 0,
+          "assists": 0,
+          "died": false
+        },
+        "result": {
+          "enemy_deaths": 1,
+          "ally_deaths": 0,
+          "outcome": "won",
+          "objective_after": [],
+          "building_after": []
+        },
+        "flags": {
+          "flank": null,
+          "help_from_team": true,
+          "soul_point": null
+        },
+        "confidence": {
+          "facts": "riot",
+          "window": "pending",
+          "flank": "vlm_pending"
+        },
+        "impressive": {
+          "numbers_faced": null,
+          "score": null
+        }
+      },
+      {
+        "id": "p18",
+        "type": "teamfight",
+        "phase": "late",
+        "game_time": {
+          "first_kill_s": 1813.5,
+          "last_kill_s": 1816.9
+        },
+        "recording_time": {
+          "first_kill_s": 1796.5,
+          "last_kill_s": 1799.9
+        },
+        "window": {
+          "approach_s": null,
+          "engage_s": null,
+          "outcome_s": null,
+          "source": "vlm_pending",
+          "rule": "approach->outcome (story/shorts); engage->outcome (montage)"
+        },
+        "zone": "dragon_pit",
+        "position": {
+          "x": 8662,
+          "y": 3661
+        },
+        "sides": {
+          "allies": [
+            "Camille",
+            "Galio",
+            "JarvanIV",
+            "Jhin",
+            "Viktor"
+          ],
+          "enemies": [
+            "Gangplank",
+            "MissFortune",
+            "Neeko"
+          ],
+          "numbers": "5v3",
+          "numbers_source": "riot_lower_bound"
+        },
+        "owner": {
+          "involved": true,
+          "role": "follow_up",
+          "kills": 0,
+          "assists": 2,
+          "died": false
+        },
+        "result": {
+          "enemy_deaths": 3,
+          "ally_deaths": 0,
+          "outcome": "won",
+          "objective_after": [],
+          "building_after": []
+        },
+        "flags": {
+          "flank": null,
+          "help_from_team": true,
+          "soul_point": null
+        },
+        "confidence": {
+          "facts": "riot",
+          "window": "pending",
+          "flank": "vlm_pending"
+        },
+        "impressive": {
+          "numbers_faced": -1,
+          "score": null
+        }
+      },
+      {
+        "id": "p19",
+        "type": "objective_fight",
+        "phase": "late",
+        "game_time": {
+          "first_kill_s": 1837.1,
+          "last_kill_s": 1837.1
+        },
+        "recording_time": {
+          "first_kill_s": 1820.1,
+          "last_kill_s": 1820.1
+        },
+        "window": {
+          "approach_s": null,
+          "engage_s": null,
+          "outcome_s": null,
+          "source": "vlm_pending",
+          "rule": "approach->outcome (story/shorts); engage->outcome (montage)"
+        },
+        "zone": "top_river",
+        "position": {
+          "x": 6361,
+          "y": 8282
+        },
+        "sides": {
+          "allies": [
+            "Jhin"
+          ],
+          "enemies": [
+            "Rumble"
+          ],
+          "numbers": "1v1",
+          "numbers_source": "riot_lower_bound"
+        },
+        "owner": {
+          "involved": true,
+          "role": "initiator_kill",
+          "kills": 1,
+          "assists": 0,
+          "died": false
+        },
+        "result": {
+          "enemy_deaths": 1,
+          "ally_deaths": 0,
+          "outcome": "won",
+          "objective_after": [
+            "DRAGON/AIR_DRAGON",
+            "BARON_NASHOR"
+          ],
+          "building_after": []
+        },
+        "flags": {
+          "flank": null,
+          "help_from_team": false,
+          "soul_point": null
+        },
+        "confidence": {
+          "facts": "riot",
+          "window": "pending",
+          "flank": "vlm_pending"
+        },
+        "impressive": {
+          "numbers_faced": 1,
+          "score": null
+        }
+      },
+      {
+        "id": "p20",
+        "type": "skirmish",
+        "phase": "late",
+        "game_time": {
+          "first_kill_s": 1909.5,
+          "last_kill_s": 1914.0
+        },
+        "recording_time": {
+          "first_kill_s": 1892.5,
+          "last_kill_s": 1897.0
+        },
+        "window": {
+          "approach_s": null,
+          "engage_s": null,
+          "outcome_s": null,
+          "source": "vlm_pending",
+          "rule": "approach->outcome (story/shorts); engage->outcome (montage)"
+        },
+        "zone": "top_lane",
+        "position": {
+          "x": 774,
+          "y": 5350
+        },
+        "sides": {
+          "allies": [
+            "Galio",
+            "JarvanIV",
+            "Jhin",
+            "Viktor"
+          ],
+          "enemies": [
+            "Gangplank",
+            "MissFortune",
+            "Neeko",
+            "Rumble",
+            "Sion"
+          ],
+          "numbers": "4v5",
+          "numbers_source": "riot_lower_bound"
+        },
+        "owner": {
+          "involved": true,
+          "role": "caught_first",
+          "kills": 0,
+          "assists": 2,
+          "died": true
+        },
+        "result": {
+          "enemy_deaths": 2,
+          "ally_deaths": 2,
+          "outcome": "even",
+          "objective_after": [],
+          "building_after": [
+            "INHIBITOR_BUILDING:MID_LANE"
+          ]
+        },
+        "flags": {
+          "flank": null,
+          "help_from_team": true,
+          "soul_point": null
+        },
+        "confidence": {
+          "facts": "riot",
+          "window": "pending",
+          "flank": "vlm_pending"
+        },
+        "impressive": {
+          "numbers_faced": 2,
+          "score": null
+        }
+      },
+      {
+        "id": "p21",
+        "type": "closeout",
+        "phase": "late",
+        "game_time": {
+          "first_kill_s": 2002.1,
+          "last_kill_s": 2040.2
+        },
+        "recording_time": {
+          "first_kill_s": 1985.1,
+          "last_kill_s": 2023.2
+        },
+        "window": {
+          "approach_s": null,
+          "engage_s": null,
+          "outcome_s": null,
+          "source": "vlm_pending",
+          "rule": "approach->outcome (story/shorts); engage->outcome (montage)"
+        },
+        "zone": "bot_lane",
+        "position": {
+          "x": 6755,
+          "y": 910
+        },
+        "sides": {
+          "allies": [
+            "Camille",
+            "Galio",
+            "JarvanIV",
+            "Jhin",
+            "Viktor"
+          ],
+          "enemies": [
+            "Gangplank",
+            "MissFortune",
+            "Neeko",
+            "Rumble",
+            "Sion"
+          ],
+          "numbers": "5v5",
+          "numbers_source": "riot_lower_bound"
+        },
+        "owner": {
+          "involved": true,
+          "role": "follow_up",
+          "kills": 1,
+          "assists": 3,
+          "died": false
+        },
+        "result": {
+          "enemy_deaths": 5,
+          "ally_deaths": 1,
+          "outcome": "won",
+          "objective_after": [],
+          "building_after": [
+            "TOWER_BUILDING:MID_LANE"
+          ]
+        },
+        "flags": {
+          "flank": null,
+          "help_from_team": true,
+          "soul_point": null
+        },
+        "confidence": {
+          "facts": "riot",
+          "window": "pending",
+          "flank": "vlm_pending"
+        },
+        "impressive": {
+          "numbers_faced": 1,
+          "score": null
+        }
+      }
+    ],
+    "objectives": [
+      {
+        "t_s": 373.5,
+        "type": "DRAGON",
+        "sub": "CHEMTECH_DRAGON",
+        "team": "ally"
+      },
+      {
+        "t_s": 491.7,
+        "type": "HORDE",
+        "sub": null,
+        "team": "ally"
+      },
+      {
+        "t_s": 502.3,
+        "type": "HORDE",
+        "sub": null,
+        "team": "enemy"
+      },
+      {
+        "t_s": 555.3,
+        "type": "HORDE",
+        "sub": null,
+        "team": "enemy"
+      },
+      {
+        "t_s": 724.9,
+        "type": "DRAGON",
+        "sub": "FIRE_DRAGON",
+        "team": "ally"
+      },
+      {
+        "t_s": 1117.2,
+        "type": "DRAGON",
+        "sub": "AIR_DRAGON",
+        "team": "enemy"
+      },
+      {
+        "t_s": 1195.1,
+        "type": "RIFTHERALD",
+        "sub": null,
+        "team": "enemy"
+      },
+      {
+        "t_s": 1463.3,
+        "type": "BARON_NASHOR",
+        "sub": null,
+        "team": "ally"
+      },
+      {
+        "t_s": 1517.0,
+        "type": "DRAGON",
+        "sub": "AIR_DRAGON",
+        "team": "ally"
+      },
+      {
+        "t_s": 1853.7,
+        "type": "DRAGON",
+        "sub": "AIR_DRAGON",
+        "team": "ally"
+      },
+      {
+        "t_s": 1865.9,
+        "type": "BARON_NASHOR",
+        "sub": null,
+        "team": "ally"
+      }
+    ]
+  },
+  "_note": "Real Riot facts from the Jhin 8/2/13 game (asset 42672a10), proposer prototype 2026-11-22. Riot-only: window/flank/numbers confirmation are null until the VLM confirmer runs. numbers are a lower bound (R1). Zones named by map side (blue base bottom-left)."
+}
