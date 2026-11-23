@@ -123,6 +123,9 @@ class Play(_Tolerant):
 
 
 class ObjectiveEvent(_Tolerant):
+    """An elite monster or building taken (dragon souls excluded); `t_s` is
+    game seconds and `team` is the side that took it."""
+
     t_s: float
     type: str
     sub: str | None = None
@@ -136,3 +139,4 @@ class GameModel(_Tolerant):
     objectives: list[ObjectiveEvent] = Field(default_factory=list)
     vocab_hash: str = ""
     budget_spent_usd: float = 0.0
+    budget_exhausted: bool = False

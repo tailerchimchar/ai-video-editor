@@ -6,9 +6,11 @@ import sqlite3
 import pytest
 
 from ai_video_editor.anthropic_surface import _LEDGER_DDL, spent_usd
+from ai_video_editor.league import understand as understand_mod
 from ai_video_editor.league.phases import phases_for  # noqa: F401
 from ai_video_editor.league.play_models import GameModel
 from ai_video_editor.league.play_vocab import load_vocab
+from ai_video_editor.league.plays import objectives_from
 from ai_video_editor.league.riot_timeline import parse_timeline
 from ai_video_editor.league.understand import understand_game
 from ai_video_editor.vlm import play_confirm as pc
@@ -91,11 +93,16 @@ def test_frozen_file_returned_when_hash_matches(env):
     assert all(p.text for p in again.plays)
 
 
-def test_vocab_hash_mismatch_reruns(env):
-    _run(env)
+def test_vocab_hash_mismatch_returns_frozen_with_warning(env, caplog):
+    first, _ = _run(env)
     other = VOCAB.model_copy(update={"hash": "changed"})
-    _, args = _run(env, vocab=other)
-    assert args["backend"].n == 2
+    with caplog.at_level("WARNING"):
+        again, args = _run(env, vocab=other)
+    assert args["backend"].n == 0
+    assert again.vocab_hash == first.vocab_hash
+    assert "force" in caplog.text
+    _, forced = _run(env, vocab=other, force=True)
+    assert forced["backend"].n == 2
 
 
 def test_force_reruns(env):
@@ -131,10 +138,11 @@ def test_spent_usd_sums_feature_prefix(env):
     with conn:
         for f, c in (("play_confirm", 0.1), ("play_sweep", 0.2), ("vlm", 5.0)):
             conn.execute(
-                "INSERT INTO spend_ledger (asset_id, feature, cost_usd) VALUES ('a1', ?, ?)", (f, c)
+                "INSERT INTO spend_ledger (asset_id, feature, cost_usd) VALUES ('plays:a1', ?, ?)",
+                (f, c),
             )
     conn.close()
-    assert spent_usd("a1", feature_prefix="play_", db_path=db) == pytest.approx(0.3)
+    assert spent_usd("plays:a1", feature_prefix="play_", db_path=db) == pytest.approx(0.3)
 
 
 def test_sweep_adds_trade_play_when_budget_remains(env, monkeypatch):
@@ -158,9 +166,118 @@ def test_budget_is_per_run_and_reports_delta(env):
     with conn:
         conn.execute(
             "INSERT INTO spend_ledger (asset_id, feature, cost_usd) "
-            "VALUES ('a1', 'play_confirm', 1.4)"
+            "VALUES ('plays:a1', 'play_confirm', 1.4)"
         )
     conn.close()
     model, args = _run(env, budget_usd=1.5)
     assert args["backend"].n == len(model.plays) > 0
     assert model.budget_spent_usd == 0.0
+
+
+class LedgerBackend(Backend):
+    """Each call books $1 on the understanding key, like the real backend."""
+
+    def __init__(self, db):
+        super().__init__()
+        self.db = db
+
+    def call(self, **kw):
+        conn = sqlite3.connect(self.db)
+        with conn:
+            conn.execute(
+                "INSERT INTO spend_ledger (asset_id, feature, cost_usd) "
+                "VALUES ('plays:a1', 'play_confirm', 1.0)"
+            )
+        conn.close()
+        return super().call(**kw)
+
+
+def test_owner_plays_confirmed_first_absent_only_while_budget_remains(env, monkeypatch):
+    seen = []
+    real = understand_mod.confirm_play
+
+    def spy(video, play, **kw):
+        seen.append(play.id)
+        return real(video, play, **kw)
+
+    monkeypatch.setattr(understand_mod, "confirm_play", spy)
+    model, _ = _run(env, budget_usd=1.0, backend=LedgerBackend(env[1]))
+    assert seen == ["p01"]  # p01 is the owner's kill; p02 (absent) found no budget left
+    by_id = {p.id: p for p in model.plays}
+    assert by_id["p01"].window.source == "vlm"
+    assert by_id["p02"].window.source == "fallback"
+    assert model.budget_spent_usd == pytest.approx(1.0)
+    assert model.budget_exhausted is False
+
+
+def test_spend_cap_stops_pass_and_marks_budget_exhausted(env):
+    from ai_video_editor.vlm.backends.anthropic_backend import VLMBudgetError
+
+    class Capped(Backend):
+        def call(self, **kw):
+            self.n += 1
+            raise VLMBudgetError("plays:a1 has spent $1.50")
+
+    model, args = _run(env, backend=Capped(), sweep=True)
+    assert args["backend"].n == 1
+    assert model.budget_exhausted is True
+    assert all(p.window.source == "fallback" for p in model.plays)
+    raw = json.loads((env[0] / "plays" / "a1.json").read_text(encoding="utf-8"))
+    assert raw["budget_exhausted"] is True
+
+
+def test_default_backend_is_sonnet_on_its_own_key_and_cap(monkeypatch):
+    from ai_video_editor.config import settings
+    from ai_video_editor.vlm.backends.anthropic_backend import AnthropicBackend
+
+    monkeypatch.setattr(settings, "vlm_backend", "anthropic")
+    be = understand_mod.default_backend("a1", budget_usd=1.5)
+    assert isinstance(be, AnthropicBackend)
+    assert be.model == "claude-sonnet-4-6"
+    assert be.asset_id == "plays:a1"
+    assert be.feature == "play_confirm"
+    assert be._cap_kwargs == {"cap_usd": 1.5, "cap_name": "GAME_UNDERSTANDING_BUDGET_USD"}
+
+
+def test_default_backend_falls_back_to_select_backend(monkeypatch):
+    from ai_video_editor.config import settings
+    from ai_video_editor.vlm.backends.ollama_backend import OllamaBackend
+
+    monkeypatch.setattr(settings, "vlm_backend", "ollama")
+    assert isinstance(understand_mod.default_backend("a1", budget_usd=1.5), OllamaBackend)
+
+
+def test_objectives_filled_from_elites_and_buildings_skipping_souls():
+    parts = [
+        {"puuid": f"P{i + 1}", "participantId": i + 1, "championName": c,
+         "teamId": 100 if i < 5 else 200}
+        for i, c in enumerate(CHAMPS)
+    ]  # fmt: skip
+    match = {
+        "metadata": {"matchId": "NA1_O"},
+        "info": {"gameStartTimestamp": 1000, "gameEndTimestamp": 2_001_000, "participants": parts},
+    }
+    events = [
+        {"type": "ELITE_MONSTER_KILL", "timestamp": 700_000, "killerId": 2, "killerTeamId": 100,
+         "monsterType": "DRAGON", "monsterSubType": "FIRE_DRAGON"},
+        {"type": "DRAGON_SOUL_GIVEN", "timestamp": 701_000, "teamId": 100, "name": "Fire"},
+        {"type": "BUILDING_KILL", "timestamp": 800_000, "killerId": 7, "teamId": 100,
+         "buildingType": "TOWER_BUILDING", "laneType": "MID_LANE"},
+    ]  # fmt: skip
+    tl = parse_timeline(
+        match,
+        {"info": {"frames": [{"timestamp": 0, "events": events}]}},
+        owner_puuid="P1",
+        offset_s=20.0,
+        confidence="high",
+    )
+    objs = objectives_from(tl)
+    assert [(o.type, o.sub, o.team, o.t_s) for o in objs] == [
+        ("DRAGON", "FIRE_DRAGON", "ally", 700.0),
+        ("TOWER_BUILDING", "MID_LANE", "enemy", 800.0),
+    ]
+
+
+def test_understand_game_writes_objectives(env):
+    model, _ = _run(env)
+    assert model.objectives == objectives_from(_timeline())

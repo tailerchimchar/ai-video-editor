@@ -62,9 +62,12 @@ class Settings(BaseSettings):
     # --- Game understanding (league/plays, spec 2026-11-22) ---------------
     game_understanding_budget_usd: float = 1.5
     plays_drive_cuts: bool = False
-    play_confirm_fps: float = 1.0
+    # D14: single labelled frames every 2 s, read by Sonnet (Haiku could not
+    # place events). The kill-less sweep is off unless asked for.
+    play_confirm_fps: float = 0.5
+    play_confirm_model: str = "claude-sonnet-4-6"
     play_sweep_fps: float = 0.25
-    play_sweep_enabled: bool = True
+    play_sweep_enabled: bool = False
     story_transition_s: float = 0.25
     story_kill_sfx: bool = True
     montage_jump_cut_gap_s: float = 3.0

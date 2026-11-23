@@ -107,7 +107,9 @@ def test_cli_fps_harness_prints_line_per_fps(tmp_path, monkeypatch, capsys):
     def fake(asset, src, tl, **kw):
         calls.append(kw["fps"])
         plays = [_play("p0", 60, 74)]
-        return GameModel(plays=plays, budget_spent_usd=0.25 * kw["fps"])
+        return GameModel(
+            plays=plays, budget_spent_usd=0.25 * kw["fps"], budget_exhausted=kw["fps"] == 1.0
+        )
 
     stub = types.ModuleType("ai_video_editor.league.understand")
     stub.understand_game = fake
@@ -118,4 +120,5 @@ def test_cli_fps_harness_prints_line_per_fps(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out.splitlines()
     assert rc == 0 and calls == [0.25, 1.0]
     assert out[0].startswith("fps 0.25") and "precision 1.00" in out[0] and "PASS" in out[0]
-    assert out[1].startswith("fps 1.0")
+    assert out[1].startswith("fps 1.0") and out[1].endswith("budget_exhausted")
+    assert "budget_exhausted" not in out[0]

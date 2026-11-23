@@ -12,6 +12,7 @@ from .map_zones import near_tower, zone_of, zone_relative
 from .phases import phase_of
 from .play_models import (
     Impressive,
+    ObjectiveEvent,
     Phases,
     Play,
     PlayFlags,
@@ -223,6 +224,38 @@ def propose_plays(timeline: RiotTimeline, *, phases: Phases, gap_s: float = 15.0
         _build_play(i, f, timeline, phases)
         for i, f in enumerate(fights(timeline.events, gap_s=gap_s), start=1)
     ]
+
+
+def objectives_from(timeline: RiotTimeline) -> list[ObjectiveEvent]:
+    """Elite kills and buildings taken, in game seconds; dragon souls skipped
+    (a soul is a consequence of dragons, not an objective of its own)."""
+    owner_team = timeline.owner_team_id
+    out: list[ObjectiveEvent] = []
+    for e in timeline.events:
+        if e.kind == "elite" and e.detail.get("monsterType") != "DRAGON_SOUL":
+            taker = e.detail.get("killerTeamId")
+            team = "ally" if owner_team is not None and taker == owner_team else "enemy"
+            out.append(
+                ObjectiveEvent(
+                    t_s=e.t_game_s,
+                    type=str(e.detail.get("monsterType")),
+                    sub=e.detail.get("monsterSubType"),
+                    team=team,
+                )
+            )
+        elif e.kind == "building":
+            # `teamId` owns the destroyed building: the other side took it.
+            lost_by = e.detail.get("teamId")
+            team = "enemy" if owner_team is not None and lost_by == owner_team else "ally"
+            out.append(
+                ObjectiveEvent(
+                    t_s=e.t_game_s,
+                    type=str(e.detail.get("buildingType")),
+                    sub=e.detail.get("laneType"),
+                    team=team,
+                )
+            )
+    return out
 
 
 def play_text(play: Play) -> str:

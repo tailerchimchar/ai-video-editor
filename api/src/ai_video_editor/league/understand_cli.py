@@ -56,6 +56,8 @@ def main(argv: list[str] | None = None) -> int:
             f"{w.source}"
         )
     print(f"budget_spent_usd {model.budget_spent_usd:.4f}")
+    if model.budget_exhausted:
+        print("budget_exhausted: the pass stopped early; raise GAME_UNDERSTANDING_BUDGET_USD")
     return 0
 
 

@@ -1,9 +1,13 @@
 """The understanding pass: Riot proposes plays, the VLM confirms them, the
 result is frozen to `WORKSPACE/plays/<asset_id>.json` (spec 4.3).
 
-The frozen file is reused until the play vocabulary changes (`vocab_hash`)
-or the caller forces a rerun. Free-text VLM descriptions go to a separate
-prose sidecar and never reach the digest.
+The frozen file is reused until the caller forces a rerun; a changed play
+vocabulary (`vocab_hash`) only logs a stale-hash warning (R6). Spend goes
+to its own ledger key `plays:<asset_id>` capped by
+`game_understanding_budget_usd`, outside the per-asset cap (D15); a
+`SpendCapError` stops the pass and sets `budget_exhausted`. Owner-involved
+plays are confirmed first, in rank order (D14). Free-text VLM descriptions
+go to a separate prose sidecar and never reach the digest.
 """
 
 from __future__ import annotations
@@ -13,9 +17,10 @@ import json
 import logging
 from pathlib import Path
 
-from ..anthropic_surface import spent_usd
+from ..anthropic_surface import SpendCapError, spent_usd
 from ..candidates.probe import get_duration_seconds
 from ..config import settings
+from ..vlm.backends.anthropic_backend import AnthropicBackend
 from ..vlm.backends.base import VLMBackend
 from ..vlm.client import select_backend
 from ..vlm.play_confirm import (
@@ -28,17 +33,37 @@ from ..vlm.play_confirm import (
 from .phases import phases_for
 from .play_models import GameModel, Play
 from .play_vocab import PlayVocabulary
-from .plays import play_text, propose_plays, rank_plays
+from .plays import objectives_from, play_text, propose_plays, rank_plays
 from .riot_timeline import RiotTimeline
 
 _log = logging.getLogger(__name__)
 
 SWEEP_MIN_REMAINING_USD = 0.25
 SPEND_PREFIX = "play_"
+BUDGET_CAP_NAME = "GAME_UNDERSTANDING_BUDGET_USD"
 
 
 def plays_path(asset_id: str) -> Path:
     return Path(settings.workspace_dir) / "plays" / f"{asset_id}.json"
+
+
+def spend_key(asset_id: str) -> str:
+    """Ledger key of the understanding pass (D15), like `story:<asset>`."""
+    return f"plays:{asset_id}"
+
+
+def default_backend(asset_id: str, *, budget_usd: float) -> VLMBackend:
+    """Sonnet (`play_confirm_model`) on the `plays:<asset>` key and cap when
+    the configured backend is anthropic; else the configured backend."""
+    if settings.vlm_backend.lower() == "anthropic":
+        return AnthropicBackend(
+            asset_id=spend_key(asset_id),
+            model=settings.play_confirm_model,
+            feature="play_confirm",
+            cap_usd=budget_usd,
+            cap_name=BUDGET_CAP_NAME,
+        )
+    return select_backend(asset_id=asset_id)
 
 
 def _label(backend: VLMBackend, feature: str) -> None:
@@ -56,7 +81,13 @@ def _load_frozen(path: Path, vocab: PlayVocabulary) -> GameModel | None:
         _log.warning("unreadable plays file %s: %s", path, exc)
         return None
     if model.vocab_hash != vocab.hash:
-        return None
+        _log.warning(
+            "plays file %s was built with vocabulary %s, current is %s; "
+            "returning it as is (rerun with force to rebuild)",
+            path,
+            model.vocab_hash,
+            vocab.hash,
+        )
     for p in model.plays:
         p.text = play_text(p)
     return model
@@ -84,9 +115,11 @@ def understand_game(
             return frozen
 
     def ledger() -> float:
-        return spent_usd(asset_id, feature_prefix=SPEND_PREFIX, db_path=ledger_db)
+        return spent_usd(spend_key(asset_id), feature_prefix=SPEND_PREFIX, db_path=ledger_db)
 
-    baseline = ledger()  # budgets are per run, not cumulative across reruns
+    # The loop stops once this run has spent `budget_usd`; the backend's own
+    # cap on the `plays:<asset>` key is the cumulative hard stop (D15).
+    baseline = ledger()
 
     def spent() -> float:
         return ledger() - baseline
@@ -100,30 +133,43 @@ def understand_game(
 
     def get_backend() -> VLMBackend:
         if state["backend"] is None:
-            state["backend"] = select_backend(asset_id=asset_id)
+            state["backend"] = default_backend(asset_id, budget_usd=budget_usd)
         return state["backend"]
 
     prose: dict[str, str] = {}
     done: list[Play] = []
-    out_of_budget = False
-    for play in rank_plays(proposed):
+    exhausted = False
+    ranked = rank_plays(proposed)
+    # Owner plays first (rank order), then absent plays while budget remains.
+    queue = [p for p in ranked if p.owner.involved] + [p for p in ranked if not p.owner.involved]
+    for play in queue:
         conf: PlayConfirmation | None = None
         start = 0.0
-        out_of_budget = out_of_budget or spent() >= budget_usd
-        if not out_of_budget:
+        if not exhausted and spent() < budget_usd:
             be = get_backend()
             _label(be, "play_confirm")
-            conf, start = confirm_play(video_path, play, vocab=vocab, backend=be, fps=fps)
-        rule = vocab.rule_for(play.type)
+            try:
+                conf, start = confirm_play(video_path, play, vocab=vocab, backend=be, fps=fps)
+            except SpendCapError as exc:
+                _log.warning("understanding pass stopped: %s", exc)
+                exhausted = True
+        try:
+            rule = vocab.rule_for(play.type)
+        except ValueError as exc:
+            _log.warning("play %s kept unconfirmed: %s", play.id, exc)
+            done.append(play)
+            continue
         confirmed = apply_confirmation(play, conf, start, game_end_s=timeline.game_end_s, rule=rule)
         if conf is not None and conf.description:
             prose[confirmed.id] = conf.description
         done.append(confirmed)
 
-    if sweep and phases is not None and budget_usd - spent() >= SWEEP_MIN_REMAINING_USD:
+    can_sweep = not exhausted and budget_usd - spent() >= SWEEP_MIN_REMAINING_USD
+    if sweep and phases is not None and can_sweep:
         be = get_backend()
         _label(be, "play_sweep")
         duration = get_duration_seconds(video_path)
+        hit: list[bool] = []
         findings = sweep_game(
             video_path,
             duration_s=duration,
@@ -131,7 +177,9 @@ def understand_game(
             backend=be,
             vocab=vocab,
             should_continue=lambda: spent() < budget_usd,
+            on_budget_exhausted=lambda: hit.append(True),
         )
+        exhausted = exhausted or bool(hit)
         extra = findings_to_plays(
             findings, start_idx=len(done) + 1, offset_s=timeline.offset_s, phases=phases
         )
@@ -156,8 +204,10 @@ def understand_game(
     model = GameModel(
         phases=phases,
         plays=done,
+        objectives=objectives_from(timeline),
         vocab_hash=vocab.hash,
         budget_spent_usd=round(spent(), 4),
+        budget_exhausted=exhausted,
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(model.model_dump_json(indent=2), encoding="utf-8")

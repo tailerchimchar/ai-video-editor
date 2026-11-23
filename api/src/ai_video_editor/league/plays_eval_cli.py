@@ -60,9 +60,10 @@ def _run_fps(asset: str, fps_list: list[float], source: str, labels: Labels) -> 
             out_path=Path(settings.workspace_dir) / "plays" / f"{asset}.fps{f}.json",
         )
         rep = match_plays(model.plays, labels.rows)
+        exhausted = "  budget_exhausted" if model.budget_exhausted else ""
         print(
             f"fps {f}  cost ${model.budget_spent_usd:.2f}  precision {rep.precision:.2f}  "
-            f"recall {rep.recall:.2f}  gate {'PASS' if passes_gate(rep) else 'FAIL'}"
+            f"recall {rep.recall:.2f}  gate {'PASS' if passes_gate(rep) else 'FAIL'}{exhausted}"
         )
     return 0
 
