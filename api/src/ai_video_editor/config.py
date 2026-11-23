@@ -59,6 +59,15 @@ class Settings(BaseSettings):
     # per-asset cap (R3), game-audio level under the owner's mic, and the
     # length of each chapter title card.
     story_budget_usd: float = 5.0
+    # --- Game understanding (league/plays, spec 2026-11-22) ---------------
+    game_understanding_budget_usd: float = 1.5
+    plays_drive_cuts: bool = False
+    play_confirm_fps: float = 1.0
+    play_sweep_fps: float = 0.25
+    play_sweep_enabled: bool = True
+    story_transition_s: float = 0.25
+    story_kill_sfx: bool = True
+    montage_jump_cut_gap_s: float = 3.0
     story_game_audio_volume: float = 0.35
     # Owner mic tracks record very quiet (~-70 dB mean vs a -24 dB game mix);
     # single-pass loudnorm per chapter brings the mic up before the mix.

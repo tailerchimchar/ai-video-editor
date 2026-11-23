@@ -27,6 +27,8 @@ from ..bucketing import _FORMAT_QUESTION, _INCLUDE_QUESTION
 from ..commentary import commentary_candidates
 from ..decisions import Answer, ask_many
 from ..league.lane_models import LaneSummary
+from ..league.play_models import GameModel
+from ..league.plays import play_text
 from ..refs import normalize_clip_ref
 
 if TYPE_CHECKING:
@@ -72,6 +74,7 @@ class DigestClip(BaseModel):
     game_state: GameState | None = None
     energy: Energy = "unknown"
     match_confidence: MatchConfidence = "none"
+    play_id: str | None = None
 
 
 class CommentaryItem(BaseModel):
@@ -86,6 +89,7 @@ class CommentaryItem(BaseModel):
 
 
 class Digest(BaseModel):
+    version: int = 3
     game: str
     round: str
     clips: list[DigestClip]
@@ -95,6 +99,8 @@ class Digest(BaseModel):
     compilation_version: str | None = None
     asset_id: str | None = None
     lane: LaneSummary | None = None
+    # v3 section (spec 4.5); absent in v2 digests.
+    game_model: GameModel | None = None
 
 
 def _load(path: Path) -> Any:
@@ -292,6 +298,7 @@ def build_digest(
     energy: Callable[[float, float], str] | None = None,
     lane: LaneSummary | None = None,
     owner_rows: list[dict] | None = None,
+    game_model: GameModel | None = None,
 ) -> Digest:
     clips = _load(round_dir / "clips.json")
     clips = clips if isinstance(clips, list) else []
@@ -350,7 +357,7 @@ def build_digest(
                 match_confidence=_match_confidence(timeline),
             )
         )
-    return Digest(
+    digest = Digest(
         game=game,
         round=round_dir.name,
         clips=out,
@@ -358,6 +365,37 @@ def build_digest(
         built_at=datetime.now(timezone.utc).isoformat(),
         lane=lane,
     )
+    return attach_plays(digest, game_model) if game_model is not None else digest
+
+
+def attach_plays(digest: Digest, game: GameModel) -> Digest:
+    """Set `digest.game_model`, template every play's text (R4) and link each
+    clip to a play: the play whose recording kill span holds the clip midpoint,
+    else the one overlapping the clip most, else None. Never raises."""
+    try:
+        for play in game.plays:
+            play.text = play_text(play)
+        digest.game_model = game
+        for clip in digest.clips:
+            clip.play_id = _play_id_for(clip, game)
+    except Exception as e:  # a play can never fail the round
+        logger.warning("digest: could not attach plays: %s", e)
+    return digest
+
+
+def _play_id_for(clip: DigestClip, game: GameModel) -> str | None:
+    mid = (clip.start_s + clip.end_s) / 2
+    for play in game.plays:
+        t = play.recording_time
+        if t.first_kill_s <= mid <= t.last_kill_s:
+            return play.id
+    best_id, best = None, 0.0
+    for play in game.plays:
+        t = play.recording_time
+        overlap = min(clip.end_s, t.last_kill_s) - max(clip.start_s, t.first_kill_s)
+        if overlap > best:
+            best_id, best = play.id, overlap
+    return best_id
 
 
 def _norm(text: str) -> str:
@@ -420,7 +458,8 @@ def digest_leaks(
     if transcript_path is not None:
         rows = json.loads(transcript_path.read_text(encoding="utf-8"))
         lines += [line.get("text", "") for line in rows]
-    return _leaks(lines, _strings(digest.model_dump()), min_len)
+    # R4: game_model holds templated facts only (never free text), so it is not scanned.
+    return _leaks(lines, _strings(digest.model_dump(exclude={"game_model"})), min_len)
 
 
 def annotate_with_jev(digest: Digest, ask_many: Callable[..., list[Answer]] = ask_many) -> Digest:
