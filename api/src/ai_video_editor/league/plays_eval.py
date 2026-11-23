@@ -2,8 +2,9 @@
 
 Labels are hand-written once per game (`WORKSPACE/labels/<asset>.json`) in
 recording seconds. A detected play matches a label when the windows overlap
-by IoU >= `iou_min` and the starts are within `start_tol_s` (R8). Pure; the
-CLI lives in `plays_eval_cli`."""
+by IoU >= `iou_min` and the starts are within `start_tol_s` (R8). Only
+owner-involved detected plays are scored (D16): the owner cannot label
+off-screen fights. Pure; the CLI lives in `plays_eval_cli`."""
 
 from __future__ import annotations
 
@@ -35,6 +36,9 @@ class Labels(BaseModel):
 
 
 class EvalReport(BaseModel):
+    """Scores over owner-involved detected plays only (D16); the ids of the
+    absent plays left out are listed in `excluded_absent`."""
+
     precision: float
     recall: float
     matched: list[tuple[str, int]]
@@ -42,6 +46,7 @@ class EvalReport(BaseModel):
     unmatched_labels: list[int]
     per_type: dict[str, dict[str, float]]
     type_confusion: list[tuple[str, str]]
+    excluded_absent: list[str] = []
 
 
 def labels_path(asset_id: str) -> Path:
@@ -80,6 +85,8 @@ def match_plays(
     iou_min: float = 0.5,
     start_tol_s: float = 5.0,
 ) -> EvalReport:
+    excluded = [p.id for p in detected if not p.owner.involved]
+    detected = [p for p in detected if p.owner.involved]
     windows = [detected_window(p) for p in detected]
     pairs: list[tuple[float, int, int]] = []
     for di, dw in enumerate(windows):
@@ -128,6 +135,7 @@ def match_plays(
         unmatched_labels=[i for i in range(len(labels)) if i not in used_l],
         per_type=per_type,
         type_confusion=confusion,
+        excluded_absent=excluded,
     )
 
 

@@ -65,3 +65,9 @@ def test_clear_pool(ws):
     month_pool.pool_play("a", make_play("p1"), "src.mp4")
     month_pool.clear_pool()
     assert not month_pool.pool_dir().exists()
+
+
+def test_absent_plays_are_not_pooled(ws):
+    assert not month_pool.is_eligible(make_play("p1", involved=False))
+    assert month_pool.pool_play("a", make_play("p1", involved=False), "src.mp4") is None
+    assert ws == []

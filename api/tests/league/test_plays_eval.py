@@ -122,3 +122,13 @@ def test_cli_fps_harness_prints_line_per_fps(tmp_path, monkeypatch, capsys):
     assert out[0].startswith("fps 0.25") and "precision 1.00" in out[0] and "PASS" in out[0]
     assert out[1].startswith("fps 1.0") and out[1].endswith("budget_exhausted")
     assert "budget_exhausted" not in out[0]
+
+
+def test_absent_plays_are_not_scored():
+    absent = _play("p9", 300, 320)
+    absent.owner = PlayOwner(involved=False, role="absent", kills=0, assists=0, died=False)
+    r = match_plays([_play("p1", 100, 120), absent], [_label(100, 120)])
+    assert r.precision == 1.0 and r.recall == 1.0
+    assert r.excluded_absent == ["p9"]
+    assert r.unmatched_detected == []
+    assert r.per_type["skirmish"]["n_detected"] == 1.0

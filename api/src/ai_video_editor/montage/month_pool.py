@@ -23,7 +23,8 @@ def pool_dir(month: str | None = None) -> Path:
 
 
 def is_eligible(play: Play) -> bool:
-    if "offset_uncertain" in play.window.flags:
+    """Owner-involved plays with trusted kill times (D16) of a pool type."""
+    if not play.owner.involved or "offset_uncertain" in play.window.flags:
         return False
     if play.type in _ELIGIBLE_TYPES:
         return True

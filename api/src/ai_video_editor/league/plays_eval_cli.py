@@ -18,6 +18,8 @@ from .plays_eval import EvalReport, Labels, labels_path, load_labels, match_play
 
 def _print_report(report: EvalReport) -> None:
     print(f"precision {report.precision:.2f}  recall {report.recall:.2f}")
+    if report.excluded_absent:
+        print(f"not scored (owner absent): {', '.join(report.excluded_absent)}")
     print("type              prec  rec  labels  detected")
     for t, m in report.per_type.items():
         print(
