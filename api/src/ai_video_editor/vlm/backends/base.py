@@ -51,8 +51,12 @@ class VLMBackend(Protocol):
         frames: list[Path],
         system_prompt: str,
         user_prompt: str,
+        max_tokens: int = 1024,
     ) -> str:
         """Send frames + prompts to the model, return raw text.
+
+        `max_tokens` bounds the reply; backends without such a knob may
+        ignore it. `run_with_retry` passes it only when a caller sets it.
 
         Text is expected to be JSON (backends should request JSON mode
         where possible). Parsing + validation happens in `run_with_retry`
@@ -69,6 +73,7 @@ def run_with_retry(
     user_prompt: str,
     response_model: type[T],
     max_retries: int = 2,
+    max_tokens: int | None = None,
 ) -> T:
     """Call the backend, parse JSON, validate against `response_model`.
 
@@ -79,7 +84,11 @@ def run_with_retry(
 
     Never retries on `VLMUnavailableError` — that's a service state, not
     a bad response.
+
+    `max_tokens` (None = the backend's default) is forwarded to
+    `backend.call` only when set, so backends without the knob still work.
     """
+    extra = {} if max_tokens is None else {"max_tokens": max_tokens}
     hint = ""
     last_err: Exception | None = None
     for attempt in range(max_retries + 1):
@@ -87,6 +96,7 @@ def run_with_retry(
             frames=frames,
             system_prompt=system_prompt,
             user_prompt=user_prompt + hint,
+            **extra,
         )
         try:
             data = json.loads(_strip_code_fence(raw))

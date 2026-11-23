@@ -226,3 +226,83 @@ def test_select_backend_threads_asset_id():
     from ai_video_editor.vlm.client import select_backend
 
     assert select_backend("anthropic", asset_id="a9").asset_id == "a9"
+
+
+# ---------------------------------------------------------------------
+# Fix wave: max_tokens, budget errors, own cap keys, LIKE escaping
+# ---------------------------------------------------------------------
+
+
+def _create_spy(monkeypatch, seen: list):
+    from ai_video_editor.vlm.backends import anthropic_backend as ab
+
+    class FakeMessages:
+        def create(self, **kw):
+            seen.append(kw)
+            return SimpleNamespace(
+                content=[SimpleNamespace(type="text", text="{}")],
+                usage=_Usage(input_tokens=1, output_tokens=1),
+                model="claude-sonnet-4-6",
+            )
+
+    monkeypatch.setattr(
+        ab.anthropic, "Anthropic", lambda **_: SimpleNamespace(messages=FakeMessages())
+    )
+    monkeypatch.setattr(ab, "record_spend", lambda *a, **k: None)
+    return ab
+
+
+def test_vlm_backend_max_tokens_defaults_to_1024_and_is_overridable(monkeypatch):
+    seen: list = []
+    ab = _create_spy(monkeypatch, seen)
+    monkeypatch.setattr(ab, "check_budget", lambda *a, **k: None)
+    backend = ab.AnthropicBackend(api_key="k", asset_id="a9")
+    backend.call(frames=[], system_prompt="s", user_prompt="u")
+    backend.call(frames=[], system_prompt="s", user_prompt="u", max_tokens=4096)
+    assert [kw["max_tokens"] for kw in seen] == [1024, 4096]
+
+
+def test_vlm_backend_own_cap_is_passed_to_check_budget(monkeypatch):
+    seen: list = []
+    ab = _create_spy(monkeypatch, seen)
+    checks: list = []
+    monkeypatch.setattr(ab, "check_budget", lambda a, **k: checks.append((a, k)))
+    backend = ab.AnthropicBackend(
+        api_key="k", asset_id="plays:a9", cap_usd=1.5, cap_name="GAME_UNDERSTANDING_BUDGET_USD"
+    )
+    backend.call(frames=[], system_prompt="s", user_prompt="u")
+    assert checks == [
+        ("plays:a9", {"cap_usd": 1.5, "cap_name": "GAME_UNDERSTANDING_BUDGET_USD"})
+    ]
+
+
+def test_vlm_backend_cap_error_is_both_spend_cap_and_unavailable(monkeypatch):
+    from ai_video_editor.vlm.backends.base import VLMUnavailableError
+
+    seen: list = []
+    ab = _create_spy(monkeypatch, seen)
+
+    def capped(a, **_):
+        raise SpendCapError("over cap")
+
+    monkeypatch.setattr(ab, "check_budget", capped)
+    backend = ab.AnthropicBackend(api_key="k", asset_id="a9")
+    with pytest.raises(SpendCapError) as info:
+        backend.call(frames=[], system_prompt="s", user_prompt="u")
+    assert isinstance(info.value, VLMUnavailableError)
+    assert seen == []
+
+
+def test_spent_usd_prefix_underscore_is_literal(db):
+    from ai_video_editor.anthropic_surface import _LEDGER_DDL, spent_usd
+
+    conn = sqlite3.connect(db)
+    conn.execute(_LEDGER_DDL)
+    with conn:
+        for f, c in (("play_confirm", 0.1), ("playXconfirm", 5.0), ("play%", 7.0)):
+            conn.execute(
+                "INSERT INTO spend_ledger (asset_id, feature, cost_usd) VALUES ('a1', ?, ?)",
+                (f, c),
+            )
+    conn.close()
+    assert spent_usd("a1", feature_prefix="play_", db_path=db) == pytest.approx(0.1)

@@ -33,6 +33,12 @@ from .base import VLMBackend, VLMUnavailableError
 _log = logging.getLogger(__name__)
 
 
+class VLMBudgetError(VLMUnavailableError, SpendCapError):
+    """The ledger cap refused the call. A `VLMUnavailableError` so the VLM
+    loops degrade as before, and a `SpendCapError` so budgeted passes (the
+    game understanding pass) can stop on it explicitly."""
+
+
 class AnthropicBackend(VLMBackend):
     name = "anthropic"
 
@@ -44,10 +50,16 @@ class AnthropicBackend(VLMBackend):
         timeout_seconds: float | None = None,
         asset_id: str | None = None,
         feature: str = "vlm",
+        cap_usd: float | None = None,
+        cap_name: str | None = None,
     ) -> None:
         self.feature = feature  # ledger label; callers may reassign per phase
         # Paid calls count against this asset's dollar cap (None = no accounting).
         self.asset_id = asset_id
+        # A key with its own cap (e.g. `plays:<asset>`) sits outside the asset cap.
+        self._cap_kwargs: dict = {}
+        if cap_usd is not None:
+            self._cap_kwargs = {"cap_usd": cap_usd, "cap_name": cap_name}
         # Distinguish explicit empty-string (test-passes-no-key) from
         # unset (fall through to settings). An `or` fallback would silently
         # swap `""` for the real key.
@@ -92,6 +104,7 @@ class AnthropicBackend(VLMBackend):
         frames: list[Path],
         system_prompt: str,
         user_prompt: str,
+        max_tokens: int = 1024,
     ) -> str:
         """Send frames + prompts to Claude vision, return the raw JSON string.
 
@@ -120,15 +133,18 @@ class AnthropicBackend(VLMBackend):
         ]
         content.append({"type": "text", "text": user_prompt})
         try:
-            check_budget(self.asset_id)
-        except (SpendCapError, sqlite3.Error) as exc:
+            check_budget(self.asset_id, **self._cap_kwargs)
+        except SpendCapError as exc:
             # The VLM loops degrade on VLMUnavailableError only: a capped asset
-            # (or an unreadable ledger) skips VLM instead of crashing the cut.
+            # skips VLM instead of crashing the cut.
+            raise VLMBudgetError(str(exc)) from exc
+        except sqlite3.Error as exc:
+            # An unreadable ledger also skips VLM instead of crashing the cut.
             raise VLMUnavailableError(str(exc)) from exc
         try:
             resp = client.messages.create(
                 model=self.model,
-                max_tokens=1024,
+                max_tokens=max_tokens,
                 system=[
                     {
                         "type": "text",

@@ -109,13 +109,15 @@ def check_budget(
 
 
 def spent_usd(asset_id: str, *, feature_prefix: str, db_path: Path | None = None) -> float:
-    """Sum this asset's ledger cost over features starting with `feature_prefix`."""
+    """Sum this asset's ledger cost over features starting with `feature_prefix`
+    (matched literally: `_` and `%` in the prefix are not wildcards)."""
+    escaped = "".join("!" + c if c in "!%_" else c for c in feature_prefix)
     conn = _ledger_conn(db_path)
     try:
         (total,) = conn.execute(
             "SELECT COALESCE(SUM(cost_usd), 0) FROM spend_ledger "
-            "WHERE asset_id = ? AND feature LIKE ? || '%'",
-            (asset_id, feature_prefix),
+            "WHERE asset_id = ? AND feature LIKE ? || '%' ESCAPE '!'",
+            (asset_id, escaped),
         ).fetchone()
     finally:
         conn.close()

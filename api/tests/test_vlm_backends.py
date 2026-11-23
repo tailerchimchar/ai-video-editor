@@ -212,3 +212,26 @@ def test_run_with_retry_frames_and_prompts_forwarded() -> None:
     )
     assert cap.frames_seen == frames
     assert cap.system_seen == "THE-SYS"
+
+
+def test_run_with_retry_forwards_max_tokens_only_when_given() -> None:
+    from pydantic import BaseModel
+
+    class M(BaseModel):
+        ok: bool
+
+    seen: list[dict] = []
+
+    class B:
+        name = "b"
+
+        def call(self, **kw) -> str:
+            seen.append(kw)
+            return '{"ok": true}'
+
+    run_with_retry(B(), frames=[], system_prompt="s", user_prompt="u", response_model=M)
+    run_with_retry(
+        B(), frames=[], system_prompt="s", user_prompt="u", response_model=M, max_tokens=4096
+    )
+    assert "max_tokens" not in seen[0]
+    assert seen[1]["max_tokens"] == 4096
