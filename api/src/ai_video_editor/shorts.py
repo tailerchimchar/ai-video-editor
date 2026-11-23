@@ -176,6 +176,13 @@ class ShortClip:
     custom compiles; None means "unknown, use midpoint fallback."
     See vlm/clip_analyzer.py."""
 
+    play_id: str | None = None
+    """Game-understanding play this clip was cut from (montage v2)."""
+
+    locked_window: bool = False
+    """True when the window is authoritative (a play window): the analyzer and
+    every VLM window fix leave it alone."""
+
     @property
     def anchor_seconds(self) -> float:
         """Best proxy for the moment: midpoint of the clip window.
@@ -1328,6 +1335,9 @@ def _apply_window_fixes(
             continue
         idx = _resolve_clip_ref(fix.clip_ref, len(clip_list))
         c = clip_list[idx]
+        if c.locked_window:
+            _log.info("window fix %s skipped: clip %s has a locked play window", fix.fix, c.file)
+            continue
         # asset_path=None → use each clip's own source file. That's the
         # right thing for custom / cross-asset / outplayed compiles
         # where the plan spans multiple source files.
@@ -3093,6 +3103,56 @@ def _resolve_clip_path_for_custom(
     return p, duration
 
 
+def _play_spec_clip(path: Path, spec: dict) -> ShortClip:
+    """One authoritative play segment: window as given, never re-analyzed."""
+    offsets = list(spec.get("kill_offsets_s") or [])
+    return ShortClip(
+        file=path.name,
+        path=path,
+        event_type="play",
+        start_seconds=float(spec["start_seconds"]),
+        end_seconds=float(spec["end_seconds"]),
+        hype_score=1.0,
+        funny_score=0.0,
+        story_score=0.5,
+        reason=f"play {spec.get('play_id')}",
+        anchor_offset_seconds=(offsets[-1] if spec.get("is_last") and offsets else None),
+        play_id=spec.get("play_id"),
+        locked_window=True,
+    )
+
+
+def _overlay_kaching(out_path: Path, play_specs: list[dict], clips: tuple[ShortClip, ...]) -> None:
+    """Lay a kaching on every kill, at montage time after any beat-snap
+    remapping (R9). Failure keeps the un-sfx'd render."""
+    if not settings.story_kill_sfx:
+        return
+    times: list[float] = []
+    montage_t = 0.0
+    for clip, spec in zip(clips, play_specs, strict=True):
+        times.extend(montage_t + off for off in (spec.get("kill_offsets_s") or []))
+        montage_t += clip.end_seconds - clip.start_seconds
+    if not times:
+        return
+    try:
+        from .edits import apply_sfx
+        from .sfx_library import kaching_path
+
+        sfx_path = str(kaching_path())
+        tmp_path = out_path.with_name(f"{out_path.stem}_sfx{out_path.suffix}")
+        ok, err = apply_sfx(
+            str(out_path),
+            str(tmp_path),
+            sfx=[{"sfx_path": sfx_path, "at_seconds": t, "volume": 0.8} for t in times],
+        )
+        if not ok:
+            _log.warning("kaching overlay failed (keeping un-sfx'd render): %s", err)
+            return
+        tmp_path.replace(out_path)
+    except Exception as exc:
+        _log.warning("kaching overlay crashed (keeping un-sfx'd render): %s", exc)
+
+
 def _custom_output_folder(name: str) -> Path:
     """`WORKSPACE/shorts/_custom/<safe-name>/`"""
     from .highlights import _safe
@@ -3146,6 +3206,7 @@ def build_custom_montage(
     run_vlm_check: bool = True,
     max_seconds: float | None = None,
     burn_title: bool | None = None,
+    play_specs: list[dict] | None = None,
 ) -> dict:
     """Compile ONE montage from an EXPLICIT list of clip paths — no
     scanning, no ranking, no bucketing. Clips can come from anywhere:
@@ -3162,8 +3223,15 @@ def build_custom_montage(
     `game` selects the editing rubric under vlm/game_hints/<game>.md
     for the per-clip analyzer. Omit for the generic rubric.
 
+    `play_specs` (montage v2): each spec `{clip_path, start_seconds, end_seconds,
+    play_id, is_last, kill_offsets_s}` is one authoritative play segment. It
+    skips the analyzer and every window fix; only the `is_last` segment can
+    beat-snap (at its last kill); a kaching is laid on every kill afterwards.
+
     Output: `WORKSPACE/shorts/_custom/<name>/<name>.mp4` + `index.md`.
     """
+    if play_specs:
+        clip_paths = [spec["clip_path"] for spec in play_specs]
     if not clip_paths:
         return {
             "ok": False,
@@ -3173,13 +3241,16 @@ def build_custom_montage(
         }
 
     resolved: list[tuple[Path, float]] = []
+    kept_specs: list[dict] = []
     skipped: list[str] = []
-    for raw in clip_paths:
+    for i, raw in enumerate(clip_paths):
         entry = _resolve_clip_path_for_custom(raw)
         if entry is None:
             skipped.append(raw)
         else:
             resolved.append(entry)
+            if play_specs:
+                kept_specs.append(play_specs[i])
     if not resolved:
         return {
             "ok": False,
@@ -3224,7 +3295,12 @@ def build_custom_montage(
             anchor_offset_seconds=anchor_offset,
         )
 
-    tup = tuple(_wrap_single(p, duration) for p, duration in resolved)
+    if play_specs:
+        tup = tuple(
+            _play_spec_clip(p, spec) for (p, _), spec in zip(resolved, kept_specs, strict=True)
+        )
+    else:
+        tup = tuple(_wrap_single(p, duration) for p, duration in resolved)
     plan = ShortPlan(
         bucket=_CUSTOM_BUCKET,
         clips=tup,
@@ -3288,6 +3364,9 @@ def build_custom_montage(
             burn_title=resolved_burn_title,
             title_optional=resolved_title_optional,
         )
+
+    if play_specs and result.ok:
+        _overlay_kaching(result.out_path, kept_specs, result.plan.clips)
 
     _write_custom_index_md(
         out_folder,
