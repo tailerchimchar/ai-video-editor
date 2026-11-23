@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from _play_factory import make_play
 
-from ai_video_editor.montage.plan import fit_plays, jump_cut_segments
+from ai_video_editor.montage.plan import fit_plays, jump_cut_segments, segment_to_spec
 
 
 def test_segments_keep_engage_and_outcome():
@@ -87,3 +87,60 @@ def test_single_play_not_over_slot_check():
     assert plan.dropped == []
     assert plan.over_slot is True
     assert pytest.approx(plan.segments[0].duration_s) == 20.0
+
+
+def test_two_assets_sharing_p01_are_kept_apart():
+    a = make_play("p01", numbers_faced=5, engage=100.0, outcome=117.0, first_kill=105.0)
+    b = make_play("p01", numbers_faced=3, engage=300.0, outcome=317.0, first_kill=305.0)
+    plan = fit_plays(
+        [("gameA", a), ("gameB", b)],
+        slot_s=1000.0,
+        kill_times={("gameA", "p01"): [105.0], ("gameB", "p01"): [305.0]},
+        sources={("gameA", "p01"): "a.mp4", ("gameB", "p01"): "b.mp4"},
+        gap_s=3.0,
+    )
+    assert [(s.asset_id, s.source, s.start_s) for s in plan.segments] == [
+        ("gameB", "b.mp4", 297.0),
+        ("gameA", "a.mp4", 97.0),
+    ]
+    assert [s.kill_offsets_s for s in plan.segments] == [[8.0], [8.0]]
+
+
+def test_fit_plays_never_mutates_caller_plays():
+    plays = _plays(3)
+    before = [p.model_dump() for p in plays]
+    _fit(plays, slot=1000.0)
+    assert [p.model_dump() for p in plays] == before
+
+
+def test_fit_plays_skips_absent_and_offset_uncertain():
+    plays = [
+        *_plays(2),
+        make_play("absent", involved=False, numbers_faced=9),
+        make_play("unsure", flags=["offset_uncertain"], numbers_faced=9),
+    ]
+    plan = _fit(plays, slot=1000.0)
+    assert {s.play_id for s in plan.segments} == {"p1", "p2"}
+
+
+def test_dropped_labels_carry_the_asset():
+    pairs = [(f"g{i}", make_play("p01", numbers_faced=9 - i)) for i in range(4)]
+    plan = fit_plays(
+        pairs,
+        slot_s=45.0,
+        kill_times={},
+        sources={(f"g{i}", "p01"): f"{i}.mp4" for i in range(4)},
+        gap_s=3.0,
+    )
+    assert plan.dropped == ["g3:p01", "g2:p01"]
+
+
+def test_segment_to_spec_shifts_into_the_pool_cut():
+    seg = jump_cut_segments(make_play(engage=100.0, outcome=120.0), [105.0], source="pool.mp4",
+                            asset_id="gameA")[0]  # fmt: skip
+    spec = segment_to_spec(seg, pool_start_s=85.0)
+    assert (spec.start_seconds, spec.end_seconds) == (12.0, 35.0)
+    assert spec.kill_offsets_s == [8.0]
+    assert spec.play_id == "gameA:p1" and spec.is_last and spec.clip_path == "pool.mp4"
+    plain = segment_to_spec(jump_cut_segments(make_play(), [105.0], source="a.mp4")[0])
+    assert plain.play_id == "p1" and plain.start_seconds == 97.0

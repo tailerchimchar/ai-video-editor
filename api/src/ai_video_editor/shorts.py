@@ -1415,10 +1415,7 @@ def _render_and_watch_refine(
         for g in groups
     ]
     clip_durations = [
-        sum(
-            max(0.0, original_clips[i].end_seconds - original_clips[i].start_seconds)
-            for i in g
-        )
+        sum(max(0.0, original_clips[i].end_seconds - original_clips[i].start_seconds) for i in g)
         for g in groups
     ]
     state: dict = {"plan": plan}
