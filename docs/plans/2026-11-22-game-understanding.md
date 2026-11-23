@@ -131,8 +131,8 @@ The example fixture's `plays[*]` must validate against `Play` as defined above (
 - Consumes: `GameModel`, `Play` (Task 1).
 - Produces:
   - `play_vocab.PlayRule(type: str, phase: list[str], propose: str, start: dict[str, str], end: dict[str, str | float], vlm_confirms: list[str], facts_from_riot: list[str], examples: list[str] = [])`; `PlayVocabulary(rules: dict[str, PlayRule], hash: str)`; `load_vocab(game: str | None = "league") -> PlayVocabulary` (reads `settings.game_hints_dir / "league_plays.yaml"` when present, else the packaged file; `hash = sha1(file bytes)[:12]`).
-  - `digest.Digest` gains `version: int = 3`, `game: GameModel | None = None`; `DigestClip` gains `play_id: str | None = None`.
-  - `digest.attach_plays(digest: Digest, game: GameModel) -> Digest` (sets `digest.game`, fills `play_id` per the Review Focus 4 rule using clip `start_s`/`end_s` against each play's `recording_time` first/last kill, and sets `play.text = play_text(play)` for every play; never raises).
+  - `digest.Digest` gains `version: int = 3`, `game_model: GameModel | None = None` (the existing `game: str` stays the game name); `DigestClip` gains `play_id: str | None = None`.
+  - `digest.attach_plays(digest: Digest, game: GameModel) -> Digest` (sets `digest.game_model`, fills `play_id` per the Review Focus 4 rule using clip `start_s`/`end_s` against each play's `recording_time` first/last kill, and sets `play.text = play_text(play)` for every play; never raises).
   - `build_digest(..., game_model: GameModel | None = None)` calls `attach_plays` when given.
   - Settings: `game_understanding_budget_usd: float = 1.5`, `plays_drive_cuts: bool = False`, `play_confirm_fps: float = 1.0`, `play_sweep_fps: float = 0.25`, `play_sweep_enabled: bool = True`, `story_transition_s: float = 0.25`, `story_kill_sfx: bool = True`, `montage_jump_cut_gap_s: float = 3.0`; all pinned in `conftest._pinned_settings`.
   - `sfx_library.kaching_path(*, run=subprocess.run) -> Path`: `settings.workspace_dir / "sfx" / "kaching.wav"`; when absent, synthesises a 0.35 s two-tone chime with ffmpeg (`-f lavfi -i "aevalsrc=0.6*sin(2*PI*1760*t)*exp(-8*t)+0.4*sin(2*PI*2637*t)*exp(-6*t):s=48000:d=0.35"`, `-ac 2`) and writes it; the owner may replace the file; `kaching_cmd(out: Path) -> list[str]` is the pure argv builder. Test `test_sfx_library.py`: `test_kaching_cmd_argv`, `test_kaching_path_synthesised_when_absent` (fake `run` records argv and touches the file), `test_kaching_path_reuses_existing_file`.
@@ -143,7 +143,7 @@ The example fixture's `plays[*]` must validate against `Play` as defined above (
 - [ ] **Step 5: Failing digest tests** (`tests/test_grokbot_digest_v3.py`, reuse the panel_round fixture in `tests/fixtures/panel_round`):
 
 ```python
-def test_v2_digest_json_loads_with_game_absent(): # Digest.model_validate(old dict) -> game None, version 3
+def test_v2_digest_json_loads_with_game_model_absent(): # Digest.model_validate(old dict) -> game_model None, version 3, game still the name string
 def test_attach_plays_links_clip_by_midpoint_then_overlap(): # clip 1390-1415 over p15 (1395-1410) and p14 (1310-1312) -> play_id "p15"
 def test_play_text_is_templated_and_passes_leak_check(): # transcript containing "jhin kills miss fortune in mid lane" -> digest_leaks == []
 def test_digest_json_is_pretty(): # model_dump_json(indent=2) has one key per line: '"version": 3' on its own line

@@ -62,7 +62,7 @@ One entry per play type: `phase`, `propose` (the Riot rule in words and in a sma
 
 ### 4.5 Digest v3 (`grokbot/digest.py`)
 
-- `Digest.version = 3`; new top-level `game: {phases, plays, objectives, vocab_hash, budget_spent_usd}` beside `clips`. Each `DigestClip` gains `play_id` (nullable). Readers of v2 digests treat `game` as absent.
+- `Digest.version = 3`; new top-level `game_model: {phases, plays, objectives, vocab_hash, budget_spent_usd}` beside `clips` (`game` stays the game-name string the bots already read). Each `DigestClip` gains `play_id` (nullable). Readers of v2 digests treat `game` as absent.
 - Play text in the digest is **templated from the facts only** (R4): `"{numbers} {type} in {zone_relative}, owner {role}, {outcome} {enemy_deaths}-for-{ally_deaths}{objective_suffix}"`. Free VLM prose stays in `WORKSPACE/plays/<asset>.json`. A play can never trip `digest_leaks`.
 - The digest file is written pretty-printed: two-space indent, one key per line, keys in model order (D13). The same for `plays/<asset>.json` and `story.json`.
 - Opponents stay champion names only; owner mic text never enters a play.
@@ -120,7 +120,7 @@ One entry per play type: `phase`, `propose` (the Riot rule in words and in a sma
 | D9 | Cadence | Shorts 3-5/week; story only when a game earns it (owner + scorecard); montage every 4 weeks | Owner's choice | Interview | 2026-11-22 |
 | D10 | Budget | Up to $1.50 per game for the understanding pass inside the $2 cap; quality test (0.25 vs 1 fps) on the labelled game picks the default | "1-1.50 per game, test for quality" | Interview | 2026-11-22 |
 | D11 | Teaching | One hand-labelled game is the precision test; later corrections via mentor_record_correction feed the YAML examples; YAML per game read by VLM and planner | Measurable before trusting the labels | Interview | 2026-11-22 |
-| D12 | Migration | Digest v3: `game` section beside `clips`, version field, clips point at plays; bots and Jev keep reading clips; old digests valid | Nothing breaks | Interview | 2026-11-22 |
+| D12 | Migration | Digest v3: `game_model` section beside `clips` (key renamed from `game` at build time: `game` is already the name string), version field, clips point at plays; bots and Jev keep reading clips; old digests valid | Nothing breaks | Interview | 2026-11-22 |
 | D13 | File format | digest.json, plays and story.json pretty-printed (2-space indent, one key per line, fixed key order) | "make sure that data is prettified" | Interview | 2026-11-22 |
 | R1 | Numbers | Riot gives a lower bound; the VLM confirms the full count from health bars or the field stays null; impressive factor uses confirmed counts only | Assist lists miss body-blockers and late arrivals; frames are 1/min | Red Team | 2026-11-22 |
 | R2 | Chapters | Plays are chapters 1:1; no 45 s cap; never merged; fit by dropping whole plays by impressive rank | The old cap would cut the approach | Red Team | 2026-11-22 |
