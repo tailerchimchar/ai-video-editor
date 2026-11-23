@@ -338,7 +338,9 @@ def sweep_game(
                         user_prompt=f"This stretch is {end - start:.0f} seconds long.",
                         response_model=_SweepResult,
                     )
-                    findings += [f.model_copy(update={"t_s": f.t_s + start}) for f in result.findings]
+                    findings += [
+                        f.model_copy(update={"t_s": f.t_s + start}) for f in result.findings
+                    ]
                 except VLMUnavailableError as exc:
                     _log.info("play sweep stopped: %s", exc)
                     break

@@ -51,9 +51,7 @@ START = FIRST - 30
 
 
 def _apply(conf, play=None, game_end=None):
-    return pc.apply_confirmation(
-        play or _play(), conf, START, game_end_s=game_end, rule=RULE
-    )
+    return pc.apply_confirmation(play or _play(), conf, START, game_end_s=game_end, rule=RULE)
 
 
 def test_window_from_confirmation_in_recording_seconds():
