@@ -1,4 +1,6 @@
-# Play vocabulary (league). Loaded by the proposer, the confirmer prompt and the planner.
+# Play vocabulary (league). The proposer rules are code (league/plays.py `_classify`);
+# `propose` here only describes them. This file carries each type's start and end rules
+# (read by the confirmer prompt, apply_confirmation and the planner) and examples.
 # Override by placing a file of the same name in GAME_HINTS_DIR (or <workspace>/game_hints).
 
 teamfight:
@@ -29,7 +31,7 @@ objective_fight:
   examples: []
 
 closeout:
-  phase: [late]
+  phase: [mid, late]
   propose: ">= 3 enemy deaths within 60 s of game end"
   start: {story: approach, montage: engage, fallback: "first_kill - 8"}
   end: {rule: "outcome", max_after_last_kill_s: 20}

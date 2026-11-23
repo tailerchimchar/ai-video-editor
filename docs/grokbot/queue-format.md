@@ -38,9 +38,16 @@ Not a queue item: the digest is what the PC publishes to Drive `digests/` after 
 - `match_confidence`: `high`, `medium`, `low` or `none`. Treat `low` as a guess and never name an objective, a location or a game result from a `low` or `none` clip.
 - `voice`: one sentence about what the player says or reacts to, written by a model from the speech in the window (or the analyst's first story beat when there is no speech). Never a quote; paraphrase it again in your own words.
 - `energy`: `hype_rising`, `laughter`, `calm` or `unknown` (`panic` is reserved and not produced yet).
+- `play_id`: the id of the play (in `game_model.plays`) this clip shows, or null. A clip links to the play whose window (approach to outcome, or 8 s before the first kill to 3 s after the last when there is no window) holds the clip's middle, or whose kills all fall inside the clip; else to the play it overlaps most.
+
+Top level:
+
+- `version`: the digest format, currently 3. A digest without `version` is an older one: treat `game_model` and `play_id` as absent.
+- `game_model`: present only when the game was understood (null otherwise). `phases` gives the early, mid and late bounds in game seconds and what ended or started each. `plays` lists the game's fights: each has an `id` (`p01`, ...), a `type` (`trade`, `gank`, `dive`, `skirmish`, `teamfight`, `objective_fight`, `caught_out`, `closeout`), its `phase`, kill times (`game_time` in game seconds, `recording_time` in recording seconds), a `window` (`approach_s`, `engage_s`, `outcome_s` in recording seconds, its `source` and `flags`), `sides` and `numbers`, the owner's role, the `result`, and `text`, a templated one-line summary safe to reuse. `objectives` lists dragons, heralds, barons and buildings taken (game seconds, which side took them). `vocab_hash`, `budget_spent_usd` and `budget_exhausted` describe the pass itself. Only plays with `owner.involved` true show the owner; a play flagged `offset_uncertain` has unreliable kill timing.
 
 ```json digest
 {
+  "version": 3,
   "game": "league",
   "round": "2026-11-22_2140_jhin_8-3-11",
   "built_at": "2026-11-22T23:05:00Z",
