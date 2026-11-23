@@ -981,10 +981,11 @@ def apply_sfx(
         # adelay=Nms|Nms delays BOTH channels; volume per SFX after that.
         filter_parts.append(f"[{idx}:a]adelay={at_ms}|{at_ms},volume={vol:.3f}{label}")
         mix_ins.append(label)
-    # amix -- normalize=0 preserves per-SFX levels; dropout_transition=0
+    # amix -- duration=first keeps the source length (a late SFX never
+    # stretches the audio); normalize=0 preserves per-SFX levels; dropout_transition=0
     # keeps gain constant when a track ends.
     filter_parts.append(
-        f"{''.join(mix_ins)}amix=inputs={len(mix_ins)}:dropout_transition=0:normalize=0[aout]"
+        f"{''.join(mix_ins)}amix=inputs={len(mix_ins)}:duration=first:dropout_transition=0:normalize=0[aout]"
     )
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     cmd = [
