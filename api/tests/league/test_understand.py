@@ -139,3 +139,16 @@ def test_sweep_adds_trade_play_when_budget_remains(env, monkeypatch):
 
     model, _ = _run(env, sweep=True, backend=B())
     assert [p.type for p in model.plays].count("trade") == 1
+
+
+def test_budget_is_per_run_and_reports_delta(env):
+    _, db = env
+    conn = sqlite3.connect(db)
+    with conn:
+        conn.execute(
+            "INSERT INTO spend_ledger (asset_id, feature, cost_usd) VALUES ('a1', 'play_confirm', 1.4)"
+        )
+    conn.close()
+    model, args = _run(env, budget_usd=1.5)
+    assert args["backend"].n == len(model.plays) > 0
+    assert model.budget_spent_usd == 0.0

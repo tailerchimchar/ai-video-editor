@@ -14,6 +14,7 @@ import json
 import logging
 import subprocess
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
 
@@ -102,6 +103,9 @@ def apply_confirmation(
     engage = rec(conf.engage_s) if conf else None
     if engage is None:
         engage = approach
+    elif not approach <= engage <= last:
+        engage = approach
+        flags.append("engage_unconfirmed")
 
     cap = last + float(rule.end.get("max_after_last_kill_s", 20.0))
     if game_end_s is not None:
@@ -320,12 +324,13 @@ def sweep_game(
     fps: float,
     backend: VLMBackend,
     vocab: PlayVocabulary,
+    should_continue: Callable[[], bool] = lambda: True,
 ) -> list[PlaySweepFinding]:
     """Kill-less trade / caught-out findings, times in recording seconds."""
     span = SWEEP_PANELS_PER_CALL * FRAMES_PER_PANEL / fps
     findings: list[PlaySweepFinding] = []
     start = 0.0
-    while start < duration_s:
+    while start < duration_s and should_continue():
         end = min(start + span, duration_s)
         with tempfile.TemporaryDirectory(prefix="play_sweep_") as tmp:
             frames = sample_window(video_path, Path(tmp), start_s=start, end_s=end, fps=fps)

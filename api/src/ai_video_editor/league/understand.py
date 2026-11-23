@@ -83,8 +83,13 @@ def understand_game(
         if frozen is not None:
             return frozen
 
-    def spent() -> float:
+    def ledger() -> float:
         return spent_usd(asset_id, feature_prefix=SPEND_PREFIX, db_path=ledger_db)
+
+    baseline = ledger()  # budgets are per run, not cumulative across reruns
+
+    def spent() -> float:
+        return ledger() - baseline
 
     phases = phases_for(timeline)
     proposed = propose_plays(timeline, phases=phases) if phases is not None else []
@@ -120,7 +125,12 @@ def understand_game(
         _label(be, "play_sweep")
         duration = get_duration_seconds(video_path)
         findings = sweep_game(
-            video_path, duration_s=duration, fps=sweep_fps, backend=be, vocab=vocab
+            video_path,
+            duration_s=duration,
+            fps=sweep_fps,
+            backend=be,
+            vocab=vocab,
+            should_continue=lambda: spent() < budget_usd,
         )
         extra = findings_to_plays(
             findings, start_idx=len(done) + 1, offset_s=timeline.offset_s, phases=phases

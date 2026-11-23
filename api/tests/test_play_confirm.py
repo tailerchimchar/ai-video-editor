@@ -213,3 +213,32 @@ def test_sweep_findings_become_trade_plays_above_confidence(fake_frames):
     assert p.id == "p05" and p.sides.numbers == "?v?" and p.window.source == "vlm"
     assert (p.window.approach_s, p.window.outcome_s) == (90.0, 108.0)
     assert p.recording_time.first_kill_s == 100.0 and p.game_time.first_kill_s == 120.0
+
+
+def test_late_engage_falls_back_to_approach_and_keeps_window_ordered():
+    p = _apply(_conf(approach_s=22.0, engage_s=60.0, outcome_s=65.0))
+    w = p.window
+    assert w.engage_s == w.approach_s == START + 22
+    assert "engage_unconfirmed" in w.flags
+    assert w.approach_s <= w.engage_s < w.outcome_s
+
+
+def test_early_engage_falls_back_to_approach():
+    p = _apply(_conf(approach_s=22.0, engage_s=10.0))
+    assert p.window.engage_s == START + 22
+    assert "engage_unconfirmed" in p.window.flags
+
+
+def test_sweep_stops_when_should_continue_flips(fake_frames):
+    reply = json.dumps({"findings": []})
+    backend = FakeBackend(reply)
+    ticks = iter([True, False])
+    pc.sweep_game(
+        "v.mp4",
+        duration_s=2000.0,
+        fps=0.25,
+        backend=backend,
+        vocab=VOCAB,
+        should_continue=lambda: next(ticks),
+    )
+    assert len(backend.calls) == 1
