@@ -2,6 +2,7 @@
 
 import json
 import sqlite3
+from types import SimpleNamespace
 
 import pytest
 
@@ -207,7 +208,7 @@ def test_owner_plays_confirmed_first_absent_only_while_budget_remains(env, monke
     assert by_id["p01"].window.source == "vlm"
     assert by_id["p02"].window.source == "fallback"
     assert model.budget_spent_usd == pytest.approx(1.0)
-    assert model.budget_exhausted is False
+    assert model.budget_exhausted is True  # p02 was left unconfirmed for lack of budget
 
 
 def test_spend_cap_stops_pass_and_marks_budget_exhausted(env):
@@ -231,7 +232,7 @@ def test_default_backend_is_sonnet_on_its_own_key_and_cap(monkeypatch):
     from ai_video_editor.vlm.backends.anthropic_backend import AnthropicBackend
 
     monkeypatch.setattr(settings, "vlm_backend", "anthropic")
-    be = understand_mod.default_backend("a1", budget_usd=1.5)
+    be = understand_mod.default_backend("a1", cap_usd=1.5)
     assert isinstance(be, AnthropicBackend)
     assert be.model == "claude-sonnet-4-6"
     assert be.asset_id == "plays:a1"
@@ -244,7 +245,7 @@ def test_default_backend_falls_back_to_select_backend(monkeypatch):
     from ai_video_editor.vlm.backends.ollama_backend import OllamaBackend
 
     monkeypatch.setattr(settings, "vlm_backend", "ollama")
-    assert isinstance(understand_mod.default_backend("a1", budget_usd=1.5), OllamaBackend)
+    assert isinstance(understand_mod.default_backend("a1", cap_usd=1.5), OllamaBackend)
 
 
 def test_objectives_filled_from_elites_and_buildings_skipping_souls():
@@ -281,3 +282,79 @@ def test_objectives_filled_from_elites_and_buildings_skipping_souls():
 def test_understand_game_writes_objectives(env):
     model, _ = _run(env)
     assert model.objectives == objectives_from(_timeline())
+
+
+def _three_kill_timeline():
+    parts = [
+        {"puuid": f"P{i + 1}", "participantId": i + 1, "championName": c,
+         "teamId": 100 if i < 5 else 200}
+        for i, c in enumerate(CHAMPS)
+    ]  # fmt: skip
+    match = {
+        "metadata": {"matchId": "NA1_B"},
+        "info": {"gameStartTimestamp": 1000, "gameEndTimestamp": 2_001_000, "participants": parts},
+    }
+
+    def ck(t, victim):
+        return {"type": "CHAMPION_KILL", "timestamp": t * 1000, "killerId": 1,
+                "victimId": victim, "assistingParticipantIds": [],
+                "position": {"x": 8000, "y": 7800}}  # fmt: skip
+
+    events = [ck(600, 6), ck(1000, 7), ck(1400, 8)]
+    tl = {"info": {"frames": [{"timestamp": 0, "events": events}]}}
+    return parse_timeline(match, tl, owner_puuid="P1", offset_s=20.0, confidence="high")
+
+
+def test_cap_is_per_run_baseline_plus_budget(env, monkeypatch):
+    """$1.40 already on the key, $1.50 budget: the backend cap is $2.90, so a
+    rerun gets its own full budget. At $0.75 a call two confirmations land and
+    the third play finds the run budget spent."""
+    from ai_video_editor.anthropic_surface import SpendCapError, check_budget, record_spend
+    from ai_video_editor.config import settings
+    from ai_video_editor.vlm.backends.anthropic_backend import VLMBudgetError
+
+    tmp, db = env
+    conn = sqlite3.connect(db)
+    with conn:
+        conn.execute(
+            "INSERT INTO spend_ledger (asset_id, feature, cost_usd) "
+            "VALUES ('plays:a1', 'play_confirm', 1.4)"
+        )
+    conn.close()
+    monkeypatch.setattr(settings, "vlm_backend", "anthropic")
+    monkeypatch.setattr(settings, "model_prices_usd_per_mtok", {"claude-sonnet-4-6": (0.75, 0.0)})
+    built = []
+
+    class FakeAnthropic(Backend):
+        """Mirrors AnthropicBackend's ledger handling against the test db."""
+
+        def __init__(self, *, asset_id, model, feature, cap_usd, cap_name):
+            super().__init__()
+            self.asset_id, self.cap_usd, self.cap_name = asset_id, cap_usd, cap_name
+            built.append(self)
+
+        def call(self, **kw):
+            try:
+                check_budget(self.asset_id, db_path=db, cap_usd=self.cap_usd,
+                             cap_name=self.cap_name)  # fmt: skip
+            except SpendCapError as exc:
+                raise VLMBudgetError(str(exc)) from exc
+            record_spend(self.asset_id, "play_confirm", "claude-sonnet-4-6",
+                         SimpleNamespace(input_tokens=1_000_000, output_tokens=0),
+                         db_path=db)  # fmt: skip
+            return super().call(**kw)
+
+    monkeypatch.setattr(understand_mod, "AnthropicBackend", FakeAnthropic)
+    model = understand_game(
+        "a1", "v.mp4", _three_kill_timeline(), vocab=VOCAB, budget_usd=1.5, fps=0.5,
+        sweep_fps=0.25, sweep=False, out_path=tmp / "plays" / "a1.json", ledger_db=db,
+    )  # fmt: skip
+    (be,) = built
+    assert be.asset_id == "plays:a1" and be.cap_usd == pytest.approx(2.9)
+    assert be.n == 2
+    assert [p.window.source for p in model.plays] == ["vlm", "vlm", "fallback"]
+    assert model.budget_spent_usd == pytest.approx(1.5)
+    assert model.budget_exhausted is True
+    # the backend's own cap refuses the next call outright
+    with pytest.raises(SpendCapError):
+        be.call(frames=[], system_prompt="s", user_prompt="u")

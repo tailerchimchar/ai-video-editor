@@ -3,9 +3,11 @@ result is frozen to `WORKSPACE/plays/<asset_id>.json` (spec 4.3).
 
 The frozen file is reused until the caller forces a rerun; a changed play
 vocabulary (`vocab_hash`) only logs a stale-hash warning (R6). Spend goes
-to its own ledger key `plays:<asset_id>` capped by
-`game_understanding_budget_usd`, outside the per-asset cap (D15); a
-`SpendCapError` stops the pass and sets `budget_exhausted`. Owner-involved
+to its own ledger key `plays:<asset_id>`, outside the per-asset cap (D15).
+Each run gets its own full `game_understanding_budget_usd`: the backend's
+cap is the key's spend at the start of the run plus the budget. Running out
+(the run's spend reaching the budget, or a `SpendCapError`) stops the pass
+and sets `budget_exhausted`. Owner-involved
 plays are confirmed first, in rank order (D14). Free-text VLM descriptions
 go to a separate prose sidecar and never reach the digest.
 """
@@ -52,15 +54,16 @@ def spend_key(asset_id: str) -> str:
     return f"plays:{asset_id}"
 
 
-def default_backend(asset_id: str, *, budget_usd: float) -> VLMBackend:
-    """Sonnet (`play_confirm_model`) on the `plays:<asset>` key and cap when
-    the configured backend is anthropic; else the configured backend."""
+def default_backend(asset_id: str, *, cap_usd: float) -> VLMBackend:
+    """Sonnet (`play_confirm_model`) on the `plays:<asset>` key, refusing calls
+    once the key's ledger total reaches `cap_usd`, when the configured backend
+    is anthropic; else the configured backend."""
     if settings.vlm_backend.lower() == "anthropic":
         return AnthropicBackend(
             asset_id=spend_key(asset_id),
             model=settings.play_confirm_model,
             feature="play_confirm",
-            cap_usd=budget_usd,
+            cap_usd=cap_usd,
             cap_name=BUDGET_CAP_NAME,
         )
     return select_backend(asset_id=asset_id)
@@ -117,8 +120,8 @@ def understand_game(
     def ledger() -> float:
         return spent_usd(spend_key(asset_id), feature_prefix=SPEND_PREFIX, db_path=ledger_db)
 
-    # The loop stops once this run has spent `budget_usd`; the backend's own
-    # cap on the `plays:<asset>` key is the cumulative hard stop (D15).
+    # Per run: the loop stops once this run has spent `budget_usd`, and the
+    # backend refuses calls once the key's total reaches baseline + budget.
     baseline = ledger()
 
     def spent() -> float:
@@ -133,7 +136,7 @@ def understand_game(
 
     def get_backend() -> VLMBackend:
         if state["backend"] is None:
-            state["backend"] = default_backend(asset_id, budget_usd=budget_usd)
+            state["backend"] = default_backend(asset_id, cap_usd=baseline + budget_usd)
         return state["backend"]
 
     prose: dict[str, str] = {}
@@ -145,7 +148,10 @@ def understand_game(
     for play in queue:
         conf: PlayConfirmation | None = None
         start = 0.0
-        if not exhausted and spent() < budget_usd:
+        if not exhausted and spent() >= budget_usd:
+            _log.warning("understanding pass stopped: run budget $%.2f spent", budget_usd)
+            exhausted = True
+        if not exhausted:
             be = get_backend()
             _label(be, "play_confirm")
             try:
