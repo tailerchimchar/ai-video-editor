@@ -23,9 +23,10 @@ from pydantic import ValidationError
 from ..config import settings
 from ..league.lane import lane_summary_path, parse_lane_frames
 from ..league.lane_models import LaneMinute, LaneSummary
+from ..league.play_models import GameModel
 from ..league.riot_timeline import RiotTimeline, _from_cache, cache_dir_for, load_cached
 from ..refs import normalize_clip_ref
-from .planner import Beat, plan_story
+from .planner import Beat, plan_story, plan_story_from_plays
 from .render import StoryRenderError, render_story
 
 _log = logging.getLogger(__name__)
@@ -187,6 +188,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--asset", required=True, help="asset id")
     ap.add_argument("--round", required=True, help="panel round folder name or path")
     ap.add_argument("--no-cards", action="store_true", help="skip chapter title cards")
+    ap.add_argument("--plays", action="store_true", help="chapters from the frozen plays file")
     ap.add_argument("--out", help="output dir (default WORKSPACE/story/<round>/)")
     ap.add_argument("--source", help="source video path (default: the asset's path)")
     ap.add_argument("--review", action="store_true", help="0.25 fps critic, $5 story budget")
@@ -201,17 +203,33 @@ def main(argv: list[str] | None = None) -> int:
     if not src:
         print(f"asset {args.asset} not found; pass --source", file=sys.stderr)
         return 2
-    plan = plan_story(
-        timeline,
-        load_beats(rnd),
-        load_lane(args.asset),
-        mic_stream=load_mic_stream(args.asset),
-        card_s=0.0 if args.no_cards else settings.story_card_seconds,
-        asset_id=args.asset,
-    )
+    if args.plays:
+        plays_file = Path(settings.workspace_dir) / "plays" / f"{args.asset}.json"
+        if not plays_file.is_file():
+            print(f"no plays file for asset {args.asset}: {plays_file}", file=sys.stderr)
+            return 2
+        game = GameModel.model_validate_json(plays_file.read_text(encoding="utf-8"))
+        plan = plan_story_from_plays(
+            game,
+            timeline,
+            mic_stream=load_mic_stream(args.asset),
+            max_s=360.0,
+            asset_id=args.asset,
+        )
+    else:
+        plan = plan_story(
+            timeline,
+            load_beats(rnd),
+            load_lane(args.asset),
+            mic_stream=load_mic_stream(args.asset),
+            card_s=0.0 if args.no_cards else settings.story_card_seconds,
+            asset_id=args.asset,
+        )
     out_dir = Path(args.out) if args.out else Path(settings.workspace_dir) / "story" / rnd.name
     try:
-        story = render_story(src, plan, out_dir, cards=not args.no_cards, review=args.review)
+        story = render_story(
+            src, plan, out_dir, cards=not args.no_cards and not args.plays, review=args.review
+        )
     except StoryRenderError as e:
         print(f"story render failed: {e}", file=sys.stderr)
         return 1
