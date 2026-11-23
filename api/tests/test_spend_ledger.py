@@ -271,9 +271,7 @@ def test_vlm_backend_own_cap_is_passed_to_check_budget(monkeypatch):
         api_key="k", asset_id="plays:a9", cap_usd=1.5, cap_name="GAME_UNDERSTANDING_BUDGET_USD"
     )
     backend.call(frames=[], system_prompt="s", user_prompt="u")
-    assert checks == [
-        ("plays:a9", {"cap_usd": 1.5, "cap_name": "GAME_UNDERSTANDING_BUDGET_USD"})
-    ]
+    assert checks == [("plays:a9", {"cap_usd": 1.5, "cap_name": "GAME_UNDERSTANDING_BUDGET_USD"})]
 
 
 def test_vlm_backend_cap_error_is_both_spend_cap_and_unavailable(monkeypatch):

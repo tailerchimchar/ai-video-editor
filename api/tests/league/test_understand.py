@@ -38,6 +38,17 @@ def _timeline():
     return parse_timeline(match, tl, owner_puuid="P1", offset_s=20.0, confidence="high")
 
 
+def _label(second: int) -> dict:
+    state = "none" if second < 20 else "approach" if second < 26 else (
+        "fighting" if second < 40 else "aftermath")  # fmt: skip
+    return {"second": second, "state": state, "kill_banner": second == 30,
+            "allies_visible": 1, "enemies_visible": 1}  # fmt: skip
+
+
+# Window starts 30 s before the first kill: approach 20, engage 26, banner 30, outcome 40.
+LABELS = [_label(s) for s in range(0, 52, 2)]
+
+
 class Backend:
     name = "fake"
     feature = "vlm"
@@ -45,10 +56,9 @@ class Backend:
     def __init__(self):
         self.n = 0
 
-    def call(self, *, frames, system_prompt, user_prompt):
+    def call(self, *, frames, system_prompt, user_prompt, max_tokens=1024):
         self.n += 1
-        return json.dumps({"approach_s": 20, "engage_s": 25, "outcome_s": 40,
-                           "first_banner_s": 30, "description": "prose only"})  # fmt: skip
+        return json.dumps({"frames": LABELS, "description": "prose only"})
 
 
 @pytest.fixture
@@ -56,6 +66,7 @@ def env(tmp_path, monkeypatch):
     a = tmp_path / "m.jpg"
     a.write_bytes(b"x")
     monkeypatch.setattr(pc, "sample_window", lambda *a_, **k: [a])
+    monkeypatch.setattr(pc, "sample_panels", lambda *a_, **k: [a])
     monkeypatch.setattr(pc, "get_duration_seconds", lambda _p: 2100.0)
     monkeypatch.setattr("ai_video_editor.league.understand.get_duration_seconds", lambda _p: 2100.0)
     db = tmp_path / "ledger.db"
@@ -130,7 +141,7 @@ def test_sweep_adds_trade_play_when_budget_remains(env, monkeypatch):
     monkeypatch.setattr("ai_video_editor.league.understand.get_duration_seconds", lambda _p: 400.0)
 
     class B(Backend):
-        def call(self, *, frames, system_prompt, user_prompt):
+        def call(self, *, frames, system_prompt, user_prompt, max_tokens=1024):
             if "NO kill banner" in system_prompt:
                 return json.dumps({"findings": [
                     {"t_s": 300.0, "type": "trade", "description": "poke", "confidence": 0.9}

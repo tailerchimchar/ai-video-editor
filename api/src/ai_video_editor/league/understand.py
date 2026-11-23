@@ -114,7 +114,7 @@ def understand_game(
             be = get_backend()
             _label(be, "play_confirm")
             conf, start = confirm_play(video_path, play, vocab=vocab, backend=be, fps=fps)
-        rule = vocab.rules.get(play.type) or vocab.rules["skirmish"]
+        rule = vocab.rule_for(play.type)
         confirmed = apply_confirmation(play, conf, start, game_end_s=timeline.game_end_s, rule=rule)
         if conf is not None and conf.description:
             prose[confirmed.id] = conf.description
