@@ -334,10 +334,11 @@ def _play_chapter(p: Play, timeline: RiotTimeline) -> Chapter | None:
     if end <= start:
         _log.warning("story: dropping play %s, empty window after clamp", p.id)
         return None
+    shift = w.offset_correction_s or 0.0  # banner-measured Riot offset error (D17)
     kills = [
-        e.t_rec_s
+        e.t_rec_s + shift
         for e in timeline.events
-        if e.kind == "kill" and e.t_rec_s is not None and start <= e.t_rec_s <= end
+        if e.kind == "kill" and e.t_rec_s is not None and start <= e.t_rec_s + shift <= end
     ]
     return Chapter(
         title=p.text,

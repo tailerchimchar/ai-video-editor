@@ -63,11 +63,13 @@ def jump_cut_segments(
 ) -> list[Segment]:
     """Cut one play into segments: engage - lead to outcome, dead time between
     kills longer than `gap_s` removed (each segment ends 1 s after a kill, the
-    next starts 1.5 s before the next kill). Only the final segment is_last."""
+    next starts 1.5 s before the next kill). Only the final segment is_last.
+    Kill times move by the play's banner `offset_correction_s` when set (D17)."""
     rt = play.recording_time
     engage = play.window.engage_s if play.window.engage_s is not None else rt.first_kill_s - 8.0
     outcome = play.window.outcome_s if play.window.outcome_s is not None else rt.last_kill_s + 3.0
-    kills = sorted(kill_times_s)
+    shift = play.window.offset_correction_s or 0.0
+    kills = sorted(k + shift for k in kill_times_s)
 
     # Group kills into runs split wherever the gap is too long.
     groups: list[list[float]] = []

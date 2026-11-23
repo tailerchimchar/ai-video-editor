@@ -93,3 +93,9 @@ def test_titles_are_play_text_and_cards_false():
     plan = _plan(_game(make_play("a", text="Jhin 1v3")))
     assert plan.chapters[0].title == "Jhin 1v3"
     assert plan.cards is False
+
+
+def test_banner_offset_correction_shifts_kill_times():
+    g = _game(make_play("a", approach=100, outcome=120, offset_correction=1.5))
+    plan = _plan(g, _tl([105.0, 119.0]))
+    assert plan.chapters[0].kill_times_s == [106.5]  # 119 + 1.5 falls past the outcome

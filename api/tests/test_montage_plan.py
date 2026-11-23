@@ -15,6 +15,13 @@ def test_segments_keep_engage_and_outcome():
     assert segs[0].kill_offsets_s == [8.0, 10.0]
 
 
+def test_banner_offset_correction_shifts_kills():
+    p = make_play(engage=100.0, outcome=120.0, offset_correction=2.0)
+    segs = jump_cut_segments(p, [105.0, 107.0], source="a.mp4")
+    assert segs[0].start_s == 97.0
+    assert segs[0].kill_offsets_s == [10.0, 12.0]
+
+
 def test_gap_over_3s_is_cut_with_1s_after_and_1_5s_before():
     p = make_play(engage=100.0, outcome=130.0)
     segs = jump_cut_segments(p, [105.0, 115.0], source="a.mp4", gap_s=3.0)
