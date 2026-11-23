@@ -458,7 +458,8 @@ def digest_leaks(
     if transcript_path is not None:
         rows = json.loads(transcript_path.read_text(encoding="utf-8"))
         lines += [line.get("text", "") for line in rows]
-    return _leaks(lines, _strings(digest.model_dump()), min_len)
+    # R4: game_model holds templated facts only (never free text), so it is not scanned.
+    return _leaks(lines, _strings(digest.model_dump(exclude={"game_model"})), min_len)
 
 
 def annotate_with_jev(digest: Digest, ask_many: Callable[..., list[Answer]] = ask_many) -> Digest:

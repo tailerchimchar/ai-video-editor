@@ -28,7 +28,7 @@ def _play(pid: str, first: float, last: float) -> Play:
         id=pid,
         type="skirmish",
         recording_time=PlayTimes(first_kill_s=first, last_kill_s=last),
-        zone_relative="enemy mid lane",
+        zone_relative="mid_lane",
         sides=PlaySides(numbers="3v3"),
         result=PlayResult(enemy_deaths=2, ally_deaths=1, outcome="won"),
     )
@@ -72,13 +72,16 @@ def test_attach_plays_overlap_fallback():
 def test_play_text_is_templated_and_passes_leak_check(fixture_round):
     gm = GameModel(plays=[_play("p1", 100, 110)])
     d = dg.build_digest(fixture_round, game="lol", game_model=gm)
-    assert d.game_model.plays[0].text == "3v3 skirmish in enemy mid lane, owner absent, won 2-for-1"
+    assert d.game_model.plays[0].text == "3v3 skirmish in mid_lane, owner absent, won 2-for-1"
     transcript = fixture_round / "transcript.json"
     transcript.write_text(
         json.dumps([{"start": 0, "end": 3, "text": "jhin kills miss fortune in mid lane"}]),
         encoding="utf-8",
     )
     assert dg.digest_leaks(d, transcript) == []
+    # the exemption is scoped to game_model: the same phrase in a clip voice still leaks
+    d.clips[0].voice = "he fights in mid lane"
+    assert dg.digest_leaks(d, transcript) != []
 
 
 def test_digest_json_is_pretty():
