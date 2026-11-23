@@ -82,6 +82,7 @@ def test_locked_clips_skip_analyzer_and_fixes(stubbed, monkeypatch):
     monkeypatch.setattr(settings, "shorts_max_review_iter", 2)
     res = shorts.build_custom_montage(clip_paths=[], name="m", play_specs=_specs())
     assert res["ok"]
+    assert stubbed.review_calls > 0  # the reviewer ran and asked for a fix
     assert stubbed.trims == []  # no re-cut
     first = stubbed.plans[-1].clips[0]
     assert (first.start_seconds, first.end_seconds) == (10.0, 20.0)
@@ -120,8 +121,14 @@ def test_sfx_failure_keeps_render(stubbed, monkeypatch):
 def test_router_accepts_play_specs(client, monkeypatch):
     seen = {}
 
-    async def fake_job(job_id, body):
+    async def _done():
+        return None
+
+    def fake_job(job_id, body):
+        # Record at call time: the router only schedules the coroutine, which
+        # may not have run by the time the response comes back.
         seen["body"] = body
+        return _done()
 
     monkeypatch.setattr("ai_video_editor.routers.shorts._run_custom_job", fake_job)
     r = client.post("/api/v1/shorts/custom_montage", json={"play_specs": _specs()})
