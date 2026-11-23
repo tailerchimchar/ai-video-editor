@@ -99,6 +99,25 @@ def test_attach_plays_uses_the_confirmed_window():
     assert [c.play_id for c in d.clips] == ["p07", "p07", None]
 
 
+def test_clip_holding_a_later_plays_kills_links_to_that_play():
+    from ai_video_editor.league.play_models import PlayWindow
+
+    a = _play("A", 100, 110)
+    a.window = PlayWindow(approach_s=85, engage_s=90, outcome_s=128, source="vlm")
+    b = _play("B", 125, 125)
+    b.window = PlayWindow(approach_s=115, engage_s=120, outcome_s=130, source="vlm")
+    d = dg.attach_plays(_digest((118, 130)), GameModel(plays=[a, b]))
+    assert d.clips[0].play_id == "B"
+
+
+def test_several_contained_plays_prefer_longest_kill_span_then_later():
+    longer, short1, short2 = _play("L", 100, 110), _play("S1", 115, 117), _play("S2", 120, 122)
+    d = dg.attach_plays(_digest((95, 125)), GameModel(plays=[longer, short1, short2]))
+    assert d.clips[0].play_id == "L"
+    d = dg.attach_plays(_digest((112, 125)), GameModel(plays=[longer, short1, short2]))
+    assert d.clips[0].play_id == "S2"
+
+
 def test_play_text_is_templated_and_passes_leak_check(fixture_round):
     gm = GameModel(plays=[_play("p1", 100, 110)])
     d = dg.build_digest(fixture_round, game="lol", game_model=gm)

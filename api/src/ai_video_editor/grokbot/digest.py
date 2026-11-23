@@ -400,14 +400,22 @@ def _play_span(play: Play) -> tuple[float, float]:
 
 
 def _play_id_for(clip: DigestClip, game: GameModel) -> str | None:
-    """The play whose span holds the clip midpoint, or whose kill span the
-    clip contains; else the play overlapping the clip most; else None."""
+    """Link a clip to a play, in order: (a) a play whose whole kill span lies
+    inside the clip (several: the longest kill span, ties to the later play);
+    (b) a play whose span holds the clip midpoint; (c) the play overlapping
+    the clip most; else None."""
+    contained = [
+        (p.recording_time.last_kill_s - p.recording_time.first_kill_s, i, p)
+        for i, p in enumerate(game.plays)
+        if clip.start_s <= p.recording_time.first_kill_s
+        and p.recording_time.last_kill_s <= clip.end_s
+    ]
+    if contained:
+        return max(contained, key=lambda t: (t[0], t[1]))[2].id
     mid = (clip.start_s + clip.end_s) / 2
     for play in game.plays:
         start, end = _play_span(play)
-        t = play.recording_time
-        kills_inside = clip.start_s <= t.first_kill_s and t.last_kill_s <= clip.end_s
-        if start <= mid <= end or kills_inside:
+        if start <= mid <= end:
             return play.id
     best_id, best = None, 0.0
     for play in game.plays:
