@@ -103,6 +103,19 @@ def test_steal_flag_when_other_team_takes_objective():
     assert plays[0].flags.steal is True
 
 
+def test_help_from_team_true_for_owner_plus_one_ally():
+    _, plays = _build([_ck(1000, 1, 6, [2], MID)])
+    assert plays[0].flags.help_from_team is True
+
+
+def test_help_from_team_false_for_owner_alone_and_for_single_absent_ally():
+    _, alone = _build([_ck(1000, 1, 6, [], MID)])
+    assert alone[0].flags.help_from_team is False
+    _, absent = _build([_ck(1000, 2, 6, [], MID)])
+    assert absent[0].owner.role == "absent"
+    assert absent[0].flags.help_from_team is False
+
+
 def test_closeout_near_game_end():
     t = GAME_END_S - 40
     evs = [_ck(t, 1, 6, [2], MID), _ck(t + 3, 2, 7, [1], MID), _ck(t + 6, 1, 8, [], MID)]

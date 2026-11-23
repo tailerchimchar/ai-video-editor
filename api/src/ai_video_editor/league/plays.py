@@ -179,7 +179,6 @@ def _build_play(idx: int, fight: Fight, timeline: RiotTimeline, phases: Phases) 
     steal = majority is not None and any(
         e.detail.get("killerTeamId") not in (None, majority) for e in elites
     )
-    helpers = roster.pids("ally") - {owner_pid}
     outcome = "won" if ed > ad else "lost" if ed < ad else "even"
 
     play = Play(
@@ -208,7 +207,9 @@ def _build_play(idx: int, fight: Fight, timeline: RiotTimeline, phases: Phases) 
             building_after=[_building_label(e) for e in buildings],
         ),
         flags=PlayFlags(
-            help_from_team=len(helpers) >= 2, soul_point=True if soul else None, steal=steal
+            help_from_team=len(roster.pids("ally")) >= 2,
+            soul_point=True if soul else None,
+            steal=steal,
         ),
         impressive=Impressive(),
     )
