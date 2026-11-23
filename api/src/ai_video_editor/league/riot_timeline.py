@@ -68,6 +68,8 @@ class RiotTimeline:
     # How offset_s was obtained (audio | ocr | manual_override | sync_only);
     # None when unknown. `sync_only` = uncalibrated, trust as medium at best.
     offset_source: str | None = None
+    owner_pid: int | None = None
+    owner_team_id: int | None = None
 
 
 @dataclass
@@ -110,6 +112,13 @@ def _owner_pid(match: dict, owner_puuid: str) -> int:
     raise ValueError("owner puuid not found among match participants")
 
 
+def _position(ev: dict) -> dict | None:
+    pos = ev.get("position")
+    if isinstance(pos, dict) and pos.get("x") is not None and pos.get("y") is not None:
+        return {"x": pos["x"], "y": pos["y"]}
+    return None
+
+
 def _champion_kill(ev: dict, owner: int, parts: dict[int, dict]) -> tuple[EventKind, list, dict]:
     killer = int(ev.get("killerId") or 0)
     victim = int(ev.get("victimId") or 0)
@@ -133,6 +142,10 @@ def _champion_kill(ev: dict, owner: int, parts: dict[int, dict]) -> tuple[EventK
         "killer": label(killer),
         "victim": label(victim),
         "assists": [label(a) for a in assists],
+        "killer_pid": killer,
+        "victim_pid": victim,
+        "assist_pids": assists,
+        "position": _position(ev),
     }
     return kind, actors, detail
 
@@ -174,6 +187,7 @@ def parse_timeline(
                 killer = actor_label(int(ev.get("killerId") or 0), parts, owner)
                 detail = {k: ev.get(k) for k in ("buildingType", "towerType", "laneType")}
                 detail["teamId"] = ev.get("teamId")
+                detail["position"] = _position(ev)
                 add("building", ts, [killer], detail)
             elif etype == "ELITE_MONSTER_KILL":
                 killer = actor_label(int(ev.get("killerId") or 0), parts, owner)
@@ -181,7 +195,15 @@ def parse_timeline(
                 if ev.get("monsterSubType"):
                     detail["monsterSubType"] = ev["monsterSubType"]
                 detail["killerTeamId"] = ev.get("killerTeamId")
+                detail["position"] = _position(ev)
                 add("elite", ts, [killer], detail)
+            elif etype == "DRAGON_SOUL_GIVEN":
+                detail = {
+                    "monsterType": "DRAGON_SOUL",
+                    "name": ev.get("name"),
+                    "teamId": ev.get("teamId"),
+                }
+                add("elite", ts, [], detail)
             elif etype == "GAME_END":
                 add("game_end", ts, [], _end_detail(ev.get("winningTeam"), owner, parts))
 
@@ -199,6 +221,8 @@ def parse_timeline(
         game_end_s=end_ev.t_rec_s if end_ev else None,
         events=events,
         owner_frames=owner_frames,
+        owner_pid=owner,
+        owner_team_id=parts.get(owner, {}).get("teamId"),
     )
 
 

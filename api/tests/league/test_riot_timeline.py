@@ -367,3 +367,40 @@ def test_game_end_falls_back_to_game_duration():
         match, _timeline(with_game_end=False), owner_puuid="ME", offset_s=0.0, confidence="high"
     )
     assert tl.game_end_s == 1500.0
+
+
+# ----- pids, positions, soul (game understanding, Task 1) -----
+
+
+def test_kill_detail_carries_pids_and_position():
+    ev = _ck(600_000, 1, 6, [2])
+    ev["position"] = {"x": 8536, "y": 7611}
+    timeline = {"info": {"frames": [{"timestamp": 0, "events": [ev]}]}}
+    tl = parse_timeline(_match(), timeline, owner_puuid="ME", offset_s=0.0, confidence="high")
+    d = next(e for e in tl.events if e.kind == "kill").detail
+    assert d["killer_pid"] == 1
+    assert d["victim_pid"] == 6
+    assert d["assist_pids"] == [2]
+    assert d["position"] == {"x": 8536, "y": 7611}
+
+
+def test_kill_without_position_has_none():
+    tl = _parse()
+    kill = next(e for e in tl.events if e.kind == "kill")
+    assert kill.detail["position"] is None
+
+
+def test_timeline_knows_owner_pid_and_team():
+    tl = _parse()
+    assert tl.owner_pid == 1
+    assert tl.owner_team_id == 100
+
+
+def test_soul_event_parsed():
+    soul = {"type": "DRAGON_SOUL_GIVEN", "timestamp": 900_000, "name": "Hextech", "teamId": 100}
+    timeline = {"info": {"frames": [{"timestamp": 0, "events": [soul]}]}}
+    tl = parse_timeline(_match(), timeline, owner_puuid="ME", offset_s=0.0, confidence="high")
+    ev = next(e for e in tl.events if e.kind == "elite")
+    assert ev.detail["monsterType"] == "DRAGON_SOUL"
+    assert ev.detail["name"] == "Hextech"
+    assert ev.detail["teamId"] == 100
