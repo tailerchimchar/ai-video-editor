@@ -25,6 +25,7 @@ from pydantic import BaseModel, model_validator
 
 from ..highlights import FIGHT_POST_S, FIGHT_PRE_ALLY_DEATH_S, FIGHT_PRE_S
 from ..league.lane_models import LaneSummary
+from ..league.play_models import GameModel, Play
 from ..league.riot_timeline import Fight, RiotTimeline, TimelineEvent, fights
 
 _log = logging.getLogger(__name__)
@@ -71,6 +72,8 @@ class Chapter(BaseModel):
     end_s: float
     kind: str
     beats: list[str] = []
+    play_id: str | None = None
+    kill_times_s: list[float] = []
 
 
 class StoryPlan(BaseModel):
@@ -81,6 +84,8 @@ class StoryPlan(BaseModel):
     audio: Literal["mic_over_game", "mixed"]
     # True when lane + close chapters alone exceed max_s (nothing left to drop).
     over_budget: bool = False
+    # Title cards before each chapter; plays-based plans use dip transitions instead.
+    cards: bool = True
 
 
 def _label(text: str) -> str:
@@ -305,4 +310,80 @@ def plan_story(
         mic_stream=mic_stream,
         audio="mic_over_game" if mic_stream is not None else "mixed",
         over_budget=total > max_s,
+    )
+
+
+PLAY_PRE_FALLBACK_S = 8.0
+PLAY_POST_FALLBACK_S = 3.0
+_UNRANKED = 10**6
+
+
+def _play_kind(p: Play) -> str:
+    if p.phase == "early":
+        return "lane"
+    return "close" if p.type == "closeout" else "fight"
+
+
+def _play_chapter(p: Play, timeline: RiotTimeline) -> Chapter | None:
+    w = p.window
+    start = w.approach_s if w.approach_s is not None else p.recording_time.first_kill_s - 8.0
+    end = w.outcome_s if w.outcome_s is not None else p.recording_time.last_kill_s + 3.0
+    start = max(0.0, start)
+    if timeline.game_end_s is not None:
+        end = min(end, timeline.game_end_s + GAME_END_TAIL_S)
+    if end <= start:
+        _log.warning("story: dropping play %s, empty window after clamp", p.id)
+        return None
+    kills = [
+        e.t_rec_s
+        for e in timeline.events
+        if e.kind == "kill" and e.t_rec_s is not None and start <= e.t_rec_s <= end
+    ]
+    return Chapter(
+        title=p.text,
+        start_s=round(start, 2),
+        end_s=round(end, 2),
+        kind=_play_kind(p),
+        play_id=p.id,
+        kill_times_s=kills,
+    )
+
+
+def plan_story_from_plays(
+    game: GameModel,
+    timeline: RiotTimeline,
+    *,
+    mic_stream: int | None,
+    max_s: float = 360.0,
+    asset_id: str = "",
+) -> StoryPlan:
+    """One chapter per owner-involved play (no merging, no cap, no trimming),
+    in recording order. Over `max_s` whole chapters are dropped, least
+    impressive first (never a close chapter); `over_budget` when the close
+    alone exceeds it. Plans carry `cards=False` (dip transitions instead)."""
+    if mic_stream == 0:
+        _log.warning("story: mic stream 0 is the game audio; using mixed audio")
+        mic_stream = None
+    rank_of = {p.id: p.impressive.rank for p in game.plays}
+    chapters = [
+        c for p in game.plays if p.owner.involved and (c := _play_chapter(p, timeline)) is not None
+    ]
+    chapters.sort(key=lambda c: c.start_s)
+    kept = list(chapters)
+    while _total(kept) > max_s:
+        droppable = [c for c in kept if c.kind != "close"]
+        if not droppable:
+            _log.warning("story: close alone runs %.0fs > max %.0fs", _total(kept), max_s)
+            break
+        worst = max(droppable, key=lambda c: rank_of.get(c.play_id) or _UNRANKED)
+        kept.remove(worst)
+    total = _total(kept)
+    return StoryPlan(
+        asset_id=asset_id,
+        chapters=kept,
+        total_s=total,
+        mic_stream=mic_stream,
+        audio="mic_over_game" if mic_stream is not None else "mixed",
+        over_budget=total > max_s,
+        cards=False,
     )

@@ -18,12 +18,16 @@ def make_play(
     flags: list[str] | None = None,
     numbers_faced: int | None = 4,
     kills: int = 2,
+    phase: str = "mid",
+    involved: bool = True,
+    rank: int | None = None,
+    text: str = "",
 ) -> Play:
     return Play.model_validate(
         {
             "id": pid,
             "type": type,
-            "phase": "mid",
+            "phase": phase,
             "game_time": {"first_kill_s": first_kill, "last_kill_s": last_kill},
             "recording_time": {"first_kill_s": first_kill, "last_kill_s": last_kill},
             "window": {
@@ -35,7 +39,7 @@ def make_play(
             "zone": "mid",
             "sides": {"allies": ["A"], "enemies": ["B"], "numbers": "5v4"},
             "owner": {
-                "involved": True,
+                "involved": involved,
                 "role": "initiator_kill",
                 "kills": kills,
                 "assists": 0,
@@ -43,6 +47,7 @@ def make_play(
             },
             "result": {"enemy_deaths": enemy_deaths, "ally_deaths": 1, "outcome": "won"},
             "flags": {"help_from_team": True},
-            "impressive": {"numbers_faced": numbers_faced},
+            "impressive": {"numbers_faced": numbers_faced, "rank": rank},
+            "text": text,
         }
     )

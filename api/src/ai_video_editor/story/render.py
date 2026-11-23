@@ -17,10 +17,12 @@ from pathlib import Path
 from ..anthropic_surface import SpendCapError, check_budget
 from ..compile import _concat
 from ..config import settings
+from ..edits import apply_sfx
 from ..intros.config import IntroConfig, _TextLogoConfig
 from ..intros.render import render_intro
+from ..sfx_library import kaching_path
 from ..vlm.watch_montage import WatchResult, save_critique, watch_montage
-from .planner import StoryPlan
+from .planner import Chapter, StoryPlan
 
 _log = logging.getLogger(__name__)
 
@@ -62,16 +64,22 @@ def _encode_opts() -> list[str]:
     ]
 
 
-def audio_filter(mic_stream: int | None) -> str:
+def _fade_pair(dur: float, fade_s: float) -> str:
+    out_at = round(dur - fade_s, 3)
+    return f"afade=t=in:st=0:d={fade_s},afade=t=out:st={out_at}:d={fade_s}"
+
+
+def audio_filter(mic_stream: int | None, *, dur: float = 0.0, fade_s: float = 0.0) -> str:
     """Mic (loudness-normalised when `story_mic_loudnorm`) on top of ducked game
     audio; game audio alone when no mic is known."""
+    fade = f",{_fade_pair(dur, fade_s)}" if fade_s > 0 else ""
     if mic_stream is None:
-        return "[0:a:0]anull[a]"
+        return f"[0:a:0]{_fade_pair(dur, fade_s) if fade_s > 0 else 'anull'}[a]"
     game = settings.story_game_audio_volume
     mic = MIC_LOUDNORM if settings.story_mic_loudnorm else "volume=1.0"
     return (
         f"[0:a:{mic_stream}]{mic}[m];[0:a:0]volume={game}[g];"
-        "[m][g]amix=inputs=2:duration=first:normalize=0[a]"
+        f"[m][g]amix=inputs=2:duration=first:normalize=0{fade}[a]"
     )
 
 
@@ -83,18 +91,26 @@ def chapter_cmd(
     *,
     mic_stream: int | None,
     has_audio: bool = True,
+    fade_s: float = 0.0,
 ) -> list[str]:
     """One chapter's argv. `has_audio=False` (the source has no audio stream)
     renders the video with a silent track instead of failing on `0:a:0`."""
+    dur = end - start
+    video = _VIDEO_CHAIN
+    if fade_s > 0:
+        video = video.replace(
+            "[v]",
+            f",fade=t=in:st=0:d={fade_s},fade=t=out:st={round(dur - fade_s, 3)}:d={fade_s}[v]",
+        )
     head = [settings.ffmpeg_path, "-y", "-ss", str(start), "-to", str(end), "-i", asset_path]
     if not has_audio:
         silent = ["-f", "lavfi", "-t", str(round(end - start, 3)), "-i", SILENT_AUDIO]
-        maps = ["-filter_complex", _VIDEO_CHAIN, "-map", "[v]", "-map", "1:a"]
+        maps = ["-filter_complex", video, "-map", "[v]", "-map", "1:a"]
         return [*head, *silent, *maps, *_encode_opts(), out_path]
     return [
         *head,
         "-filter_complex",
-        f"{_VIDEO_CHAIN};{audio_filter(mic_stream)}",
+        f"{video};{audio_filter(mic_stream, dur=dur, fade_s=fade_s)}",
         "-map",
         "[v]",
         "-map",
@@ -169,6 +185,22 @@ def _render_card(title: str, out_path: Path) -> None:
         raise StoryRenderError(f"title card {title!r} normalise failed: {err}")
 
 
+def _with_kill_sfx(part: Path, ch: Chapter, i: int) -> Path:
+    """Kaching on each owner kill; the sfx file replaces the part when it works."""
+    if not (settings.story_kill_sfx and ch.kill_times_s):
+        return part
+    out = part.with_name(f"chapter_{i:02d}_sfx.mp4")
+    sfx = [
+        {"sfx_path": str(kaching_path()), "at_seconds": round(t - ch.start_s, 3), "volume": 0.8}
+        for t in ch.kill_times_s
+    ]
+    ok, err = apply_sfx(part.as_posix(), out.as_posix(), sfx=sfx)
+    if not ok:
+        _log.warning("story: kill sfx failed for chapter %d: %s", i, err)
+        return part
+    return out
+
+
 def _review(video: Path, plan: StoryPlan, out_dir: Path) -> None:
     """Vision critique at 0.25 fps under the story budget (outside the asset cap)."""
     key = f"story:{plan.asset_id}"
@@ -204,20 +236,28 @@ def render_story(
             "story: mic stream %d not in source (%d audio); game audio only", mic, audio_count
         )
         mic = None
+    use_cards = cards and plan.cards
+    fade_s = 0.0 if plan.cards else settings.story_transition_s
     parts: list[str] = []
     for i, ch in enumerate(plan.chapters, start=1):
-        if cards:
+        if use_cards:
             card = parts_dir / f"card_{i:02d}.mp4"
             _render_card(ch.title, card)
             parts.append(card.as_posix())
         part = parts_dir / f"chapter_{i:02d}.mp4"
         cmd = chapter_cmd(
-            asset_path, ch.start_s, ch.end_s, part.as_posix(), mic_stream=mic, has_audio=has_audio
+            asset_path,
+            ch.start_s,
+            ch.end_s,
+            part.as_posix(),
+            mic_stream=mic,
+            has_audio=has_audio,
+            fade_s=fade_s,
         )
         ok, err = _run_ffmpeg(cmd, chapter_timeout(ch.start_s, ch.end_s))
         if not ok:
             raise StoryRenderError(f"chapter {i} ({ch.title!r}) failed: {err}")
-        parts.append(part.as_posix())
+        parts.append(_with_kill_sfx(part, ch, i).as_posix())
 
     story = out_dir / "story.mp4"
     ok, err = _concat(parts, story.as_posix())
