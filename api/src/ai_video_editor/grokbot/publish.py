@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING
 
 from .. import notify
 from ..config import settings
+from ..league.play_models import GameModel
 from ..notify import Event
 from ..taxonomy import Game
 from ..tools.secret_scan import scan_paths
@@ -169,7 +170,8 @@ def _digest_inputs(
     paraphrase: bool = True,
     load_timeline: Callable[[str, str], RiotTimeline | None] | None = None,
 ) -> dict:
-    """The digest's optional inputs for one asset, bound to the local DB."""
+    """The digest's optional inputs for one asset, bound to the local DB,
+    plus the frozen game model (`plays/<asset>.json`) when it exists."""
     from ..league.lane import lane_summary_path, load_lane_summary
 
     db = settings.database_path
@@ -183,7 +185,20 @@ def _digest_inputs(
         "energy": lambda s, e: energy_label(
             None, window_sentiment(db, asset_id, s, e), transcript_slice(db, asset_id, s, e)
         ),
+        "game_model": load_game_model(asset_id),
     }
+
+
+def load_game_model(asset_id: str) -> GameModel | None:
+    """The frozen understanding pass for `asset_id`, None when absent or unreadable."""
+    path = Path(settings.workspace_dir) / "plays" / f"{asset_id}.json"
+    if not path.is_file():
+        return None
+    try:
+        return GameModel.model_validate_json(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        logger.warning("publish: unreadable plays file %s: %s", path, e)
+        return None
 
 
 def _refuse_secrets(local: Path) -> None:
@@ -212,6 +227,7 @@ def publish_round(
     energy: Callable[[float, float], str] | None = None,
     owner_rows: list[dict] | None = None,
     lane: LaneSummary | None = None,
+    game_model: GameModel | None = None,
 ) -> dict:
     """Build, gate, upload and announce one round. Returns the event payload.
 
@@ -221,6 +237,8 @@ def publish_round(
     compilation's current plan version when `compilation_id` is given.
     `timeline`, `transcript_slices`, `paraphrase`, `energy`, `owner_rows` and
     `lane` go to `build_digest` as given (None = that enrichment is off).
+    `game_model` (the frozen understanding pass) makes it a v3 digest with
+    a `game_model` section and per-clip `play_id`.
     """
     round_dir = Path(round_dir)
     digest: Digest = build_digest(
@@ -232,6 +250,7 @@ def publish_round(
         energy=energy,
         owner_rows=owner_rows,
         lane=lane,
+        game_model=game_model,
     )
     digest.compilation_id = compilation_id
     digest.asset_id = asset_id

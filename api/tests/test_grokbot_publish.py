@@ -569,3 +569,43 @@ def test_digest_leaks_checks_extra_lines_without_transcript():
     d.commentary = [dg.CommentaryItem(ref="1m00s", start_s=60, end_s=61, voice="zorblax kited it")]
     assert dg.digest_leaks(d, None, extra_lines=["something else entirely"]) == []
     assert dg.digest_leaks(d, None, extra_lines=["well zorblax kited it"]) == ["zorblax kited it"]
+
+
+# ----- digest v3 at publish (#8) -----
+
+
+def _frozen_game_model(tmp_path):
+    from ai_video_editor.league.play_models import GameModel
+
+    src = Path(__file__).parent / "fixtures" / "plays" / "jhin_example.json"
+    gm = GameModel.model_validate(json.loads(src.read_text(encoding="utf-8"))["game"])
+    assert gm.plays
+    path = tmp_path / "plays" / "a1.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(gm.model_dump_json(indent=2), encoding="utf-8")
+    return gm
+
+
+def test_round_with_frozen_plays_file_publishes_game_model(round_dir, tmp_path, monkeypatch):
+    gm = _frozen_game_model(tmp_path)
+    inputs = pub._digest_inputs("a1", "league", paraphrase=False, load_timeline=lambda a, g: None)
+    assert inputs["game_model"] is not None
+    assert [p.id for p in inputs["game_model"].plays] == [p.id for p in gm.plays]
+    run(round_dir, game_model=inputs["game_model"], asset_id="a1")
+    saved = dg.Digest.model_validate_json((round_dir / "digest.json").read_text())
+    assert saved.version == 3 and saved.game_model is not None
+    assert [p.id for p in saved.game_model.plays] == [p.id for p in gm.plays]
+
+
+def test_no_plays_file_means_no_game_model(round_dir):
+    inputs = pub._digest_inputs("a1", "league", paraphrase=False, load_timeline=lambda a, g: None)
+    assert inputs["game_model"] is None
+    run(round_dir)
+    saved = dg.Digest.model_validate_json((round_dir / "digest.json").read_text())
+    assert saved.game_model is None
+
+
+def test_cli_with_asset_id_passes_frozen_game_model(round_dir, tmp_path, monkeypatch):
+    _frozen_game_model(tmp_path)
+    seen = _cli(round_dir, monkeypatch, "--asset-id", "a1", "--no-paraphrase")
+    assert seen["game_model"] is not None and seen["game_model"].plays
