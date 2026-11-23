@@ -132,3 +132,26 @@ def test_absent_plays_are_not_scored():
     assert r.excluded_absent == ["p9"]
     assert r.unmatched_detected == []
     assert r.per_type["skirmish"]["n_detected"] == 1.0
+
+
+def test_cli_prints_drive_cuts_line_only_when_gate_passes(tmp_path, monkeypatch, capsys):
+    from ai_video_editor.config import settings
+
+    monkeypatch.setattr(settings, "workspace_dir", tmp_path)
+    labels = tmp_path / "labels.json"
+    labels.write_text(
+        '{"asset_id": "a", "rows": [{"type": "skirmish", "approach_s": 60, '
+        '"engage_s": 65, "outcome_s": 74}]}',
+        encoding="utf-8",
+    )
+    cache = tmp_path / "plays" / "a.json"
+    cache.parent.mkdir(parents=True)
+    cache.write_text(GameModel(plays=[_play("p0", 60, 74)]).model_dump_json(), encoding="utf-8")
+    assert plays_eval_cli.main(["--asset", "a", "--labels", str(labels)]) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert "gate (>=0.8): PASS" in out and "PLAYS_DRIVE_CUTS=true" in out
+
+    cache.write_text(GameModel(plays=[_play("p0", 200, 230)]).model_dump_json(), encoding="utf-8")
+    plays_eval_cli.main(["--asset", "a", "--labels", str(labels)])
+    out = capsys.readouterr().out.splitlines()
+    assert "gate (>=0.8): FAIL" in out and "PLAYS_DRIVE_CUTS=true" not in out

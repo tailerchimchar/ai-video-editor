@@ -240,3 +240,63 @@ def test_main_prints_over_budget(ws, monkeypatch, capsys):
     assert "over_budget" in capsys.readouterr().out
     _main_with_plan(ws, monkeypatch, cards=False, over_budget=False)
     assert "over_budget" not in capsys.readouterr().out
+
+
+# --- plays drive cuts (#10) ---
+
+
+def _plays_main(ws, monkeypatch, argv, *, drive: bool, frozen: bool):
+    from ai_video_editor.league.play_models import GameModel
+
+    _write(ws / "panel" / "r1" / "gaming-expert.json", [])
+    if frozen:
+        path = ws / "plays" / "a1.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(GameModel().model_dump_json(), encoding="utf-8")
+    monkeypatch.setattr(settings, "plays_drive_cuts", drive)
+    monkeypatch.setattr(cli, "load_timeline", lambda a: _one_kill_timeline())
+    monkeypatch.setattr(cli, "load_lane", lambda a: None)
+    seen = {"path": None}
+    monkeypatch.setattr(
+        cli, "plan_story", lambda *a, **k: seen.update(path="beats") or _empty_plan()
+    )
+    monkeypatch.setattr(
+        cli, "plan_story_from_plays", lambda *a, **k: seen.update(path="plays") or _empty_plan()
+    )
+
+    def fake_render(src, plan, out_dir, *, cards, review):
+        seen["cards"] = cards
+        return Path("story.mp4")
+
+    monkeypatch.setattr(cli, "render_story", fake_render)
+    seen["rc"] = cli.main(["--asset", "a1", "--round", "r1", "--source", "C:/x.mp4", *argv])
+    return seen
+
+
+def _empty_plan():
+    from ai_video_editor.story.planner import StoryPlan
+
+    return StoryPlan(asset_id="a1", chapters=[], total_s=0.0, mic_stream=None, audio="mixed")
+
+
+def test_plays_drive_cuts_uses_frozen_file_by_default(ws, monkeypatch):
+    seen = _plays_main(ws, monkeypatch, [], drive=True, frozen=True)
+    assert seen["rc"] == 0 and seen["path"] == "plays" and seen["cards"] is False
+
+
+def test_plays_drive_cuts_without_file_uses_beats(ws, monkeypatch):
+    assert _plays_main(ws, monkeypatch, [], drive=True, frozen=False)["path"] == "beats"
+
+
+def test_setting_off_uses_beats_unless_plays_flag(ws, monkeypatch):
+    assert _plays_main(ws, monkeypatch, [], drive=False, frozen=True)["path"] == "beats"
+    assert _plays_main(ws, monkeypatch, ["--plays"], drive=False, frozen=True)["path"] == "plays"
+
+
+def test_no_plays_flag_forces_beats(ws, monkeypatch):
+    assert _plays_main(ws, monkeypatch, ["--no-plays"], drive=True, frozen=True)["path"] == "beats"
+
+
+def test_plays_flag_without_file_fails(ws, monkeypatch):
+    seen = _plays_main(ws, monkeypatch, ["--plays"], drive=False, frozen=False)
+    assert seen["rc"] == 2 and seen["path"] is None
