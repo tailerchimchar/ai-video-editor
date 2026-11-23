@@ -27,7 +27,7 @@ from ..bucketing import _FORMAT_QUESTION, _INCLUDE_QUESTION
 from ..commentary import commentary_candidates
 from ..decisions import Answer, ask_many
 from ..league.lane_models import LaneSummary
-from ..league.play_models import GameModel
+from ..league.play_models import GameModel, Play
 from ..league.plays import play_text
 from ..refs import normalize_clip_ref
 
@@ -142,10 +142,14 @@ def _match_confidence(timeline: RiotTimeline | None) -> str:
 
 
 def _events(timeline: RiotTimeline, start_s: float, end_s: float) -> list[DigestEvent]:
+    """Timeline events inside the clip window; dragon souls are skipped (a soul
+    is granted by the dragon kill already listed, not an event of its own)."""
     return [
         DigestEvent(type=e.kind, t_in_clip=round(e.t_rec_s - start_s, 3), actors=list(e.actors))
         for e in timeline.events
-        if e.t_rec_s is not None and start_s <= e.t_rec_s <= end_s
+        if e.t_rec_s is not None
+        and start_s <= e.t_rec_s <= end_s
+        and e.detail.get("monsterType") != "DRAGON_SOUL"
     ]
 
 
@@ -370,8 +374,7 @@ def build_digest(
 
 def attach_plays(digest: Digest, game: GameModel) -> Digest:
     """Set `digest.game_model`, template every play's text (R4) and link each
-    clip to a play: the play whose recording kill span holds the clip midpoint,
-    else the one overlapping the clip most, else None. Never raises."""
+    clip to a play (`_play_id_for`). Never raises."""
     try:
         for play in game.plays:
             play.text = play_text(play)
@@ -383,16 +386,41 @@ def attach_plays(digest: Digest, game: GameModel) -> Digest:
     return digest
 
 
+PLAY_LEAD_S = 8.0
+PLAY_TAIL_S = 3.0
+
+
+def _play_span(play: Play) -> tuple[float, float]:
+    """Recording-second span of a play: its confirmed window when it has
+    one, else first_kill - 8 .. last_kill + 3."""
+    w, t = play.window, play.recording_time
+    start = w.approach_s if w.approach_s is not None else t.first_kill_s - PLAY_LEAD_S
+    end = w.outcome_s if w.outcome_s is not None else t.last_kill_s + PLAY_TAIL_S
+    return start, end
+
+
 def _play_id_for(clip: DigestClip, game: GameModel) -> str | None:
+    """Link a clip to a play, in order: (a) a play whose whole kill span lies
+    inside the clip (several: the longest kill span, ties to the later play);
+    (b) a play whose span holds the clip midpoint; (c) the play overlapping
+    the clip most; else None."""
+    contained = [
+        (p.recording_time.last_kill_s - p.recording_time.first_kill_s, i, p)
+        for i, p in enumerate(game.plays)
+        if clip.start_s <= p.recording_time.first_kill_s
+        and p.recording_time.last_kill_s <= clip.end_s
+    ]
+    if contained:
+        return max(contained, key=lambda t: (t[0], t[1]))[2].id
     mid = (clip.start_s + clip.end_s) / 2
     for play in game.plays:
-        t = play.recording_time
-        if t.first_kill_s <= mid <= t.last_kill_s:
+        start, end = _play_span(play)
+        if start <= mid <= end:
             return play.id
     best_id, best = None, 0.0
     for play in game.plays:
-        t = play.recording_time
-        overlap = min(clip.end_s, t.last_kill_s) - max(clip.start_s, t.first_kill_s)
+        start, end = _play_span(play)
+        overlap = min(clip.end_s, end) - max(clip.start_s, start)
         if overlap > best:
             best_id, best = play.id, overlap
     return best_id

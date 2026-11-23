@@ -31,6 +31,14 @@ class PlayVocabulary(BaseModel):
     rules: dict[str, PlayRule]
     hash: str
 
+    def rule_for(self, play_type: str) -> PlayRule:
+        """The rule for `play_type`, else the `skirmish` rule. Raises
+        ValueError when neither exists (a broken workspace override)."""
+        rule = self.rules.get(play_type) or self.rules.get("skirmish")
+        if rule is None:
+            raise ValueError("vocabulary has no skirmish rule")
+        return rule
+
 
 def _vocab_path(game: str) -> Path:
     name = f"{game.lower().strip()}_plays.yaml"

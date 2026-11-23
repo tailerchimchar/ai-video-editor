@@ -22,6 +22,7 @@ def make_play(
     involved: bool = True,
     rank: int | None = None,
     text: str = "",
+    offset_correction: float | None = None,
 ) -> Play:
     return Play.model_validate(
         {
@@ -35,6 +36,7 @@ def make_play(
                 "engage_s": engage,
                 "outcome_s": outcome,
                 "flags": flags or [],
+                "offset_correction_s": offset_correction,
             },
             "zone": "mid",
             "sides": {"allies": ["A"], "enemies": ["B"], "numbers": "5v4"},

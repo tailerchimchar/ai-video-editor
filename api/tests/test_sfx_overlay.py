@@ -156,3 +156,17 @@ def test_apply_sfx_pure_filter_shape(tmp_path) -> None:
     )
     assert ok is True, err
     assert out.is_file()
+
+
+def test_apply_sfx_mix_keeps_the_source_length(tmp_path, monkeypatch) -> None:
+    """A kaching near the end must not stretch the audio past the video."""
+    from ai_video_editor import edits
+
+    sfx = tmp_path / "boom.wav"
+    sfx.write_bytes(b"x")
+    seen = []
+    monkeypatch.setattr(edits, "_run_ffmpeg", lambda cmd: seen.append(cmd) or (True, None))
+    assert apply_sfx("src.mp4", str(tmp_path / "out.mp4"),
+                     sfx=[{"sfx_path": str(sfx), "at_seconds": 9.5}]) == (True, None)  # fmt: skip
+    graph = seen[0][seen[0].index("-filter_complex") + 1]
+    assert "amix=inputs=2:duration=first:dropout_transition=0:normalize=0[aout]" in graph

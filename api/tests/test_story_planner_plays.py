@@ -93,3 +93,30 @@ def test_titles_are_play_text_and_cards_false():
     plan = _plan(_game(make_play("a", text="Jhin 1v3")))
     assert plan.chapters[0].title == "Jhin 1v3"
     assert plan.cards is False
+
+
+def test_banner_offset_correction_shifts_kill_times():
+    g = _game(make_play("a", approach=100, outcome=120, offset_correction=1.5))
+    plan = _plan(g, _tl([105.0, 119.0]))
+    assert plan.chapters[0].kill_times_s == [106.5]  # 119 + 1.5 falls past the outcome
+
+
+def test_chapters_15s_apart_never_repeat_footage():
+    g = _game(
+        make_play("a", approach=100, outcome=130, first_kill=110, last_kill=125),
+        make_play("b", approach=115, outcome=150, first_kill=125, last_kill=145),
+    )
+    plan = _plan(g, _tl([110.0, 125.0, 145.0]))
+    a, b = plan.chapters
+    assert (a.start_s, a.end_s) == (100, 130)
+    assert (b.start_s, b.end_s) == (130, 150)
+    assert b.kill_times_s == [145.0]
+    assert plan.total_s == 50
+
+
+def test_chapter_inside_previous_one_is_dropped():
+    g = _game(
+        make_play("a", approach=100, outcome=160),
+        make_play("b", approach=115, outcome=150),
+    )
+    assert [c.play_id for c in _plan(g).chapters] == ["a"]

@@ -107,7 +107,9 @@ def test_cli_fps_harness_prints_line_per_fps(tmp_path, monkeypatch, capsys):
     def fake(asset, src, tl, **kw):
         calls.append(kw["fps"])
         plays = [_play("p0", 60, 74)]
-        return GameModel(plays=plays, budget_spent_usd=0.25 * kw["fps"])
+        return GameModel(
+            plays=plays, budget_spent_usd=0.25 * kw["fps"], budget_exhausted=kw["fps"] == 1.0
+        )
 
     stub = types.ModuleType("ai_video_editor.league.understand")
     stub.understand_game = fake
@@ -118,4 +120,38 @@ def test_cli_fps_harness_prints_line_per_fps(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out.splitlines()
     assert rc == 0 and calls == [0.25, 1.0]
     assert out[0].startswith("fps 0.25") and "precision 1.00" in out[0] and "PASS" in out[0]
-    assert out[1].startswith("fps 1.0")
+    assert out[1].startswith("fps 1.0") and out[1].endswith("budget_exhausted")
+    assert "budget_exhausted" not in out[0]
+
+
+def test_absent_plays_are_not_scored():
+    absent = _play("p9", 300, 320)
+    absent.owner = PlayOwner(involved=False, role="absent", kills=0, assists=0, died=False)
+    r = match_plays([_play("p1", 100, 120), absent], [_label(100, 120)])
+    assert r.precision == 1.0 and r.recall == 1.0
+    assert r.excluded_absent == ["p9"]
+    assert r.unmatched_detected == []
+    assert r.per_type["skirmish"]["n_detected"] == 1.0
+
+
+def test_cli_prints_drive_cuts_line_only_when_gate_passes(tmp_path, monkeypatch, capsys):
+    from ai_video_editor.config import settings
+
+    monkeypatch.setattr(settings, "workspace_dir", tmp_path)
+    labels = tmp_path / "labels.json"
+    labels.write_text(
+        '{"asset_id": "a", "rows": [{"type": "skirmish", "approach_s": 60, '
+        '"engage_s": 65, "outcome_s": 74}]}',
+        encoding="utf-8",
+    )
+    cache = tmp_path / "plays" / "a.json"
+    cache.parent.mkdir(parents=True)
+    cache.write_text(GameModel(plays=[_play("p0", 60, 74)]).model_dump_json(), encoding="utf-8")
+    assert plays_eval_cli.main(["--asset", "a", "--labels", str(labels)]) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert "gate (>=0.8): PASS" in out and "PLAYS_DRIVE_CUTS=true" in out
+
+    cache.write_text(GameModel(plays=[_play("p0", 200, 230)]).model_dump_json(), encoding="utf-8")
+    plays_eval_cli.main(["--asset", "a", "--labels", str(labels)])
+    out = capsys.readouterr().out.splitlines()
+    assert "gate (>=0.8): FAIL" in out and "PLAYS_DRIVE_CUTS=true" not in out

@@ -212,3 +212,67 @@ def test_run_with_retry_frames_and_prompts_forwarded() -> None:
     )
     assert cap.frames_seen == frames
     assert cap.system_seen == "THE-SYS"
+
+
+def test_run_with_retry_forwards_max_tokens_only_when_given() -> None:
+    from pydantic import BaseModel
+
+    class M(BaseModel):
+        ok: bool
+
+    seen: list[dict] = []
+
+    class B:
+        name = "b"
+
+        def call(self, **kw) -> str:
+            seen.append(kw)
+            return '{"ok": true}'
+
+    run_with_retry(B(), frames=[], system_prompt="s", user_prompt="u", response_model=M)
+    run_with_retry(
+        B(), frames=[], system_prompt="s", user_prompt="u", response_model=M, max_tokens=4096
+    )
+    assert "max_tokens" not in seen[0]
+    assert seen[1]["max_tokens"] == 4096
+
+
+def test_ollama_backend_accepts_max_tokens_as_num_predict(monkeypatch) -> None:
+    from pydantic import BaseModel
+
+    from ai_video_editor.vlm.backends import ollama_backend as ob
+
+    class M(BaseModel):
+        ok: bool
+
+    sent: list[dict] = []
+
+    class FakeResp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"message": {"content": '{"ok": true}'}}
+
+    class FakeClient:
+        def __init__(self, **_):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def post(self, url, json):
+            sent.append(json)
+            return FakeResp()
+
+    monkeypatch.setattr(ob.httpx, "Client", FakeClient)
+    backend = ob.OllamaBackend()
+    monkeypatch.setattr(backend, "_list_tags", lambda: [{"name": backend.model_primary}])
+    out = run_with_retry(
+        backend, frames=[], system_prompt="s", user_prompt="u", response_model=M, max_tokens=4096
+    )
+    assert out.ok is True
+    assert sent[0]["options"]["num_predict"] == 4096

@@ -2,6 +2,11 @@
 into `plan_story` + `render_story`.
 
     story-render --asset ID --round <panel folder name or path> [--no-cards] [--out DIR]
+                 [--plays | --no-plays]
+
+With `PLAYS_DRIVE_CUTS=true` and a frozen `WORKSPACE/plays/<asset>.json`,
+chapters come from the plays by default; `--plays` forces that path (and
+fails without the file), `--no-plays` forces the panel-beat path.
 
 Inputs: `WORKSPACE/panel/<round>/gaming-expert.json` story beats (and
 `clips.json` to place clip-relative beats), `WORKSPACE/riot/<asset>/`
@@ -188,7 +193,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--asset", required=True, help="asset id")
     ap.add_argument("--round", required=True, help="panel round folder name or path")
     ap.add_argument("--no-cards", action="store_true", help="skip chapter title cards")
-    ap.add_argument("--plays", action="store_true", help="chapters from the frozen plays file")
+    which = ap.add_mutually_exclusive_group()
+    which.add_argument("--plays", action="store_true", help="chapters from the frozen plays file")
+    which.add_argument("--no-plays", action="store_true", help="chapters from the panel beats")
     ap.add_argument("--out", help="output dir (default WORKSPACE/story/<round>/)")
     ap.add_argument("--source", help="source video path (default: the asset's path)")
     ap.add_argument("--review", action="store_true", help="0.25 fps critic, $5 story budget")
@@ -203,8 +210,11 @@ def main(argv: list[str] | None = None) -> int:
     if not src:
         print(f"asset {args.asset} not found; pass --source", file=sys.stderr)
         return 2
-    if args.plays:
-        plays_file = Path(settings.workspace_dir) / "plays" / f"{args.asset}.json"
+    plays_file = Path(settings.workspace_dir) / "plays" / f"{args.asset}.json"
+    use_plays = args.plays or (
+        not args.no_plays and settings.plays_drive_cuts and plays_file.is_file()
+    )
+    if use_plays:
         if not plays_file.is_file():
             print(f"no plays file for asset {args.asset}: {plays_file}", file=sys.stderr)
             return 2
@@ -228,7 +238,7 @@ def main(argv: list[str] | None = None) -> int:
     out_dir = Path(args.out) if args.out else Path(settings.workspace_dir) / "story" / rnd.name
     try:
         story = render_story(
-            src, plan, out_dir, cards=not args.no_cards and not args.plays, review=args.review
+            src, plan, out_dir, cards=not args.no_cards and not use_plays, review=args.review
         )
     except StoryRenderError as e:
         print(f"story render failed: {e}", file=sys.stderr)

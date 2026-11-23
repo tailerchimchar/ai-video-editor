@@ -65,3 +65,35 @@ def test_clear_pool(ws):
     month_pool.pool_play("a", make_play("p1"), "src.mp4")
     month_pool.clear_pool()
     assert not month_pool.pool_dir().exists()
+
+
+def test_absent_plays_are_not_pooled(ws):
+    assert not month_pool.is_eligible(make_play("p1", involved=False))
+    assert month_pool.pool_play("a", make_play("p1", involved=False), "src.mp4") is None
+    assert ws == []
+
+
+def test_pool_month_folder_and_temp_rename(ws):
+    out = month_pool.pool_play("a", make_play("p1"), "src.mp4", month="2026-10")
+    assert out == month_pool.pool_dir("2026-10") / "a_p1.mp4" and out.is_file()
+    assert ws[0][1].endswith("a_p1.part.mp4")
+    assert not list(out.parent.glob("*.part.mp4"))
+
+
+def test_failed_cut_leaves_no_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "workspace_dir", tmp_path)
+
+    def half_written(src, out, start, end, **_):
+        open(out, "wb").close()
+        return False, "ffmpeg died"
+
+    monkeypatch.setattr(month_pool, "trim_clip", half_written)
+    assert month_pool.pool_play("a", make_play("p1"), "src.mp4", month="2026-10") is None
+    assert list(month_pool.pool_dir("2026-10").glob("*.mp4")) == []
+    assert not (month_pool.pool_dir("2026-10") / "index.json").exists()
+
+
+def test_pool_game_pools_only_eligible(ws):
+    plays = [make_play("p1"), make_play("p2", involved=False), make_play("p3", type="trade")]
+    outs = month_pool.pool_game("a", plays, "src.mp4", month="2026-09")
+    assert [o.name for o in outs] == ["a_p1.mp4"]

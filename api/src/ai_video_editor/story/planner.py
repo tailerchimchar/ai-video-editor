@@ -334,10 +334,11 @@ def _play_chapter(p: Play, timeline: RiotTimeline) -> Chapter | None:
     if end <= start:
         _log.warning("story: dropping play %s, empty window after clamp", p.id)
         return None
+    shift = w.offset_correction_s or 0.0  # banner-measured Riot offset error (D17)
     kills = [
-        e.t_rec_s
+        e.t_rec_s + shift
         for e in timeline.events
-        if e.kind == "kill" and e.t_rec_s is not None and start <= e.t_rec_s <= end
+        if e.kind == "kill" and e.t_rec_s is not None and start <= e.t_rec_s + shift <= end
     ]
     return Chapter(
         title=p.text,
@@ -349,6 +350,22 @@ def _play_chapter(p: Play, timeline: RiotTimeline) -> Chapter | None:
     )
 
 
+def _no_overlap(chapters: list[Chapter]) -> list[Chapter]:
+    """Chapters in start order, each starting no earlier than the previous
+    chapter's end (D17); one left empty by that is dropped."""
+    out: list[Chapter] = []
+    for c in sorted(chapters, key=lambda c: c.start_s):
+        if out and c.start_s < out[-1].end_s:
+            start = out[-1].end_s
+            if c.end_s <= start:
+                _log.info("story: play %s lies inside the previous chapter; dropped", c.play_id)
+                continue
+            kills = [t for t in c.kill_times_s if t >= start]
+            c = c.model_copy(update={"start_s": start, "kill_times_s": kills})
+        out.append(c)
+    return out
+
+
 def plan_story_from_plays(
     game: GameModel,
     timeline: RiotTimeline,
@@ -358,9 +375,11 @@ def plan_story_from_plays(
     asset_id: str = "",
 ) -> StoryPlan:
     """One chapter per owner-involved play (no merging, no cap, no trimming),
-    in recording order. Over `max_s` whole chapters are dropped, least
-    impressive first (never a close chapter); `over_budget` when the close
-    alone exceeds it. Plans carry `cards=False` (dip transitions instead)."""
+    in recording order; a chapter starts no earlier than the previous one's
+    end (repeated footage reads as a defect). Over `max_s` whole chapters are
+    dropped, least impressive first (never a close chapter); `over_budget`
+    when the close alone exceeds it. Plans carry `cards=False` (dip
+    transitions instead)."""
     if mic_stream == 0:
         _log.warning("story: mic stream 0 is the game audio; using mixed audio")
         mic_stream = None
@@ -370,13 +389,14 @@ def plan_story_from_plays(
     ]
     chapters.sort(key=lambda c: c.start_s)
     kept = list(chapters)
-    while _total(kept) > max_s:
+    while _total(_no_overlap(kept)) > max_s:
         droppable = [c for c in kept if c.kind != "close"]
         if not droppable:
             _log.warning("story: close alone runs %.0fs > max %.0fs", _total(kept), max_s)
             break
         worst = max(droppable, key=lambda c: rank_of.get(c.play_id) or _UNRANKED)
         kept.remove(worst)
+    kept = _no_overlap(kept)
     total = _total(kept)
     return StoryPlan(
         asset_id=asset_id,

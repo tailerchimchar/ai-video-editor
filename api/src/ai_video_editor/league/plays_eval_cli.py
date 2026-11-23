@@ -15,9 +15,13 @@ from ..config import settings
 from .play_models import GameModel
 from .plays_eval import EvalReport, Labels, labels_path, load_labels, match_plays, passes_gate
 
+DRIVE_CUTS_LINE = "PLAYS_DRIVE_CUTS=true"
+
 
 def _print_report(report: EvalReport) -> None:
     print(f"precision {report.precision:.2f}  recall {report.recall:.2f}")
+    if report.excluded_absent:
+        print(f"not scored (owner absent): {', '.join(report.excluded_absent)}")
     print("type              prec  rec  labels  detected")
     for t, m in report.per_type.items():
         print(
@@ -26,7 +30,13 @@ def _print_report(report: EvalReport) -> None:
         )
     for lab_type, det_type in report.type_confusion:
         print(f"confusion: label {lab_type} detected as {det_type}")
-    print(f"gate (>=0.8): {'PASS' if passes_gate(report) else 'FAIL'}")
+    passed = passes_gate(report)
+    print(f"gate (>=0.8): {'PASS' if passed else 'FAIL'}")
+    if passed:
+        print("gate passed: to let plays drive the cuts, append this line to api/.env:")
+        print(DRIVE_CUTS_LINE)
+    else:
+        print("gate failed: leave PLAYS_DRIVE_CUTS off")
 
 
 def _run_fps(asset: str, fps_list: list[float], source: str, labels: Labels) -> int:
@@ -60,9 +70,10 @@ def _run_fps(asset: str, fps_list: list[float], source: str, labels: Labels) -> 
             out_path=Path(settings.workspace_dir) / "plays" / f"{asset}.fps{f}.json",
         )
         rep = match_plays(model.plays, labels.rows)
+        exhausted = "  budget_exhausted" if model.budget_exhausted else ""
         print(
             f"fps {f}  cost ${model.budget_spent_usd:.2f}  precision {rep.precision:.2f}  "
-            f"recall {rep.recall:.2f}  gate {'PASS' if passes_gate(rep) else 'FAIL'}"
+            f"recall {rep.recall:.2f}  gate {'PASS' if passes_gate(rep) else 'FAIL'}{exhausted}"
         )
     return 0
 

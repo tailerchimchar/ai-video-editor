@@ -68,9 +68,10 @@ def test_v2_digest_json_loads_with_game_model_absent():
 
 
 def test_attach_plays_links_clip_by_midpoint_then_overlap():
+    # No window yet: spans are first_kill - 8 .. last_kill + 3 (p14 1302-1315).
     gm = GameModel(plays=[_play("p14", 1310, 1312), _play("p15", 1395, 1410)])
     d = dg.attach_plays(_digest((1390, 1415), (1300, 1313), (1313.5, 1316), (50, 60)), gm)
-    assert [c.play_id for c in d.clips] == ["p15", "p14", None, None]
+    assert [c.play_id for c in d.clips] == ["p15", "p14", "p14", None]
     assert d.game_model is gm
     assert all(p.text for p in gm.plays)
 
@@ -80,6 +81,41 @@ def test_attach_plays_overlap_fallback():
     gm = GameModel(plays=[_play("p15", 1395, 1410)])
     d = dg.attach_plays(_digest((1350, 1410)), gm)
     assert d.clips[0].play_id == "p15"
+
+
+def test_attach_plays_single_kill_clip_containing_the_kill_is_a_hit():
+    # midpoint 485.5 is outside 492-503, but the clip holds the kill at 500.
+    gm = GameModel(plays=[_play("p03", 500, 500)])
+    d = dg.attach_plays(_digest((470, 501), (520, 540)), gm)
+    assert [c.play_id for c in d.clips] == ["p03", None]
+
+
+def test_attach_plays_uses_the_confirmed_window():
+    from ai_video_editor.league.play_models import PlayWindow
+
+    p = _play("p07", 600, 610)
+    p.window = PlayWindow(approach_s=570, engage_s=580, outcome_s=640, source="vlm")
+    d = dg.attach_plays(_digest((572, 590), (632, 650), (650, 700)), GameModel(plays=[p]))
+    assert [c.play_id for c in d.clips] == ["p07", "p07", None]
+
+
+def test_clip_holding_a_later_plays_kills_links_to_that_play():
+    from ai_video_editor.league.play_models import PlayWindow
+
+    a = _play("A", 100, 110)
+    a.window = PlayWindow(approach_s=85, engage_s=90, outcome_s=128, source="vlm")
+    b = _play("B", 125, 125)
+    b.window = PlayWindow(approach_s=115, engage_s=120, outcome_s=130, source="vlm")
+    d = dg.attach_plays(_digest((118, 130)), GameModel(plays=[a, b]))
+    assert d.clips[0].play_id == "B"
+
+
+def test_several_contained_plays_prefer_longest_kill_span_then_later():
+    longer, short1, short2 = _play("L", 100, 110), _play("S1", 115, 117), _play("S2", 120, 122)
+    d = dg.attach_plays(_digest((95, 125)), GameModel(plays=[longer, short1, short2]))
+    assert d.clips[0].play_id == "L"
+    d = dg.attach_plays(_digest((112, 125)), GameModel(plays=[longer, short1, short2]))
+    assert d.clips[0].play_id == "S2"
 
 
 def test_play_text_is_templated_and_passes_leak_check(fixture_round):

@@ -88,8 +88,10 @@ class OllamaBackend(VLMBackend):
         frames: list[Path],
         system_prompt: str,
         user_prompt: str,
+        max_tokens: int = 1024,
     ) -> str:
-        """Route through the ladder + return the raw JSON string."""
+        """Route through the ladder + return the raw JSON string.
+        `max_tokens` bounds the reply (Ollama's `num_predict`)."""
         tags = self._list_tags()
         if tags is None:
             raise VLMUnavailableError(f"Ollama unreachable at {self.base_url}")
@@ -101,7 +103,9 @@ class OllamaBackend(VLMBackend):
             )
         self._active_model = model
         images = [self._encode_image(p) for p in frames]
-        return self._chat(model, system=system_prompt, user=user_prompt, images=images)
+        return self._chat(
+            model, system=system_prompt, user=user_prompt, images=images, max_tokens=max_tokens
+        )
 
     @property
     def active_model(self) -> str | None:
@@ -141,6 +145,7 @@ class OllamaBackend(VLMBackend):
         system: str,
         user: str,
         images: list[str],
+        max_tokens: int = 1024,
     ) -> str:
         payload: dict = {
             "model": model,
@@ -150,7 +155,7 @@ class OllamaBackend(VLMBackend):
             # gets blown out the moment a single image is attached
             # (~8-9k tokens per frame at typical resolutions). 32k gives
             # room for ~8 frames + prompts without truncation.
-            "options": {"num_ctx": 32768},
+            "options": {"num_ctx": 32768, "num_predict": max_tokens},
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user, **({"images": images} if images else {})},
