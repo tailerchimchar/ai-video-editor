@@ -19,7 +19,9 @@ def phases_for(timeline: RiotTimeline) -> Phases | None:
     events = timeline.events
     end_ev = next((e for e in events if e.kind == "game_end"), None)
     game_end = end_ev.t_game_s if end_ev else max((e.t_game_s for e in events), default=0.0)
-    has_kill = any(e.kind in ("kill", "death", "assist", "ally_death", "enemy_death") for e in events)
+    has_kill = any(
+        e.kind in ("kill", "death", "assist", "ally_death", "enemy_death") for e in events
+    )
     if end_ev is not None and game_end < REMAKE_MAX_S and not has_kill:
         return None
 
