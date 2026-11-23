@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field
 from ..database import get_db
 from ..jobs import finish_job
 from ..models import RankResponse
+from ..montage.plan import PlaySpec
 from ..shorts import (
     _shorts_folder,
     build_cross_asset_montage,
@@ -538,10 +539,18 @@ class CustomMontageBody(BaseModel):
     """Payload for `POST /shorts/custom_montage`."""
 
     clip_paths: list[str] = Field(
-        ...,
+        default_factory=list,
         description=(
             "Ordered list of clip file paths. Any existing `.mp4` "
-            "works — Outplayed folder, highlights folder, wherever."
+            "works — Outplayed folder, highlights folder, wherever. "
+            "May be empty when `play_specs` is given."
+        ),
+    )
+    play_specs: list[PlaySpec] | None = Field(
+        default=None,
+        description=(
+            "Montage v2 play segments `{clip_path, start_seconds, end_seconds, "
+            "play_id, is_last, kill_offsets_s}`. Windows are authoritative."
         ),
     )
     name: str | None = Field(
@@ -600,6 +609,7 @@ async def _run_custom_job(job_id: str, body: CustomMontageBody) -> None:
             use_clip_analyzer=body.use_clip_analyzer,
             max_seconds=body.max_seconds,
             burn_title=body.burn_title,
+            play_specs=body.play_specs,
         )
         if not result.get("ok"):
             await finish_job(
@@ -630,8 +640,8 @@ async def compile_custom_montage_endpoint(body: CustomMontageBody):
     """Compile a montage from an EXPLICIT list of clip paths. Any
     existing `.mp4` works — mix Outplayed clips, highlights clips,
     anything on disk."""
-    if not body.clip_paths:
-        raise HTTPException(400, "clip_paths cannot be empty")
+    if not body.clip_paths and not body.play_specs:
+        raise HTTPException(400, "clip_paths cannot be empty (or give play_specs)")
     db = await get_db()
     try:
         job_id = str(uuid.uuid4())
