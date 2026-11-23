@@ -108,6 +108,20 @@ def check_budget(
         )
 
 
+def spent_usd(asset_id: str, *, feature_prefix: str, db_path: Path | None = None) -> float:
+    """Sum this asset's ledger cost over features starting with `feature_prefix`."""
+    conn = _ledger_conn(db_path)
+    try:
+        (total,) = conn.execute(
+            "SELECT COALESCE(SUM(cost_usd), 0) FROM spend_ledger "
+            "WHERE asset_id = ? AND feature LIKE ? || '%'",
+            (asset_id, feature_prefix),
+        ).fetchone()
+    finally:
+        conn.close()
+    return float(total)
+
+
 def record_spend(
     asset_id: str | None,
     feature: str,
