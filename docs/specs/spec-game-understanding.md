@@ -53,7 +53,7 @@ The digest describes a game as a flat list of clips with kills, deaths, assists,
 - **Re-anchor** (R5): `banner_s - recording_time.first_kill_s` is stored as `offset_correction_s`; a play whose banner is not found within ±5 s is tagged `offset_uncertain` and kept out of shorts and montage.
 - **Approach not found** (R3): when the owner is dead, off-screen or arriving late, `approach_s = first_kill - 8 s`, tagged `approach_unconfirmed`; such plays count for the story, never for a short.
 - A sweep at 0.25 fps over the whole game proposes kill-less plays (`trade`, `caught_out` without a death) only when the budget allows after the confirmations (D1, D10).
-- Cost: hard stop at `game_understanding_budget_usd` (default 1.50) inside the existing $2 per-asset cap; the fps for the sweep and the confirmer is chosen once by the quality test (4.6) and stored in config.
+- Cost: hard stop at `game_understanding_budget_usd` (default 1.50) under its own ledger key `plays:<asset>` (D15); the fps for the sweep and the confirmer is chosen once by the quality test (4.6) and stored in config.
 - Caching (R6): results live in `WORKSPACE/plays/<asset>.json` keyed by the YAML hash; a YAML edit or a new correction never re-runs an analysed game. Re-run is on demand per asset (`--force`).
 
 ### 4.4 Play vocabulary (`vlm/game_hints/league_plays.yaml`)
@@ -132,6 +132,10 @@ One entry per play type: `phase`, `propose` (the Riot rule in words and in a sma
 | R8 | Precision gate | labels.json per game; match at 50% overlap and start within 5 s; plays drive cuts at precision ≥ 0.8 | The fps and budget decisions need a measure | Red Team | 2026-11-22 |
 | R9 | Snap and SFX | Only the outcome cut snaps to the beat; inner jump cuts fixed at Riot kill times; kaching placed after cut remapping | Snap must not move a kill frame | Red Team | 2026-11-22 |
 | R10 | Phase edges | Early ends at max(first tower, 8:00) or 14:00; games ending before late have two phases; closeout lives in the phase holding game end; lane chapter reads phases | 6-minute towers and surrenders | Red Team | 2026-11-22 |
+| D14 | Confirmer design | Per-frame state labels (none/approach/fighting/aftermath, kill banner, counts) on single 960-px frames with burned-in seconds at 0.5 fps; windows derived deterministically anchored on the Riot kill times; model `play_confirm_model` default claude-sonnet-4-6; owner plays confirmed first; sweep off by default | Real Jhin run: Haiku on mosaics with free-form seconds could not place events; Sonnet per-frame labels matched the footage | Drift Accepted | 2026-11-22 |
+| D15 | Understanding budget key | The pass spends under `plays:<asset>` with `game_understanding_budget_usd` as its cap, outside the $2 asset cap (like `story:<asset>`); `SpendCapError` stops the pass and is reported | The asset cap already holds other features' spend and the fps test runs twice | Drift Accepted | 2026-11-22 |
+| D16 | Gate scope | Precision, the month pool and the montage consider owner-involved plays only; `offset_uncertain` plays never reach the montage | The owner cannot label off-screen fights; the fixture tops out at 0.62 otherwise | Drift Accepted | 2026-11-22 |
+| D17 | Chapter overlap | A story chapter starts no earlier than the previous chapter's end; the banner offset correction shifts kill times for kaching and jump cuts | Windows up to 30 s before a kill can overlap; repeated footage reads as a defect | Drift Accepted | 2026-11-22 |
 
 ## 7. Dependency Graph & Implementation Order
 
