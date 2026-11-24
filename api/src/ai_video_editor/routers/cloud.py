@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,6 +21,7 @@ from ..candidates.probe import get_duration_seconds
 from ..config import settings
 from ..database import get_db
 from ..jobs import finish_job
+from ..league.riot_timeline import cache_dir_for
 from ..models import RankResponse
 from ..thumbnail import safe_extract_asset_thumbnail
 
@@ -55,13 +57,28 @@ async def _asset_and_key(asset_id: str) -> tuple[dict, str]:
     return asset, key
 
 
-def _upload_sync(path: Path, key: str) -> dict:
+_log = logging.getLogger(__name__)
+
+
+def _write_label(s3, bucket: str, key: str, asset: dict) -> dict | None:
+    """The `<key>.meta.json` sidecar; never fails the upload. Returns the label written."""
+    try:
+        label = storage.vod_label(asset, riot_dir=cache_dir_for(str(asset.get("id"))))
+        storage.put_json(s3, bucket, storage.meta_key(key), label)
+        return label
+    except Exception as exc:  # the VOD is up; a missing label is a warning, not a failure
+        _log.warning("cloud label for %s not written: %s", key, exc)
+        return None
+
+
+def _upload_sync(path: Path, key: str, asset: dict | None = None) -> dict:
     s3 = storage.client()
     bucket = settings.storage_outplayed_bucket
     size = path.stat().st_size
     existing = storage.remote_size(s3, bucket, key)
     if existing == size:
-        return {"key": key, "bytes": size, "already_uploaded": True}
+        label = _write_label(s3, bucket, key, asset) if asset else None
+        return {"key": key, "bytes": size, "already_uploaded": True, "label": label}
     after = storage.projected_total(storage.stored_bytes(s3), existing or 0, size)
     if storage.over_budget(after, settings.storage_max_total_gb):
         raise RuntimeError(
@@ -69,15 +86,22 @@ def _upload_sync(path: Path, key: str) -> dict:
             f"({after / 1024**3:.1f} GB after upload); remove something first"
         )
     storage.upload_file(s3, bucket, key, path)
-    return {"key": key, "bytes": size, "already_uploaded": False, "total_bytes_after": after}
+    label = _write_label(s3, bucket, key, asset) if asset else None
+    return {
+        "key": key,
+        "bytes": size,
+        "already_uploaded": False,
+        "total_bytes_after": after,
+        "label": label,
+    }
 
 
-async def _run_upload_job(job_id: str, path: Path, key: str) -> None:
+async def _run_upload_job(job_id: str, path: Path, key: str, asset: dict) -> None:
     db = await get_db()
     try:
         await db.execute("UPDATE jobs SET status = 'running' WHERE id = ?", (job_id,))
         await db.commit()
-        result = await asyncio.to_thread(_upload_sync, path, key)
+        result = await asyncio.to_thread(_upload_sync, path, key, asset)
         note = " (already uploaded)" if result["already_uploaded"] else ""
         await finish_job(
             db,
@@ -112,7 +136,7 @@ async def upload_vod(asset_id: str) -> RankResponse:
         await db.commit()
     finally:
         await db.close()
-    _track(_run_upload_job(job_id, path, key))
+    _track(_run_upload_job(job_id, path, key, asset))
     return RankResponse(job_id=job_id)
 
 
@@ -123,7 +147,14 @@ async def list_cloud_vods() -> dict:
 
     def _list() -> tuple[list[dict], int]:
         s3 = storage.client()
-        return storage.list_objects(s3, settings.storage_outplayed_bucket), storage.stored_bytes(s3)
+        bucket = settings.storage_outplayed_bucket
+        objects = storage.list_objects(s3, bucket)
+        labels = {
+            o["key"]: storage.get_json(s3, bucket, storage.meta_key(o["key"]))
+            for o in objects
+            if not storage.is_meta_key(o["key"])
+        }
+        return storage.merge_labels(objects, labels), storage.stored_bytes(s3)
 
     objects, used = await asyncio.to_thread(_list)
 
@@ -267,6 +298,8 @@ async def remove_cloud_vod(asset_id: str) -> dict:
         if storage.remote_size(s3, bucket, key) is None:
             return False
         storage.delete_object(s3, bucket, key)
+        with contextlib.suppress(Exception):  # the sidecar may not exist
+            storage.delete_object(s3, bucket, storage.meta_key(key))
         return True
 
     removed = await asyncio.to_thread(_delete)

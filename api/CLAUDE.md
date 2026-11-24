@@ -233,6 +233,7 @@ Rules:
 - **Budget:** `STORAGE_MAX_TOTAL_GB` (default 100, = Pro's included quota)
   is enforced on every upload; the org spend cap is on as the backstop.
   The quota is org-wide, so the `ConXense` project counts against it too.
+- Every upload also writes a `<key>.meta.json` **label** next to the VOD (asset id, file, session, local start time, length, and when the Riot cache exists: champion, K/D/A, result, match id, patch, queue, sync offset; never a puuid or Riot ID). `list_cloud_vods` returns it as `label`; re-running an upload on an unchanged VOD refreshes the label. The sidecar is deleted with the VOD.
 - Removing a cloud copy (`remove_vod_from_cloud`) never touches the local file.
 - **Cross-machine flow:** PC uploads a pick → another machine pulls it
   (`download_vod_from_cloud` → `POST /cloud/vods/pull`, lands at the same

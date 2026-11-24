@@ -1288,9 +1288,11 @@ def upload_vod_to_cloud(asset_id: str) -> dict:
 
 @mcp.tool()
 def list_cloud_vods() -> dict:
-    """List the raw VODs backed up in the cloud, with size, upload time and
-    the matching local `asset_id` (null if that recording isn't indexed
-    here). Also returns `used_bytes` (all cloud buckets) and `budget_gb`,
+    """List the raw VODs backed up in the cloud, with size, upload time, the
+    matching local `asset_id` (null if that recording isn't indexed here)
+    and a `label` (champion, K/D/A, result, length, date; from the
+    `<key>.meta.json` sidecar written at upload, null for older uploads
+    until they are re-uploaded once). Also returns `used_bytes` (all cloud buckets) and `budget_gb`,
     so you can tell the user how much room is left."""
     with _client() as c:
         return c.get(f"{API}/cloud/vods").json()
