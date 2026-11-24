@@ -51,8 +51,10 @@ def _conf(**kw) -> pc.PlayConfirmation:
 START = FIRST - 30
 
 
-def _apply(conf, play=None, game_end=None):
-    return pc.apply_confirmation(play or _play(), conf, START, game_end_s=game_end, rule=RULE)
+def _apply(conf, play=None, game_end=None, lead=0.0):
+    return pc.apply_confirmation(
+        play or _play(), conf, START, game_end_s=game_end, rule=RULE, lead_s=lead
+    )
 
 
 def test_window_from_confirmation_in_recording_seconds():
@@ -109,10 +111,38 @@ def test_outcome_before_last_kill_falls_back():
     assert "outcome_unconfirmed" in p.window.flags
 
 
-def test_approach_before_window_start_falls_back():
+def test_approach_before_window_start_falls_back_to_confirmed_engage():
     p = _apply(_conf(approach_s=-2.0))
-    assert p.window.approach_s == FIRST - 8
+    assert p.window.approach_s == p.window.engage_s == START + 28
+    assert p.window.source == "vlm"
     assert "approach_unconfirmed" in p.window.flags
+
+
+def test_approach_before_window_start_without_engage_falls_back_8s():
+    p = _apply(_conf(approach_s=-2.0, engage_s=None))
+    assert p.window.approach_s == FIRST - 8
+    assert p.window.source == "fallback"
+
+
+def test_missing_approach_starts_window_at_confirmed_engage():
+    # Straight from 'none' to 'fighting': no approach run, engage 12 s before the kill.
+    p = _apply(_conf(approach_s=None, engage_s=18.0))
+    w = p.window
+    assert w.approach_s == w.engage_s == START + 18
+    assert w.source == "vlm"
+    assert "approach_unconfirmed" in w.flags
+    assert "engage_unconfirmed" not in w.flags
+
+
+def test_engage_more_than_8s_before_kill_is_kept():
+    p = _apply(_conf(approach_s=5.0, engage_s=15.0))
+    assert (p.window.approach_s, p.window.engage_s) == (START + 5, START + 15)
+
+
+def test_engage_before_window_start_is_ignored():
+    p = _apply(_conf(approach_s=None, engage_s=-1.0))
+    assert p.window.source == "fallback"
+    assert p.window.approach_s == FIRST - 8
 
 
 def test_approach_at_or_after_first_kill_falls_back():
@@ -467,3 +497,20 @@ def test_sweep_stops_when_should_continue_flips(fake_frames):
         should_continue=lambda: next(ticks),
     )
     assert len(backend.calls) == 1
+
+
+def test_confirmed_approach_opens_lead_s_earlier():
+    p = _apply(_conf(), lead=3.0)
+    assert p.window.approach_s == START + 19
+    assert p.window.engage_s == START + 28
+
+
+def test_lead_defaults_to_setting(monkeypatch):
+    monkeypatch.setattr(pc.settings, "play_confirm_lead_s", 5.0)
+    p = pc.apply_confirmation(_play(), _conf(), START, game_end_s=None, rule=RULE)
+    assert p.window.approach_s == START + 17
+
+
+def test_lead_never_applies_to_fallback_windows():
+    p = _apply(None, lead=3.0)
+    assert p.window.approach_s == FIRST - 8

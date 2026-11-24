@@ -11,6 +11,7 @@ from ..config import settings
 from .backends.anthropic_backend import AnthropicBackend
 from .backends.base import VLMBackend
 from .backends.ollama_backend import OllamaBackend
+from .backends.openai_compat_backend import OpenAICompatBackend
 
 
 class UnsupportedVLMBackendError(RuntimeError):
@@ -32,6 +33,8 @@ def select_backend(name: str | None = None, asset_id: str | None = None) -> VLMB
         return OllamaBackend()
     if resolved == "anthropic":
         return AnthropicBackend(asset_id=asset_id)
+    if resolved in ("gemini", "openrouter"):
+        return OpenAICompatBackend(resolved)
     raise UnsupportedVLMBackendError(
-        f"Unknown VLM_BACKEND {resolved!r}. Supported: ollama, anthropic."
+        f"Unknown VLM_BACKEND {resolved!r}. Supported: ollama, anthropic, gemini, openrouter."
     )

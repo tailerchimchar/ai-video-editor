@@ -57,16 +57,18 @@ def spend_key(asset_id: str) -> str:
 def default_backend(asset_id: str, *, cap_usd: float) -> VLMBackend:
     """Sonnet (`play_confirm_model`) on the `plays:<asset>` key, refusing calls
     once the key's ledger total reaches `cap_usd`, when the configured backend
-    is anthropic; else the configured backend."""
-    if settings.vlm_backend.lower() == "anthropic":
-        return AnthropicBackend(
-            asset_id=spend_key(asset_id),
-            model=settings.play_confirm_model,
-            feature="play_confirm",
-            cap_usd=cap_usd,
-            cap_name=BUDGET_CAP_NAME,
-        )
-    return select_backend(asset_id=asset_id)
+    is anthropic; else the configured backend. `PLAY_CONFIRM_BACKEND`, when
+    set, picks the backend for this pass alone (e.g. `gemini`)."""
+    name = (settings.play_confirm_backend or settings.vlm_backend).lower()
+    if name != "anthropic":
+        return select_backend(name, asset_id=asset_id)
+    return AnthropicBackend(
+        asset_id=spend_key(asset_id),
+        model=settings.play_confirm_model,
+        feature="play_confirm",
+        cap_usd=cap_usd,
+        cap_name=BUDGET_CAP_NAME,
+    )
 
 
 def _label(backend: VLMBackend, feature: str) -> None:
