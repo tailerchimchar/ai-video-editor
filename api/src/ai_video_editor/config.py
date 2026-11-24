@@ -493,6 +493,19 @@ class Settings(BaseSettings):
     intensity_voice_weight: float = 0.1
     intensity_death_penalty: float = 0.1
 
+    # Cloud VOD backups (storage.py, routers/cloud.py): Supabase Storage via
+    # its S3-compatible API. Inert until endpoint + both keys are set. Hand-
+    # picked VODs go to the outplayed bucket at their relative path.
+    supabase_s3_endpoint: str = ""
+    supabase_s3_region: str = "us-west-2"
+    supabase_s3_access_key_id: str = ""
+    supabase_s3_secret_access_key: str = ""
+    storage_outplayed_bucket: str = "outplayed"
+    storage_workspace_bucket: str = "workspace"
+    # Self-imposed budget across both buckets (Pro includes 100 GB); an
+    # upload that would push the total past it is refused.
+    storage_max_total_gb: float = 100.0
+
     @field_validator("grokbot_queue_repo_dir", mode="before")
     @classmethod
     def _blank_repo_dir_is_none(cls, v):

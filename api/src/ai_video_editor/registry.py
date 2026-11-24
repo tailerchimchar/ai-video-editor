@@ -323,6 +323,10 @@ _PLUMBING_TOOLS = frozenset(
         "list_highlights_clips",
         "list_highlights_sessions",
         "list_outplayed_clips",
+        "upload_vod_to_cloud",
+        "list_cloud_vods",
+        "download_vod_from_cloud",
+        "remove_vod_from_cloud",
     }
 )
 
