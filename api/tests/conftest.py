@@ -76,6 +76,11 @@ def _pinned_settings(monkeypatch):
     monkeypatch.setattr(settings, "plays_drive_cuts", False)
     monkeypatch.setattr(settings, "play_confirm_fps", 0.5)
     monkeypatch.setattr(settings, "play_confirm_model", "claude-sonnet-4-6")
+    # Never reach a live hosted VLM from tests, whatever .env says.
+    monkeypatch.setattr(settings, "play_confirm_backend", "")
+    monkeypatch.setattr(settings, "play_confirm_lead_s", 3.0)
+    monkeypatch.setattr(settings, "gemini_api_key", None)
+    monkeypatch.setattr(settings, "openrouter_api_key", None)
     monkeypatch.setattr(settings, "play_sweep_fps", 0.25)
     monkeypatch.setattr(settings, "play_sweep_enabled", False)
     monkeypatch.setattr(settings, "story_transition_s", 0.25)

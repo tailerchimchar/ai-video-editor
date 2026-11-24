@@ -58,6 +58,8 @@ recordings ──> candidate generators (cheap, deterministic, no LLM)
 | `highlights.py` | Cut kept ranked suggestions into an organized folder |
 | `candidates/` | Candidate generators (one module per source) |
 | `candidates/service.py` | Orchestrates all sources for one asset |
+| `storage.py` | Supabase Storage (S3 API) client for hand-picked raw-VOD backups |
+| `routers/cloud.py` | Upload / list / remove a VOD's cloud copy |
 | `routers/` | HTTP layer: assets, clips, projects, jobs, analyze |
 
 ### Phase 1 (done) — deterministic editing primitives
@@ -116,22 +118,22 @@ vector search over transcript chunks ──> ~50 roughly-relevant clips
 A **reranker** only appears in *that* pipeline — it reorders retrieved
 results. It is unrelated to the current LLM ranker.
 
-## MCP (built, separate repo)
+## MCP (built, separate package)
 
-The MCP server lives in its own sibling repo at `../mcp/`
-(GH: `ai-video-editor-mcp`, FastMCP, stdio). It
+The MCP server is the `mcp/` package of this monorepo (next to `api/`,
+`web/`, `docs/`; FastMCP, stdio). It
 wraps the HTTP endpoints as tools (`scan_assets`, `list_assets`,
 `generate_candidates`, `rank_asset`, `analyze_asset`, `get_job`,
 `compile_highlights`, `insert_compilation_clip`, …) so the pipeline is
 drivable conversationally from Claude. Job-based tools poll internally
 (one call = one finished step). It's a thin adapter that only needs the
-API URL — registered via this repo's `.mcp.json` which points at the
-sibling. Requires the API (`uv run dev`) to be running. See
+API URL — registered via `api/.mcp.json`, which points at `../mcp`.
+Requires the API (`uv run dev`) to be running. See
 [`docs/mcp.md`](docs/mcp.md).
 
-**Backend implication:** never import from `mcp` here, and never add
-MCP-tool code in this repo. New tools belong in the sibling repo;
-this repo only changes if the underlying HTTP endpoint changes.
+**Backend implication:** never import from `mcp` in `api/`, and never
+add MCP-tool code under `api/`. New tools belong in `mcp/`; `api/` only
+changes if the underlying HTTP endpoint changes.
 
 ### MCP coverage policy — every editing op must be MCP-drivable
 
@@ -211,6 +213,36 @@ sources still produce candidates.
   with a clear error and **no API call** when capped.
 - Prompt caching: the ranker's system prompt is a frozen, `cache_control`
   block; volatile candidate JSON is in the user turn.
+
+## Storage: Supabase vs Google Drive (two jobs, not redundant)
+
+| Store | Holds | Who can read it |
+|---|---|---|
+| **Supabase Storage** (org `tailer`, project `ai-video-editor`) | Raw VODs the owner **hand-picks** (`outplayed` bucket, same relative path as `OUTPLAYED_MEDIA_DIR`). `workspace` bucket = a one-off 2026-11-23 snapshot, not kept in sync. | The owner and this PC only. |
+| **Google Drive** (dedicated bot account, `drive.file` scope) | Clips, digests, previews, renders for the Grok Bot team (`grokbot/drive.py`). | The Grok bots, via their Drive connector. |
+| **Local disk** | Everything else (working files, regenerable). | — |
+
+Rules:
+- **Nothing uploads to Supabase automatically.** A VOD goes up only when
+  the owner asks (`upload_vod_to_cloud` MCP tool → `POST /assets/{id}/cloud`).
+  No bulk sync, no scheduled jobs.
+- **Bots never get Supabase access.** S3 keys open every bucket, including
+  full VODs, which the bot rules say never leave the PC. Bots stay on Drive.
+  If that ever changes: a separate bucket + short-lived signed URLs in the
+  digest, never keys — and first verify Grok can watch a video from a URL.
+- **Budget:** `STORAGE_MAX_TOTAL_GB` (default 100, = Pro's included quota)
+  is enforced on every upload; the org spend cap is on as the backstop.
+  The quota is org-wide, so the `ConXense` project counts against it too.
+- Removing a cloud copy (`remove_vod_from_cloud`) never touches the local file.
+- **Cross-machine flow:** PC uploads a pick → another machine pulls it
+  (`download_vod_from_cloud` → `POST /cloud/vods/pull`, lands at the same
+  relative path, auto-indexed as `source_origin='cloud'`) → normal pipeline
+  → **clean up** with `delete_vod_source`, which deletes a `cloud` file only
+  while its cloud copy is intact. Never process straight from the cloud:
+  the pipeline reads the whole file several times (each = full egress), and
+  every stage assumes a local path.
+- Keys: `SUPABASE_S3_*` in `.env` only. Supabase Vault doesn't help here
+  (reading it needs DB credentials).
 
 ## Persistence: SQLite now, Postgres later
 

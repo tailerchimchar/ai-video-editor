@@ -9,6 +9,7 @@ from .routers import (
     analyze,
     assets,
     clips,
+    cloud,
     edits,
     feedback,
     intros,
@@ -49,6 +50,7 @@ app.include_router(vlm.router, prefix="/api/v1")
 app.include_router(shorts.router, prefix="/api/v1")
 app.include_router(mentor.router, prefix="/api/v1")
 app.include_router(plan.router, prefix="/api/v1")
+app.include_router(cloud.router, prefix="/api/v1")
 
 # Serve workspace files directly so the webapp's <video> elements can
 # stream `compilation.mp4`, fetch `thumbnail.jpg`, etc. Source recordings

@@ -66,6 +66,19 @@ class Settings(BaseSettings):
     # place events). The kill-less sweep is off unless asked for.
     play_confirm_fps: float = 0.5
     play_confirm_model: str = "claude-sonnet-4-6"
+    # Backend for the play confirmer only: "" follows VLM_BACKEND (anthropic
+    # = Sonnet above); `gemini` / `openrouter` use the OpenAI-compatible
+    # backend with the keys and models below.
+    play_confirm_backend: str = ""
+    # Seconds a model-confirmed window opens before the model's approach (AVE-52:
+    # models call it ~3 s late against owner labels).
+    play_confirm_lead_s: float = 3.0
+    gemini_api_key: str | None = None
+    gemini_model: str = "gemini-flash-lite-latest"
+    gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai"
+    openrouter_api_key: str | None = None
+    openrouter_model: str = "qwen/qwen3-vl-30b-a3b-instruct"
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
     play_sweep_fps: float = 0.25
     play_sweep_enabled: bool = False
     story_transition_s: float = 0.25
@@ -479,6 +492,19 @@ class Settings(BaseSettings):
     intensity_vlm_weight: float = 0.2
     intensity_voice_weight: float = 0.1
     intensity_death_penalty: float = 0.1
+
+    # Cloud VOD backups (storage.py, routers/cloud.py): Supabase Storage via
+    # its S3-compatible API. Inert until endpoint + both keys are set. Hand-
+    # picked VODs go to the outplayed bucket at their relative path.
+    supabase_s3_endpoint: str = ""
+    supabase_s3_region: str = "us-west-2"
+    supabase_s3_access_key_id: str = ""
+    supabase_s3_secret_access_key: str = ""
+    storage_outplayed_bucket: str = "outplayed"
+    storage_workspace_bucket: str = "workspace"
+    # Self-imposed budget across both buckets (Pro includes 100 GB); an
+    # upload that would push the total past it is refused.
+    storage_max_total_gb: float = 100.0
 
     @field_validator("grokbot_queue_repo_dir", mode="before")
     @classmethod

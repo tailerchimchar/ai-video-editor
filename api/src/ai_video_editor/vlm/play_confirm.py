@@ -197,15 +197,18 @@ def apply_confirmation(
     *,
     game_end_s: float | None,
     rule: PlayRule,
+    lead_s: float | None = None,
 ) -> Play:
     """Copy of `play` with its window, numbers and flank filled from `conf`.
 
     Each confirmed second must sit in its slot or falls back with a flag:
-    `window_start <= approach < first_kill` (else first_kill - 8,
-    `approach_unconfirmed`); `approach <= engage <= first_kill` (else the
-    approach, `engage_unconfirmed`); `last_kill <= outcome <= min(last_kill
+    `window_start <= approach < first_kill` (else the confirmed engage, else
+    first_kill - 8; `approach_unconfirmed` either way, `source` is `vlm` only
+    when one of the two was confirmed); `approach <= engage <= first_kill`
+    (else the approach, `engage_unconfirmed`); `last_kill <= outcome <= min(last_kill
     + max_after_last_kill_s, game_end + 1)` (else last_kill + 3 within that
-    cap, `outcome_unconfirmed`)."""
+    cap, `outcome_unconfirmed`). A confirmed approach then opens `lead_s`
+    (default `PLAY_CONFIRM_LEAD_S`) earlier."""
     out = play.model_copy(deep=True)
     first = play.recording_time.first_kill_s
     last = play.recording_time.last_kill_s
@@ -217,12 +220,26 @@ def apply_confirmation(
     approach = rec(conf.approach_s) if conf else None
     if approach is not None and not window_start_s <= approach < first:
         approach = None
+    engage = rec(conf.engage_s) if conf else None
+    if engage is not None and not window_start_s <= engage <= first:
+        engage = None
+    if approach is None and engage is not None:
+        # The model saw the fight but no approach frames before it (it went
+        # straight from 'none' to 'fighting'): the window starts at the engage
+        # it confirmed, not at the kill-anchored fallback, which would also
+        # throw away any engage more than FALLBACK_LEAD_S before the kill.
+        approach = engage
+        flags.append("approach_unconfirmed")
     confirmed = approach is not None
+    if confirmed:
+        # Models call the approach a few seconds late against owner labels
+        # (AVE-52): open the window a little early, more rather than less.
+        lead = settings.play_confirm_lead_s if lead_s is None else lead_s
+        approach = max(0.0, approach - lead)
     if approach is None:
         approach = max(0.0, first - FALLBACK_LEAD_S)
         flags.append("approach_unconfirmed")
-    engage = rec(conf.engage_s) if conf else None
-    if engage is None or not approach <= engage <= first:
+    if engage is None or not approach <= engage:
         if conf is not None:
             flags.append("engage_unconfirmed")
         engage = approach
@@ -393,11 +410,20 @@ def _confirm_system(rule: PlayRule, fps: float, n_frames: int) -> str:
         + f"You are given {n_frames} frames in time order, one every {step:g} seconds; each "
         "frame has its second burned in at the top-left in a yellow box.\n"
         f"Play type expected: {rule.type}. It ends at: {rule.end['rule']}.\n\n"
-        "Label EVERY frame by its burned-in second with exactly one state: 'none' (no enemy "
-        "champions near the owner), 'approach' (enemy champions visible and both sides "
-        "positioning, no damage exchanged yet), 'fighting' (abilities and damage between "
-        "champions), 'aftermath' (the fight is over: survivors walking away, recalling, "
-        "taking an objective or tower). kill_banner is true only when a kill banner text is "
+        "Label EVERY frame by its burned-in second with exactly one state:\n"
+        "- 'none': no enemy champion within striking distance of the owner. Enemies merely "
+        "visible far across the screen, farming, walking or roaming around still count as "
+        "'none'.\n"
+        "- 'approach': the two sides have come into range of each other (an enemy champion "
+        "is about the owner's basic-attack range away, or the owner's group is closing in on "
+        "an enemy group) but no committed fight has started yet.\n"
+        "- 'fighting': the sides are actually fighting: champions trading abilities and "
+        "damage, someone has gone in. Hitting minions, towers or monsters alone is not "
+        "fighting.\n"
+        "- 'aftermath': the fight is over: the owner is safe or the enemy stopped chasing, "
+        "survivors walk away or recall, or the team takes an objective or tower.\n"
+        "Most windows start with 'none' frames: do not call 'approach' until the sides are "
+        "really in range. kill_banner is true only when a kill banner text is "
         "visible in that frame. allies_visible / enemies_visible count champions of each side "
         "on screen (owner included in allies). flank is true when the owner's side came from "
         "behind or the side. description is one plain sentence.\n"

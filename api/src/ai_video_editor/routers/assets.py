@@ -23,6 +23,7 @@ from ..splitter import (
     split_segment,
 )
 from ..thumbnail import safe_extract_asset_thumbnail
+from .cloud import cloud_copy_matches
 
 router = APIRouter(tags=["assets"])
 
@@ -228,15 +229,25 @@ async def delete_source(asset_id: str) -> DeleteSourceResponse:
             raise HTTPException(404, "Asset not found")
         asset = dict(rows[0])
 
-        if asset.get("source_origin") != "downloaded":
+        origin = asset.get("source_origin")
+        if origin not in ("downloaded", "cloud"):
             raise HTTPException(
                 400,
-                "Refusing to delete: source_origin is not 'downloaded'. "
-                "Only files ingested via /assets/ingest_url can be auto-deleted "
-                "— manually placed files are sacred.",
+                "Refusing to delete: source_origin is not 'downloaded' or 'cloud'. "
+                "Only files ingested via /assets/ingest_url or pulled from the cloud "
+                "can be auto-deleted — manually placed files are sacred.",
             )
         if asset.get("source_deleted_at"):
             return DeleteSourceResponse(asset_id=asset_id, freed_bytes=0, already_deleted=True)
+        # A cloud pull is only disposable while the cloud still holds it intact.
+        if origin == "cloud" and not await asyncio.to_thread(
+            cloud_copy_matches, Path(asset["path"])
+        ):
+            raise HTTPException(
+                409,
+                "Refusing to delete: the cloud copy is missing or a different size, "
+                "so this would be the only copy. Re-upload it first.",
+            )
 
         # Containment safety: the path MUST be inside OUTPLAYED_MEDIA_DIR.
         src_root = settings.outplayed_media_dir.resolve()

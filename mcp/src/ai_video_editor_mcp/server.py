@@ -29,15 +29,15 @@ def _client() -> httpx.Client:
     return httpx.Client(timeout=30.0)
 
 
-def _wait_for_job(client: httpx.Client, job_id: str) -> dict:
+def _wait_for_job(client: httpx.Client, job_id: str, timeout_s: float = _JOB_TIMEOUT_S) -> dict:
     """Poll a background job until it finishes (or times out)."""
-    deadline = time.monotonic() + _JOB_TIMEOUT_S
+    deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         job = client.get(f"{API}/jobs/{job_id}").json()
         if job.get("status") in ("completed", "failed"):
             return job
         time.sleep(2)
-    return {"status": "timeout", "error": f"job {job_id} did not finish in {_JOB_TIMEOUT_S}s"}
+    return {"status": "timeout", "error": f"job {job_id} did not finish in {timeout_s:g}s"}
 
 
 @mcp.tool()
@@ -1213,10 +1213,15 @@ def delete_vod_source(asset_id: str) -> dict:
     asset to free disk space. The asset row + any compilations made
     from it stay intact — you just can't re-cut from the source after.
 
-    Safety: this tool ONLY works on assets where source_origin =
-    'downloaded' (files pulled via ingest_vod_url). Manually placed
-    files (Outplayed recordings, hand-imported MP4s) are sacred and
-    refuse to delete via this path.
+    Safety: this tool ONLY works on assets where source_origin is
+    'downloaded' (files pulled via ingest_vod_url) or 'cloud' (pulled via
+    download_vod_from_cloud). Manually placed files (Outplayed recordings,
+    hand-imported MP4s) are sacred and refuse to delete via this path.
+    A 'cloud' file is only deleted while its cloud copy is intact (same
+    size), so it can always be pulled again; otherwise it refuses (409).
+
+    Cleanup after a cloud pull: once the user is done rendering a pulled
+    game, call this on its asset_id to free the disk space.
 
     Use case: after a 1+ hour Twitch VOD has been compiled into a
     highlight reel, the 4GB source is dead weight. This frees that.
@@ -1253,6 +1258,83 @@ def split_vod_into_games(asset_id: str) -> dict:
     with _client() as c:
         job_id = c.post(f"{API}/assets/{asset_id}/split").json()["job_id"]
         return _wait_for_job(c, job_id)
+
+
+@mcp.tool()
+def upload_vod_to_cloud(asset_id: str) -> dict:
+    """Back up ONE raw recording to the cloud (Supabase Storage, private
+    `outplayed` bucket). Nothing is ever uploaded automatically — use this
+    when the user says a game is worth keeping ("upload the Jhin game",
+    "save that VOD to the cloud"). Find the asset id with `list_assets`.
+
+    The file keeps its folder layout: `League of Legends/<session>/<file>.mp4`.
+    The local file is only read, never changed or deleted. Re-uploading an
+    unchanged VOD is a no-op ("already uploaded").
+
+    Refuses if the upload would push total cloud storage past the budget
+    (100 GB by default) — suggest `remove_vod_from_cloud` on a weaker game.
+
+    VODs are multi-GB, so this waits up to 3 minutes. If the result is
+    `status: "timeout"` the upload is STILL RUNNING in the background — tell
+    the user, and check later with `get_job(job_id)`; do not re-submit.
+    On success `output_path` is `outplayed:<key>`.
+    """
+    with _client() as c:
+        job_id = c.post(f"{API}/assets/{asset_id}/cloud").json()["job_id"]
+        job = _wait_for_job(c, job_id, timeout_s=180)
+        job.setdefault("job_id", job_id)
+        return job
+
+
+@mcp.tool()
+def list_cloud_vods() -> dict:
+    """List the raw VODs backed up in the cloud, with size, upload time and
+    the matching local `asset_id` (null if that recording isn't indexed
+    here). Also returns `used_bytes` (all cloud buckets) and `budget_gb`,
+    so you can tell the user how much room is left."""
+    with _client() as c:
+        return c.get(f"{API}/cloud/vods").json()
+
+
+@mcp.tool()
+def download_vod_from_cloud(key: str) -> dict:
+    """Pull a raw VOD from the cloud onto THIS machine so the normal
+    pipeline (candidates, analyze, story/montage render) can run on it.
+    Use when the user says "pull the Jhin game" / "grab that VOD from the
+    cloud". Get `key` from `list_cloud_vods` — entries with `asset_id: null`
+    are in the cloud but not on this machine.
+
+    The file lands at the same relative path under the local Outplayed
+    folder and is indexed automatically (no separate scan needed). A VOD
+    that's already here at the same size is not downloaded again.
+
+    Processing straight from the cloud isn't supported: the pipeline reads
+    the whole file several times, so download once, work, then clean up.
+
+    Waits up to 3 minutes; on `status: "timeout"` the download is STILL
+    RUNNING — check later with `get_job(job_id)`, don't re-submit. On
+    success `output_path` is the asset id.
+
+    CLEANUP: when the user is done with this game, call
+    `delete_vod_source(asset_id)` to delete the local copy (the cloud copy
+    stays). Remind the user if they move on without cleaning up.
+    """
+    with _client() as c:
+        job_id = c.post(f"{API}/cloud/vods/pull", json={"key": key}).json()["job_id"]
+        job = _wait_for_job(c, job_id, timeout_s=180)
+        job.setdefault("job_id", job_id)
+        return job
+
+
+@mcp.tool()
+def remove_vod_from_cloud(asset_id: str) -> dict:
+    """Delete a recording's CLOUD copy only (e.g. it was uploaded by mistake
+    or to make room under the budget). The local file on disk is NOT
+    touched. This cannot be undone for the cloud copy — confirm with the
+    user which game it is before calling. Returns `{removed: false}` if it
+    wasn't in the cloud."""
+    with _client() as c:
+        return c.delete(f"{API}/assets/{asset_id}/cloud").json()
 
 
 @mcp.tool()
