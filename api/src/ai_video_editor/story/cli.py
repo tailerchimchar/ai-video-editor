@@ -164,7 +164,13 @@ def load_early(asset_id: str, timeline: RiotTimeline, src: str) -> list[EarlySeg
         return segments
     back = first_back_s(raw, timeline.owner_pid, timeline.offset_s)
     try:
-        return confirm_early(src, segments, first_back_s=back, backend=_early_backend(asset_id))
+        return confirm_early(
+            src,
+            segments,
+            first_back_s=back,
+            backend=_early_backend(asset_id),
+            start_s=max(0.0, 45.0 + timeline.offset_s),  # recording seconds
+        )
     except Exception as e:
         _log.warning("early-game confirm failed for %s: %s", asset_id, e)
         return segments

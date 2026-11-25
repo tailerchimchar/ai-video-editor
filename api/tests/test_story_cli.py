@@ -324,8 +324,9 @@ def _early_main(ws, monkeypatch, argv=(), *, setting=True, cache=True, confirm=N
     if confirm is not None:
         mod = types.ModuleType("ai_video_editor.vlm.early_confirm")
 
-        def fake_confirm(video, segs, *, first_back_s, backend, fps=0.5):
+        def fake_confirm(video, segs, *, first_back_s, backend, fps=0.5, start_s=45.0):
             seen["confirm"] = (video, first_back_s)
+            seen["start_s"] = start_s
             return confirm(segs)
 
         mod.confirm_early = fake_confirm
@@ -339,6 +340,7 @@ def _early_main(ws, monkeypatch, argv=(), *, setting=True, cache=True, confirm=N
     path.write_text(GameModel().model_dump_json(), encoding="utf-8")
     tl = _one_kill_timeline()
     tl.owner_pid = 3
+    tl.offset_s = -17.0
     monkeypatch.setattr(cli, "load_timeline", lambda a: tl)
 
     def fake_plan(*a, **k):
@@ -374,6 +376,7 @@ def test_early_confirm_refines_when_available(ws, monkeypatch):
 
     seen = _early_main(ws, monkeypatch, confirm=refine)
     assert seen["confirm"] == ("C:/x.mp4", 200.0)
+    assert seen["start_s"] == 28.0  # 45 + offset -17
     assert seen["early"][0].confirmed and seen["early"][0].start_s == 40
 
 
