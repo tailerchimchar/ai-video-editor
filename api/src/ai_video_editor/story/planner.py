@@ -69,16 +69,37 @@ class Beat(BaseModel):
         return self
 
 
+EffectKind = Literal["letterbox", "slowmo", "zoom", "focus"]
+
+
+class ChapterEffect(BaseModel):
+    """An owner-requested effect over [start_s, end_s] (recording seconds,
+    inside its chapter). `params` per kind: letterbox `bar` (fraction of the
+    height per bar, default 0.12); slowmo `factor` (default 0.5 = half
+    speed); zoom `factor` (default 1.3) and `roi` (edits._ROI_PRESETS name,
+    default "center"); focus `x`, `y`, `radius`, `dim` as in edits.apply_focus."""
+
+    kind: EffectKind
+    start_s: float
+    end_s: float
+    params: dict[str, float | str] = {}
+
+
 class Chapter(BaseModel):
     title: str
     start_s: float
     end_s: float
+    # lane | fight | close | commentary | early | request (owner-added, never dropped)
     kind: str
     beats: list[str] = []
     play_id: str | None = None
     kill_times_s: list[float] = []
+    # Owner deaths (recording seconds), for the death sound; filled like kill_times_s.
+    death_times_s: list[float] = []
     # Item cutaways inside this chapter (ids and times only, no mic text).
     broll: list[BRollInsert] = []
+    # Owner-requested effects (story/requests.py), rendered by story/render.py.
+    effects: list[ChapterEffect] = []
 
 
 class StoryPlan(BaseModel):
