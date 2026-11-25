@@ -23,7 +23,9 @@ from typing import Literal
 
 from pydantic import BaseModel, model_validator
 
+from ..config import settings
 from ..highlights import FIGHT_POST_S, FIGHT_PRE_ALLY_DEATH_S, FIGHT_PRE_S
+from ..league.early_game import EarlySegment
 from ..league.lane_models import LaneSummary
 from ..league.play_models import GameModel, Play
 from ..league.riot_timeline import Fight, RiotTimeline, TimelineEvent, fights
@@ -316,6 +318,42 @@ def plan_story(
 PLAY_PRE_FALLBACK_S = 8.0
 PLAY_POST_FALLBACK_S = 3.0
 _UNRANKED = 10**6
+LATE_GAME_S = 20 * 60.0
+EARLY_MERGE_GAP_S = 4.0
+_EARLY_TITLES = {
+    "opening": "The opening",
+    "level3_trade": "Level 3 trade",
+    "jungle_move": "Jungle move",
+    "low_hp": "Close call",
+    "give_recall": "Giving up a recall",
+    "first_back": "First back",
+}
+
+
+def _early_chapters(early: list[EarlySegment], timeline: RiotTimeline) -> list[Chapter]:
+    """One `early` chapter per segment, in order; segments less than
+    EARLY_MERGE_GAP_S apart merge (the first one's title stays)."""
+    out: list[Chapter] = []
+    for s in sorted(early, key=lambda s: (s.start_s, s.end_s)):
+        if out and s.start_s - out[-1].end_s < EARLY_MERGE_GAP_S:
+            out[-1] = out[-1].model_copy(update={"end_s": max(out[-1].end_s, s.end_s)})
+        else:
+            out.append(
+                Chapter(
+                    title=_EARLY_TITLES.get(s.kind, "Early game"),
+                    start_s=round(max(0.0, s.start_s), 2),
+                    end_s=round(s.end_s, 2),
+                    kind="early",
+                )
+            )
+    for i, c in enumerate(out):
+        kills = [
+            e.t_rec_s
+            for e in timeline.events
+            if e.kind == "kill" and e.t_rec_s is not None and c.start_s <= e.t_rec_s <= c.end_s
+        ]
+        out[i] = c.model_copy(update={"kill_times_s": kills})
+    return [c for c in out if c.end_s > c.start_s]
 
 
 def _play_kind(p: Play) -> str:
@@ -324,9 +362,11 @@ def _play_kind(p: Play) -> str:
     return "close" if p.type == "closeout" else "fight"
 
 
-def _play_chapter(p: Play, timeline: RiotTimeline) -> Chapter | None:
+def _play_chapter(p: Play, timeline: RiotTimeline, lead_in_s: float = 0.0) -> Chapter | None:
     w = p.window
     start = w.approach_s if w.approach_s is not None else p.recording_time.first_kill_s - 8.0
+    if w.approach_s is not None and w.approach_s - timeline.offset_s > LATE_GAME_S:
+        start -= lead_in_s  # late fights read better with a longer run-up
     end = w.outcome_s if w.outcome_s is not None else p.recording_time.last_kill_s + 3.0
     start = max(0.0, start)
     if timeline.game_end_s is not None:
@@ -373,8 +413,14 @@ def plan_story_from_plays(
     mic_stream: int | None,
     max_s: float = 360.0,
     asset_id: str = "",
+    early: list[EarlySegment] | None = None,
 ) -> StoryPlan:
-    """One chapter per owner-involved play (no merging, no cap, no trimming),
+    """Early-game segments (`early`) open the story as `early` chapters and are
+    never dropped; they come out of the budget (the total may exceed `max_s`,
+    then `over_budget`). Plays with an approach after game 20:00 start
+    `settings.story_late_lead_in_s` earlier.
+
+    One chapter per owner-involved play (no merging, no cap, no trimming),
     in recording order; a chapter starts no earlier than the previous one's
     end (repeated footage reads as a defect). Over `max_s` whole chapters are
     dropped, least impressive first (never a close chapter); `over_budget`
@@ -384,19 +430,27 @@ def plan_story_from_plays(
         _log.warning("story: mic stream 0 is the game audio; using mixed audio")
         mic_stream = None
     rank_of = {p.id: p.impressive.rank for p in game.plays}
+    lead = settings.story_late_lead_in_s
     chapters = [
-        c for p in game.plays if p.owner.involved and (c := _play_chapter(p, timeline)) is not None
+        c
+        for p in game.plays
+        if p.owner.involved and (c := _play_chapter(p, timeline, lead)) is not None
     ]
     chapters.sort(key=lambda c: c.start_s)
+    early_chapters = _early_chapters(early, timeline) if early else []
     kept = list(chapters)
-    while _total(_no_overlap(kept)) > max_s:
+    while _total(_no_overlap(early_chapters + kept)) > max_s:
         droppable = [c for c in kept if c.kind != "close"]
         if not droppable:
-            _log.warning("story: close alone runs %.0fs > max %.0fs", _total(kept), max_s)
+            _log.warning(
+                "story: protected chapters alone run %.0fs > max %.0fs",
+                _total(early_chapters + kept),
+                max_s,
+            )
             break
         worst = max(droppable, key=lambda c: rank_of.get(c.play_id) or _UNRANKED)
         kept.remove(worst)
-    kept = _no_overlap(kept)
+    kept = _no_overlap(early_chapters + kept)
     total = _total(kept)
     return StoryPlan(
         asset_id=asset_id,

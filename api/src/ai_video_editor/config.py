@@ -83,6 +83,12 @@ class Settings(BaseSettings):
     play_sweep_enabled: bool = False
     story_transition_s: float = 0.25
     story_kill_sfx: bool = True
+    # Plays story: early-game chapters (league/early_game.py) always open it;
+    # late fights (game time > 20:00) start this many seconds earlier; the
+    # vision check (vlm/early_confirm.py) refines the early windows.
+    story_early_game: bool = True
+    story_late_lead_in_s: float = 5.0
+    story_early_confirm: bool = True
     montage_jump_cut_gap_s: float = 3.0
     story_game_audio_volume: float = 0.35
     # Owner mic tracks record very quiet (~-70 dB mean vs a -24 dB game mix);

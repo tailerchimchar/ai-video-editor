@@ -300,3 +300,86 @@ def test_no_plays_flag_forces_beats(ws, monkeypatch):
 def test_plays_flag_without_file_fails(ws, monkeypatch):
     seen = _plays_main(ws, monkeypatch, ["--plays"], drive=False, frozen=False)
     assert seen["rc"] == 2 and seen["path"] is None
+
+
+# --- early game (AVE-57) ---
+
+
+def _early_main(ws, monkeypatch, argv=(), *, setting=True, cache=True, confirm=None, want=None):
+    import sys
+    import types
+
+    from ai_video_editor.league.early_game import EarlySegment
+    from ai_video_editor.league.play_models import GameModel
+
+    seg = EarlySegment(kind="opening", start_s=30, end_s=100, reason="r")
+    monkeypatch.setattr(settings, "story_early_game", setting)
+    wants = want if want is not None else confirm is not None
+    monkeypatch.setattr(settings, "story_early_confirm", wants)
+    if cache:
+        _write(ws / "riot" / "a1" / "timeline.json", {"info": {"frames": []}})
+    monkeypatch.setattr(cli, "early_segments", lambda tl, raw: [seg])
+    monkeypatch.setattr(cli, "first_back_s", lambda raw, pid, off: 200.0)
+    seen: dict = {}
+    if confirm is not None:
+        mod = types.ModuleType("ai_video_editor.vlm.early_confirm")
+
+        def fake_confirm(video, segs, *, first_back_s, backend, fps=0.5, start_s=45.0):
+            seen["confirm"] = (video, first_back_s)
+            seen["start_s"] = start_s
+            return confirm(segs)
+
+        mod.confirm_early = fake_confirm
+        monkeypatch.setitem(sys.modules, "ai_video_editor.vlm.early_confirm", mod)
+        monkeypatch.setattr(cli, "_early_backend", lambda asset_id: object())
+    else:
+        monkeypatch.setitem(sys.modules, "ai_video_editor.vlm.early_confirm", None)
+    _write(ws / "panel" / "r1" / "gaming-expert.json", [])
+    path = ws / "plays" / "a1.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(GameModel().model_dump_json(), encoding="utf-8")
+    tl = _one_kill_timeline()
+    tl.owner_pid = 3
+    tl.offset_s = -17.0
+    monkeypatch.setattr(cli, "load_timeline", lambda a: tl)
+
+    def fake_plan(*a, **k):
+        seen["early"] = k.get("early")
+        return _empty_plan()
+
+    monkeypatch.setattr(cli, "plan_story_from_plays", fake_plan)
+    monkeypatch.setattr(cli, "render_story", lambda *a, **k: Path("story.mp4"))
+    argv = ["--asset", "a1", "--round", "r1", "--source", "C:/x.mp4", "--plays", *argv]
+    seen["rc"] = cli.main(argv)
+    return seen
+
+
+def test_early_segments_passed_to_planner(ws, monkeypatch):
+    seen = _early_main(ws, monkeypatch)
+    assert seen["rc"] == 0 and [s.kind for s in seen["early"]] == ["opening"]
+
+
+def test_no_early_flag_and_setting_disable(ws, monkeypatch):
+    assert _early_main(ws, monkeypatch, ["--no-early"])["early"] is None
+    assert _early_main(ws, monkeypatch, setting=False)["early"] is None
+
+
+def test_early_skipped_without_raw_timeline(ws, monkeypatch):
+    assert _early_main(ws, monkeypatch, cache=False)["early"] is None
+
+
+def test_early_confirm_refines_when_available(ws, monkeypatch):
+    from ai_video_editor.league.early_game import EarlySegment
+
+    def refine(segs):
+        return [EarlySegment(kind="opening", start_s=40, end_s=90, reason="r", confirmed=True)]
+
+    seen = _early_main(ws, monkeypatch, confirm=refine)
+    assert seen["confirm"] == ("C:/x.mp4", 200.0)
+    assert seen["start_s"] == 28.0  # 45 + offset -17
+    assert seen["early"][0].confirmed and seen["early"][0].start_s == 40
+
+
+def test_early_confirm_missing_module_is_skipped(ws, monkeypatch):
+    seen = _early_main(ws, monkeypatch, want=True)
+    assert seen["rc"] == 0 and seen["early"][0].start_s == 30

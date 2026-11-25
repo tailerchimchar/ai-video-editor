@@ -120,3 +120,82 @@ def test_chapter_inside_previous_one_is_dropped():
         make_play("b", approach=115, outcome=150),
     )
     assert [c.play_id for c in _plan(g).chapters] == ["a"]
+
+
+# --- early-game chapters (AVE-57) ---
+
+from ai_video_editor.config import settings  # noqa: E402
+from ai_video_editor.league.early_game import EarlySegment  # noqa: E402
+
+
+def _seg(kind, a, b):
+    return EarlySegment(kind=kind, start_s=a, end_s=b, reason="r")
+
+
+def test_early_chapters_first_with_templated_titles():
+    g = _game(make_play("a", approach=300, outcome=320))
+    plan = _plan(g, early=[_seg("first_back", 200, 220), _seg("opening", 30, 100)])
+    assert [(c.kind, c.start_s, c.end_s) for c in plan.chapters[:2]] == [
+        ("early", 30, 100),
+        ("early", 200, 220),
+    ]
+    assert plan.chapters[0].title == "The opening"
+    assert plan.chapters[1].title == "First back"
+    assert plan.chapters[2].play_id == "a"
+
+
+def test_early_gaps_under_4s_merge():
+    plan = _plan(_game(), early=[_seg("opening", 30, 100), _seg("level3_trade", 102, 130)])
+    assert [(c.start_s, c.end_s) for c in plan.chapters] == [(30, 130)]
+
+
+def test_early_never_dropped_under_budget_pressure():
+    g = _game(
+        make_play("a", approach=300, outcome=340, rank=1),
+        make_play("b", approach=400, outcome=440, rank=2),
+    )
+    plan = _plan(g, max_s=60, early=[_seg("opening", 30, 100)])
+    assert [c.kind for c in plan.chapters] == ["early"]
+    assert plan.over_budget
+
+
+def test_early_over_max_sets_over_budget():
+    plan = _plan(_game(make_play("a")), max_s=50, early=[_seg("opening", 30, 100)])
+    assert plan.chapters[0].kind == "early"
+    assert plan.over_budget
+
+
+def test_no_early_is_old_behaviour():
+    g = _game(make_play("a", approach=300, outcome=320))
+    assert _plan(g, early=None).chapters == _plan(g).chapters
+
+
+def test_late_lead_in_only_after_20_minutes_game_time(monkeypatch):
+    monkeypatch.setattr(settings, "story_late_lead_in_s", 5.0)
+    g = _game(
+        make_play("early", approach=1100, outcome=1110),
+        make_play("late", approach=1500, outcome=1510),
+    )
+    starts = {c.play_id: c.start_s for c in _plan(g).chapters}
+    assert starts == {"early": 1100, "late": 1495}
+
+
+def test_late_lead_in_uses_offset_for_game_time(monkeypatch):
+    monkeypatch.setattr(settings, "story_late_lead_in_s", 5.0)
+    tl = RiotTimeline("m", "high", 100.0, 3000.0, [], [])
+    g = _game(make_play("a", approach=1250, outcome=1260))  # game 1150 s: no lead-in
+    assert _plan(g, tl).chapters[0].start_s == 1250
+
+
+def test_late_lead_in_never_before_previous_chapter_end(monkeypatch):
+    monkeypatch.setattr(settings, "story_late_lead_in_s", 5.0)
+    g = _game(
+        make_play("a", approach=1300, outcome=1320),
+        make_play("b", approach=1322, outcome=1340),
+    )
+    assert [c.start_s for c in _plan(g).chapters] == [1295, 1320]
+
+
+def test_kill_times_kept_in_early_chapter():
+    plan = _plan(_game(), _tl([50.0, 500.0]), early=[_seg("opening", 30, 100)])
+    assert plan.chapters[0].kill_times_s == [50.0]
