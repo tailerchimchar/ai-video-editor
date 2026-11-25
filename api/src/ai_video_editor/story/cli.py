@@ -2,7 +2,7 @@
 into `plan_story` + `render_story`.
 
     story-render --asset ID --round <panel folder name or path> [--no-cards] [--out DIR]
-                 [--plays | --no-plays]
+                 [--plays | --no-plays] [--no-early]
 
 With `PLAYS_DRIVE_CUTS=true` and a frozen `WORKSPACE/plays/<asset>.json`,
 chapters come from the plays by default; `--plays` forces that path (and
@@ -26,6 +26,7 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from ..config import settings
+from ..league.early_game import EarlySegment, early_segments, first_back_s
 from ..league.lane import lane_summary_path, parse_lane_frames
 from ..league.lane_models import LaneMinute, LaneSummary
 from ..league.play_models import GameModel
@@ -136,6 +137,39 @@ def load_timeline(asset_id: str) -> RiotTimeline | None:
     return _from_cache(cached) if cached is not None else None
 
 
+def _early_backend(asset_id: str):
+    from ..league.understand import default_backend
+
+    return default_backend(asset_id, cap_usd=settings.game_understanding_budget_usd)
+
+
+def load_early(asset_id: str, timeline: RiotTimeline, src: str) -> list[EarlySegment] | None:
+    """Early-game segments from the cached raw timeline, refined by the vision
+    check (Task B) when `story_early_confirm` and that module exists. None when
+    there is no raw timeline or no owner."""
+    raw = _read_json(cache_dir_for(asset_id) / "timeline.json")
+    if not isinstance(raw, dict) or timeline.owner_pid is None:
+        return None
+    try:
+        segments = early_segments(timeline, raw)
+    except (KeyError, ValueError, TypeError) as e:
+        _log.warning("early-game segments unavailable for %s: %s", asset_id, e)
+        return None
+    if not (settings.story_early_confirm and segments):
+        return segments
+    try:
+        from ..vlm.early_confirm import confirm_early
+    except ImportError:
+        _log.info("story: early-game confirmer not available; using unconfirmed windows")
+        return segments
+    back = first_back_s(raw, timeline.owner_pid, timeline.offset_s)
+    try:
+        return confirm_early(src, segments, first_back_s=back, backend=_early_backend(asset_id))
+    except Exception as e:
+        _log.warning("early-game confirm failed for %s: %s", asset_id, e)
+        return segments
+
+
 def load_lane(asset_id: str) -> LaneSummary | None:
     """`lane.json` when present, else parsed from the cached match + timeline."""
     data = _read_json(lane_summary_path(asset_id))
@@ -196,6 +230,7 @@ def main(argv: list[str] | None = None) -> int:
     which = ap.add_mutually_exclusive_group()
     which.add_argument("--plays", action="store_true", help="chapters from the frozen plays file")
     which.add_argument("--no-plays", action="store_true", help="chapters from the panel beats")
+    ap.add_argument("--no-early", action="store_true", help="plays path: skip early-game chapters")
     ap.add_argument("--out", help="output dir (default WORKSPACE/story/<round>/)")
     ap.add_argument("--source", help="source video path (default: the asset's path)")
     ap.add_argument("--review", action="store_true", help="0.25 fps critic, $5 story budget")
@@ -219,12 +254,18 @@ def main(argv: list[str] | None = None) -> int:
             print(f"no plays file for asset {args.asset}: {plays_file}", file=sys.stderr)
             return 2
         game = GameModel.model_validate_json(plays_file.read_text(encoding="utf-8"))
+        early = (
+            load_early(args.asset, timeline, src)
+            if settings.story_early_game and not args.no_early
+            else None
+        )
         plan = plan_story_from_plays(
             game,
             timeline,
             mic_stream=load_mic_stream(args.asset),
             max_s=360.0,
             asset_id=args.asset,
+            early=early,
         )
     else:
         plan = plan_story(
@@ -243,7 +284,7 @@ def main(argv: list[str] | None = None) -> int:
     except StoryRenderError as e:
         print(f"story render failed: {e}", file=sys.stderr)
         return 1
-    budget = ", over_budget: lane + close alone exceed the max" if plan.over_budget else ""
+    budget = ", over_budget: protected chapters alone exceed the max" if plan.over_budget else ""
     print(
         f"{story} ({len(plan.chapters)} chapters, {plan.total_s:.0f}s, audio={plan.audio}{budget})"
     )
