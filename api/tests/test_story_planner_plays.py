@@ -155,14 +155,16 @@ def test_early_never_dropped_under_budget_pressure():
         make_play("b", approach=400, outcome=440, rank=2),
     )
     plan = _plan(g, max_s=60, early=[_seg("opening", 30, 100)])
-    assert [c.kind for c in plan.chapters] == ["early"]
-    assert plan.over_budget
+    # early rides on top of the plays budget: it never costs a play
+    assert [c.kind for c in plan.chapters] == ["early", "fight"]
+    assert [c.play_id for c in plan.chapters][1] == "a"
+    assert not plan.over_budget
 
 
-def test_early_over_max_sets_over_budget():
+def test_early_does_not_count_against_budget():
     plan = _plan(_game(make_play("a")), max_s=50, early=[_seg("opening", 30, 100)])
     assert plan.chapters[0].kind == "early"
-    assert plan.over_budget
+    assert plan.total_s > 50 and not plan.over_budget
 
 
 def test_no_early_is_old_behaviour():

@@ -419,8 +419,8 @@ def plan_story_from_plays(
     early: list[EarlySegment] | None = None,
 ) -> StoryPlan:
     """Early-game segments (`early`) open the story as `early` chapters and are
-    never dropped; they come out of the budget (the total may exceed `max_s`,
-    then `over_budget`). Plays with an approach after game 20:00 start
+    never dropped; they sit on top of the plays budget (the total may exceed
+    `max_s`; `over_budget` only when the plays alone do). Plays with an approach after game 20:00 start
     `settings.story_late_lead_in_s` earlier.
 
     One chapter per owner-involved play (no merging, no cap, no trimming),
@@ -442,17 +442,17 @@ def plan_story_from_plays(
     chapters.sort(key=lambda c: c.start_s)
     early_chapters = _early_chapters(early, timeline) if early else []
     kept = list(chapters)
-    while _total(_no_overlap(early_chapters + kept)) > max_s:
+    # The budget applies to the plays only: the early game rides on top of it,
+    # so adding it never costs a fight (owner 2026-11-25: early game always in,
+    # mid/late "ok for now").
+    while _total(_no_overlap(kept)) > max_s:
         droppable = [c for c in kept if c.kind != "close"]
         if not droppable:
-            _log.warning(
-                "story: protected chapters alone run %.0fs > max %.0fs",
-                _total(early_chapters + kept),
-                max_s,
-            )
+            _log.warning("story: close alone runs %.0fs > max %.0fs", _total(kept), max_s)
             break
         worst = max(droppable, key=lambda c: rank_of.get(c.play_id) or _UNRANKED)
         kept.remove(worst)
+    plays_total = _total(_no_overlap(kept))
     kept = _no_overlap(early_chapters + kept)
     total = _total(kept)
     return StoryPlan(
@@ -461,6 +461,6 @@ def plan_story_from_plays(
         total_s=total,
         mic_stream=mic_stream,
         audio="mic_over_game" if mic_stream is not None else "mixed",
-        over_budget=total > max_s,
+        over_budget=plays_total > max_s,
         cards=False,
     )

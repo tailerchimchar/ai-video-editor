@@ -76,8 +76,8 @@ def test_uncovered_runs_become_confirmed_segments(sampled):
     )
     new = [s for s in out if s.kind != "first_back"]
     assert [(s.kind, s.start_s, s.end_s, s.confirmed) for s in new] == [
-        ("opening", 46.0, 54.0, True),
-        ("level3_trade", 54.0, 60.0, True),
+        ("opening", 46.0, 56.0, True),  # vision-only runs last >= 10 s
+        ("level3_trade", 54.0, 64.0, True),
     ]
 
 
@@ -99,7 +99,7 @@ def test_late_bush_fight_is_not_opening(sampled):
     assert [s.kind for s in out if s.start_s > 100] == ["level3_trade"]
 
 
-def test_existing_overlap_confirmed_and_trimmed(sampled):
+def test_existing_overlap_confirmed_never_shrunk(sampled):
     states = ["laning"] * 10 + ["trade"] * 2 + ["laning"] * 3  # rec 65-67
     out = ec.confirm_early(
         "v.mp4",
@@ -108,15 +108,26 @@ def test_existing_overlap_confirmed_and_trimmed(sampled):
         backend=FakeBackend(_reply(states)),
     )
     assert [(s.kind, s.start_s, s.end_s, s.confirmed) for s in out] == [
-        ("level3_trade", 62.0, 70.0, True)
+        ("level3_trade", 50.0, 100.0, True)  # owner rule: Riot windows are the minimum
     ]
+
+
+def test_overlap_run_widens_segment(sampled):
+    states = ["laning"] * 2 + ["trade"] * 4  # rec 49-55, pad 3 -> 46-58
+    out = ec.confirm_early(
+        "v.mp4",
+        [_seg("opening", 50, 100)],
+        first_back_s=200.0,
+        backend=FakeBackend(_reply(states)),
+    )
+    assert [(s.kind, s.start_s, s.end_s) for s in out] == [("opening", 46.0, 100.0)]
 
 
 def test_first_back_confirmed_not_trimmed(sampled):
     states = ["laning"] * 70 + ["low_hp"]  # rec 185
     seg = _seg("first_back", 183, 208)
     out = ec.confirm_early("v.mp4", [seg], first_back_s=200.0, backend=FakeBackend(_reply(states)))
-    assert (out[0].start_s, out[0].end_s, out[0].confirmed) == (183, 208, True)
+    assert (out[0].start_s, out[0].end_s, out[0].confirmed) == (182, 208, True)  # widened only
 
 
 def test_unavailable_returns_input_unchanged(sampled, caplog):

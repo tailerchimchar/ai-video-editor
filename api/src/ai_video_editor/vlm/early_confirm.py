@@ -96,6 +96,9 @@ def _runs(frames: list[_FrameState], start_s: float, step: float) -> list[tuple[
     return runs
 
 
+MIN_VISION_SEGMENT_S = 10.0  # a vision-only run shorter than this reads as a flash cut
+
+
 def _bush_is_opening(t: float, segments: list[EarlySegment], start_s: float) -> bool:
     openings = [s.start_s for s in segments if s.kind == "opening"]
     limit = (
@@ -115,9 +118,11 @@ def _merge(
         hits = [s for s in out if s.start_s <= b and s.end_s >= a]
         if hits:
             for s in hits:
+                # Confirm and widen to the run, never shrink: the Riot-anchored
+                # windows (opening 0:50/1:00-2:00, first back, recall) are the
+                # owner's minimum early-game coverage (mentor 2026-11-25).
                 s.confirmed = True
-                if s.kind != "first_back":  # never cut the walk out of base
-                    s.start_s, s.end_s = max(s.start_s, lo), min(s.end_s, hi)
+                s.start_s, s.end_s = max(0.0, min(s.start_s, lo)), max(s.end_s, hi)
             continue
         kind = _RUN_KINDS[state]
         if state == "bush_fight" and not _bush_is_opening(a, segments, start_s):
@@ -125,8 +130,8 @@ def _merge(
         out.append(
             EarlySegment(
                 kind=kind,
-                start_s=lo,
-                end_s=hi,
+                start_s=max(0.0, lo),
+                end_s=max(hi, lo + MIN_VISION_SEGMENT_S),
                 reason=f"vision: {state} frames {a:.0f}s-{b:.0f}s",
                 confirmed=True,
             )
