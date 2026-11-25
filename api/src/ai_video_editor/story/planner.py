@@ -420,8 +420,8 @@ def plan_story_from_plays(
 ) -> StoryPlan:
     """Early-game segments (`early`) open the story as `early` chapters and are
     never dropped; they sit on top of the plays budget (the total may exceed
-    `max_s`; `over_budget` only when the plays alone do). Plays with an approach after game 20:00 start
-    `settings.story_late_lead_in_s` earlier.
+    `max_s`; `over_budget` only when the plays alone do). Plays with an
+    approach after game 20:00 start `settings.story_late_lead_in_s` earlier.
 
     One chapter per owner-involved play (no merging, no cap, no trimming),
     in recording order; a chapter starts no earlier than the previous one's
