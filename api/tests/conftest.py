@@ -88,6 +88,7 @@ def _pinned_settings(monkeypatch):
     monkeypatch.setattr(settings, "story_early_game", True)
     monkeypatch.setattr(settings, "story_late_lead_in_s", 5.0)
     monkeypatch.setattr(settings, "story_early_confirm", True)
+    monkeypatch.setattr(settings, "story_broll", True)
     monkeypatch.setattr(settings, "montage_jump_cut_gap_s", 3.0)
 
 

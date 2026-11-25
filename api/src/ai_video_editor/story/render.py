@@ -20,13 +20,15 @@ from ..config import settings
 from ..edits import apply_sfx
 from ..intros.config import IntroConfig, _TextLogoConfig
 from ..intros.render import render_intro
+from ..league.items import ItemInfo
 from ..sfx_library import kaching_path
 from ..vlm.watch_montage import WatchResult, save_critique, watch_montage
+from .broll import BRollInsert
 from .planner import Chapter, StoryPlan
 
 _log = logging.getLogger(__name__)
 
-__all__ = ["StoryRenderError", "WatchResult", "chapter_cmd", "render_story"]
+__all__ = ["StoryRenderError", "WatchResult", "broll_chapter_cmd", "chapter_cmd", "render_story"]
 
 WIDTH, HEIGHT, FPS = 1920, 1080, 30
 REVIEW_FPS = 0.25
@@ -118,6 +120,148 @@ def chapter_cmd(
         *_encode_opts(),
         out_path,
     ]
+
+
+# Item B-roll overlay: main icon top-left, below the HUD-safe margin; the
+# build-path components in a row under it, an up arrow between (components
+# build into the item).
+ICON_X, ICON_Y, ICON_PX = 48, 140, 96
+COMP_PX, COMP_GAP = 48, 8
+ARROW_H = 28
+MAX_COMPONENTS = 4
+_SCALE = f"scale={WIDTH}:{HEIGHT},setsar=1,fps={FPS}"
+
+# (main icon, component icons) per item id; None = no main icon on disk.
+IconPaths = dict[int, tuple[str | None, list[str]]]
+
+
+def _arrow(x_center: int, top: int) -> str:
+    """Up arrow (shaft + stepped head) drawn with drawbox; no font needed."""
+    box = "drawbox=x={x}:y={y}:w={w}:h={h}:color=white@0.9:t=fill"
+    head = [(16, 4), (10, 4), (4, 4)]  # widths from the base up
+    parts = [box.format(x=x_center - 2, y=top + 10, w=4, h=ARROW_H - 14)]
+    y = top + 10
+    for w, h in head:
+        y -= h
+        parts.append(box.format(x=x_center - w // 2, y=y, w=w, h=h))
+    return ",".join(parts)
+
+
+def broll_chapter_cmd(
+    asset_path: str,
+    start: float,
+    end: float,
+    out_path: str,
+    inserts: list[BRollInsert],
+    icons: IconPaths,
+    *,
+    mic_stream: int | None,
+    has_audio: bool = True,
+    fade_s: float = 0.0,
+) -> list[str]:
+    """One chapter with item cutaways. The video is the chapter footage cut
+    around each insert's window, the purchase footage (with the item icon and
+    build path overlaid) filling the window; the audio is the whole chapter's
+    original audio, so the narration plays over the cutaway."""
+    dur = round(end - start, 3)
+    ins_sorted = sorted(inserts, key=lambda i: i.mic_start_s)
+    head = [settings.ffmpeg_path, "-y", "-ss", str(start), "-to", str(end), "-i", asset_path]
+    extra: list[str] = []
+    n_in = 1
+    graph: list[str] = []
+    pieces: list[str] = []
+    gaps: list[tuple[float, float]] = []
+    cursor = 0.0
+    timeline: list[tuple[str, object]] = []
+    for ins in ins_sorted:
+        lo = round(max(0.0, ins.mic_start_s - start), 3)
+        hi = round(min(dur, ins.window_end_s - start), 3)
+        if lo > cursor:
+            timeline.append(("gap", (cursor, lo)))
+            gaps.append((cursor, lo))
+        timeline.append(("ins", ins))
+        cursor = hi
+    if cursor < dur:
+        timeline.append(("gap", (cursor, dur)))
+        gaps.append((cursor, dur))
+    if gaps:
+        outs = "".join(f"[s{j}]" for j in range(len(gaps)))
+        graph.append(f"[0:v]split={len(gaps)}{outs}")
+    g = 0
+    for k, (kind, item) in enumerate(timeline):
+        label = f"[p{k}]"
+        if kind == "gap":
+            a, b = item  # type: ignore[misc]
+            graph.append(f"[s{g}]trim=start={a}:end={b},setpts=PTS-STARTPTS,{_SCALE}{label}")
+            g += 1
+            pieces.append(label)
+            continue
+        ins: BRollInsert = item  # type: ignore[assignment]
+        idx = n_in
+        extra += ["-ss", str(ins.src_start_s), "-to", str(ins.src_end_s), "-i", asset_path]
+        n_in += 1
+        cur = f"[b{k}_0]"
+        graph.append(f"[{idx}:v]trim=duration={ins.dur_s},setpts=PTS-STARTPTS,{_SCALE}{cur}")
+        main, comps = icons.get(ins.item_id, (None, []))
+        layers: list[tuple[str, int, int, int]] = []
+        if main:
+            layers.append((main, ICON_PX, ICON_X, ICON_Y))
+            if ins.build_path and comps:
+                row_y = ICON_Y + ICON_PX + ARROW_H
+                for j, c in enumerate(comps[:MAX_COMPONENTS]):
+                    layers.append((c, COMP_PX, ICON_X + j * (COMP_PX + COMP_GAP), row_y))
+        for n, (path, px, x, y) in enumerate(layers):
+            extra += ["-loop", "1", "-t", str(ins.dur_s), "-i", path]
+            ic, nxt = f"[i{k}_{n}]", f"[b{k}_{n + 1}]"
+            graph.append(f"[{n_in}:v]scale={px}:{px},setsar=1,format=rgba{ic}")
+            graph.append(f"{cur}{ic}overlay={x}:{y}:eof_action=pass{nxt}")
+            n_in += 1
+            cur = nxt
+        if len(layers) > 1:
+            nxt = f"[b{k}_a]"
+            graph.append(f"{cur}{_arrow(ICON_X + ICON_PX // 2, ICON_Y + ICON_PX)}{nxt}")
+            cur = nxt
+        pieces.append(cur)
+    fades = (
+        f"fade=t=in:st=0:d={fade_s},fade=t=out:st={round(dur - fade_s, 3)}:d={fade_s}"
+        if fade_s > 0
+        else "null"
+    )
+    graph.append(f"{''.join(pieces)}concat=n={len(pieces)}:v=1:a=0,{fades}[v]")
+    video = ";".join(graph)
+    if not has_audio:
+        silent = ["-f", "lavfi", "-t", str(dur), "-i", SILENT_AUDIO]
+        maps = ["-filter_complex", video, "-map", "[v]", "-map", f"{n_in}:a"]
+        return [*head, *extra, *silent, *maps, *_encode_opts(), out_path]
+    return [
+        *head,
+        *extra,
+        "-filter_complex",
+        f"{video};{audio_filter(mic_stream, dur=dur, fade_s=fade_s)}",
+        "-map",
+        "[v]",
+        "-map",
+        "[a]",
+        *_encode_opts(),
+        out_path,
+    ]
+
+
+def icon_paths(inserts: list[BRollInsert], items: dict[int, ItemInfo] | None) -> IconPaths:
+    """Icons on disk for each insert's item (missing files are skipped)."""
+    out: IconPaths = {}
+    for ins in inserts:
+        it = (items or {}).get(ins.item_id)
+        if it is None:
+            continue
+        main = it.icon_path.as_posix() if it.icon_path.is_file() else None
+        comps = [
+            items[c].icon_path.as_posix()
+            for c in it.from_ids
+            if c in items and items[c].icon_path.is_file()
+        ]
+        out[ins.item_id] = (main, comps)
+    return out
 
 
 def _probe_audio_count(path: str) -> int | None:
@@ -220,9 +364,12 @@ def render_story(
     *,
     cards: bool = True,
     review: bool = False,
+    items: dict[int, ItemInfo] | None = None,
 ) -> Path:
     """Write `out_dir/story.json`, `out_dir/parts/` and `out_dir/story.mp4`.
-    With `review`, also `out_dir/critique.md`. Raises StoryRenderError."""
+    With `review`, also `out_dir/critique.md`. Chapters carrying `broll`
+    inserts render with item cutaways (icons from `items`). Raises
+    StoryRenderError."""
     out_dir = Path(out_dir)
     parts_dir = out_dir / "parts"
     parts_dir.mkdir(parents=True, exist_ok=True)
@@ -245,15 +392,19 @@ def render_story(
             _render_card(ch.title, card)
             parts.append(card.as_posix())
         part = parts_dir / f"chapter_{i:02d}.mp4"
-        cmd = chapter_cmd(
-            asset_path,
-            ch.start_s,
-            ch.end_s,
-            part.as_posix(),
-            mic_stream=mic,
-            has_audio=has_audio,
-            fade_s=fade_s,
-        )
+        common = {"mic_stream": mic, "has_audio": has_audio, "fade_s": fade_s}
+        if ch.broll:
+            cmd = broll_chapter_cmd(
+                asset_path,
+                ch.start_s,
+                ch.end_s,
+                part.as_posix(),
+                ch.broll,
+                icon_paths(ch.broll, items),
+                **common,
+            )
+        else:
+            cmd = chapter_cmd(asset_path, ch.start_s, ch.end_s, part.as_posix(), **common)
         ok, err = _run_ffmpeg(cmd, chapter_timeout(ch.start_s, ch.end_s))
         if not ok:
             raise StoryRenderError(f"chapter {i} ({ch.title!r}) failed: {err}")

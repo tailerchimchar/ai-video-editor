@@ -29,6 +29,7 @@ from ..league.early_game import EarlySegment
 from ..league.lane_models import LaneSummary
 from ..league.play_models import GameModel, Play
 from ..league.riot_timeline import Fight, RiotTimeline, TimelineEvent, fights
+from .broll import BRollInsert
 
 _log = logging.getLogger(__name__)
 
@@ -76,6 +77,8 @@ class Chapter(BaseModel):
     beats: list[str] = []
     play_id: str | None = None
     kill_times_s: list[float] = []
+    # Item cutaways inside this chapter (ids and times only, no mic text).
+    broll: list[BRollInsert] = []
 
 
 class StoryPlan(BaseModel):

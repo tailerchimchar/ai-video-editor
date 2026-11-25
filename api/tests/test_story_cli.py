@@ -89,7 +89,7 @@ def test_main_wires_plan_and_render(ws, tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "asset_path", lambda asset_id: "C:/src.mp4")
     seen = {}
 
-    def fake_render(src, plan, out_dir, *, cards, review):
+    def fake_render(src, plan, out_dir, *, cards, review, **_):
         seen.update(src=src, plan=plan, out_dir=out_dir, cards=cards, review=review)
         return Path(out_dir) / "story.mp4"
 
@@ -264,7 +264,7 @@ def _plays_main(ws, monkeypatch, argv, *, drive: bool, frozen: bool):
         cli, "plan_story_from_plays", lambda *a, **k: seen.update(path="plays") or _empty_plan()
     )
 
-    def fake_render(src, plan, out_dir, *, cards, review):
+    def fake_render(src, plan, out_dir, *, cards, review, **_):
         seen["cards"] = cards
         return Path("story.mp4")
 
@@ -383,3 +383,56 @@ def test_early_confirm_refines_when_available(ws, monkeypatch):
 def test_early_confirm_missing_module_is_skipped(ws, monkeypatch):
     seen = _early_main(ws, monkeypatch, want=True)
     assert seen["rc"] == 0 and seen["early"][0].start_s == 30
+
+
+# --- item B-roll (AVE-58) ---
+
+
+def _broll_main(ws, monkeypatch, argv=(), *, setting=True):
+    from ai_video_editor.league.items import ItemInfo
+    from ai_video_editor.story.planner import Chapter, StoryPlan
+
+    monkeypatch.setattr(settings, "story_broll", setting)
+    _write(ws / "panel" / "r1" / "gaming-expert.json", [])
+    purchase = {"type": "ITEM_PURCHASED", "participantId": 3, "itemId": 3032, "timestamp": 500000}
+    _write(ws / "riot" / "a1" / "timeline.json", {"info": {"frames": [{"events": [purchase]}]}})
+    tl = _one_kill_timeline()
+    tl.owner_pid = 3
+    tl.offset_s = -17.0
+    monkeypatch.setattr(cli, "load_timeline", lambda a: tl)
+    monkeypatch.setattr(cli, "load_lane", lambda a: None)
+    seen: dict = {"rows": 0}
+
+    def rows(db, asset_id):
+        seen["rows"] += 1
+        return [{"text": "yun tal", "start_seconds": 600.0, "end_seconds": 604.0}]
+
+    items = {3032: ItemInfo(id=3032, name="Yun Tal Wildarrows", icon_path=Path("3032.png"))}
+    monkeypatch.setattr(cli, "owner_rows", rows)
+    monkeypatch.setattr(cli, "load_items", lambda: items)
+    chapter = Chapter(title="a", start_s=590.0, end_s=620.0, kind="fight")
+    plan = StoryPlan(chapters=[chapter], total_s=30.0, mic_stream=2, audio="mic_over_game")
+    monkeypatch.setattr(cli, "plan_story", lambda *a, **k: plan)
+
+    def fake_render(src, plan, out_dir, **k):
+        seen["plan"], seen["items"] = plan, k.get("items")
+        return Path("story.mp4")
+
+    monkeypatch.setattr(cli, "render_story", fake_render)
+    seen["rc"] = cli.main(["--asset", "a1", "--round", "r1", "--source", "C:/x.mp4", *argv])
+    return seen
+
+
+def test_broll_inserts_reach_the_render(ws, monkeypatch):
+    seen = _broll_main(ws, monkeypatch)
+    assert seen["rc"] == 0
+    (ins,) = seen["plan"].chapters[0].broll
+    assert (ins.item_id, ins.mic_start_s, ins.src_start_s) == (3032, 600.0, 481.0)  # 500-17-2
+    assert 3032 in seen["items"]
+
+
+def test_broll_off_by_setting_or_flag(ws, monkeypatch):
+    seen = _broll_main(ws, monkeypatch, setting=False)
+    assert seen["rows"] == 0 and seen["plan"].chapters[0].broll == []
+    seen = _broll_main(ws, monkeypatch, ["--no-broll"])
+    assert seen["rows"] == 0 and seen["plan"].chapters[0].broll == []

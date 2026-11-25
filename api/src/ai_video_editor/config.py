@@ -89,6 +89,9 @@ class Settings(BaseSettings):
     story_early_game: bool = True
     story_late_lead_in_s: float = 5.0
     story_early_confirm: bool = True
+    # Item B-roll (story/broll.py): when the owner names an item on the mic,
+    # cut the video to that purchase with the item icon + build path.
+    story_broll: bool = True
     montage_jump_cut_gap_s: float = 3.0
     story_game_audio_volume: float = 0.35
     # Owner mic tracks record very quiet (~-70 dB mean vs a -24 dB game mix);

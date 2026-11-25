@@ -2,7 +2,7 @@
 into `plan_story` + `render_story`.
 
     story-render --asset ID --round <panel folder name or path> [--no-cards] [--out DIR]
-                 [--plays | --no-plays] [--no-early]
+                 [--plays | --no-plays] [--no-early] [--no-broll]
 
 With `PLAYS_DRIVE_CUTS=true` and a frozen `WORKSPACE/plays/<asset>.json`,
 chapters come from the plays by default; `--plays` forces that path (and
@@ -26,12 +26,15 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from ..config import settings
+from ..grokbot.voice import owner_rows
 from ..league.early_game import EarlySegment, early_segments, first_back_s
+from ..league.items import ItemInfo, load_items, owner_purchases
 from ..league.lane import lane_summary_path, parse_lane_frames
 from ..league.lane_models import LaneMinute, LaneSummary
 from ..league.play_models import GameModel
 from ..league.riot_timeline import RiotTimeline, _from_cache, cache_dir_for, load_cached
 from ..refs import normalize_clip_ref
+from .broll import BRollInsert, place_broll, plan_broll
 from .planner import Beat, plan_story, plan_story_from_plays
 from .render import StoryRenderError, render_story
 
@@ -176,6 +179,37 @@ def load_early(asset_id: str, timeline: RiotTimeline, src: str) -> list[EarlySeg
         return segments
 
 
+def load_broll(
+    asset_id: str, timeline: RiotTimeline
+) -> tuple[list[BRollInsert], dict[int, ItemInfo]]:
+    """Item cutaways from the owner's mic lines and purchases. Empty (never
+    fatal) without a raw timeline, an owner, purchases, mic rows or items.
+    Mic text is only matched against item names, never kept or logged."""
+    raw = _read_json(cache_dir_for(asset_id) / "timeline.json")
+    if not isinstance(raw, dict) or timeline.owner_pid is None:
+        return [], {}
+    try:
+        purchases = owner_purchases(raw, timeline.owner_pid, timeline.offset_s)
+    except (KeyError, ValueError, TypeError) as e:
+        _log.warning("story broll: purchases unavailable for %s: %s", asset_id, e)
+        return [], {}
+    if not purchases:
+        return [], {}
+    try:
+        rows = owner_rows(Path(settings.database_path), asset_id)
+    except sqlite3.Error as e:
+        _log.warning("story broll: mic rows unavailable for %s: %s", asset_id, e)
+        return [], {}
+    if not rows:
+        return [], {}
+    items = load_items()
+    if not items:
+        return [], {}
+    inserts = plan_broll(rows, purchases, items)
+    _log.info("story broll: %d item inserts for %s", len(inserts), asset_id)
+    return inserts, items
+
+
 def load_lane(asset_id: str) -> LaneSummary | None:
     """`lane.json` when present, else parsed from the cached match + timeline."""
     data = _read_json(lane_summary_path(asset_id))
@@ -237,6 +271,7 @@ def main(argv: list[str] | None = None) -> int:
     which.add_argument("--plays", action="store_true", help="chapters from the frozen plays file")
     which.add_argument("--no-plays", action="store_true", help="chapters from the panel beats")
     ap.add_argument("--no-early", action="store_true", help="plays path: skip early-game chapters")
+    ap.add_argument("--no-broll", action="store_true", help="skip item purchase cutaways")
     ap.add_argument("--out", help="output dir (default WORKSPACE/story/<round>/)")
     ap.add_argument("--source", help="source video path (default: the asset's path)")
     ap.add_argument("--review", action="store_true", help="0.25 fps critic, $5 story budget")
@@ -282,10 +317,20 @@ def main(argv: list[str] | None = None) -> int:
             card_s=0.0 if args.no_cards else settings.story_card_seconds,
             asset_id=args.asset,
         )
+    items: dict[int, ItemInfo] = {}
+    if settings.story_broll and not args.no_broll:
+        inserts, items = load_broll(args.asset, timeline)
+        if inserts:
+            plan = place_broll(plan, inserts, items)
     out_dir = Path(args.out) if args.out else Path(settings.workspace_dir) / "story" / rnd.name
     try:
         story = render_story(
-            src, plan, out_dir, cards=not args.no_cards and not use_plays, review=args.review
+            src,
+            plan,
+            out_dir,
+            cards=not args.no_cards and not use_plays,
+            review=args.review,
+            items=items,
         )
     except StoryRenderError as e:
         print(f"story render failed: {e}", file=sys.stderr)
