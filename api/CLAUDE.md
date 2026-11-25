@@ -244,6 +244,31 @@ Rules:
 - Keys: `SUPABASE_S3_*` in `.env` only. Supabase Vault doesn't help here
   (reading it needs DB credentials).
 
+### New game flow (VOD → video → Drive)
+
+Every game goes through all of these; a story render alone is not a
+finished round. Run heavy steps **one at a time** (the laptop has ~1 GB
+free with the owner's apps open) and log a memory audit under
+`WORKSPACE/audits/memory/<date>_<game>/`.
+
+1. VOD local + asset row (pull from Supabase if it came from the PC).
+2. `POST /assets/{id}/transcribe` (full audio) and `/transcribe-mic`.
+3. `POST /assets/{id}/candidates` (also caches the Riot match/timeline) →
+   `/rank` → `/highlights` (cuts clips into `highlights/<game>/<session>`).
+4. `league-understand --asset <id>` → `WORKSPACE/plays/<id>.json`.
+5. Panel round `WORKSPACE/panel/<YYYY-MM-DD_HHMM_champ_K-D-A>/`: brief →
+   gaming/viewer/editing experts in parallel → mentor chairs →
+   `clips.json` + `panel-decision.md`.
+6. `story-render --asset <id> --round <round> --plays`.
+7. Owner watches the story; fixes are recorded with `mentor_record_correction`.
+8. Drive: `grokbot-publish-round <round> --game league --asset-id <id>
+   --clips-dir <highlights session>` (clips + digest v3) and the story
+   under `renders/story/<round>/`. Publishing emits `round.published`, which
+   wakes the Grok bots: while they are frozen, run it with
+   `GROKBOT_WEBHOOK_URL=` empty and send the event later.
+9. Month pool → monthly montage (royalty-free music only, once the
+   precision gate passes).
+
 ## Persistence: SQLite now, Postgres later
 
 SQLite (raw SQL via aiosqlite) is the current store — zero-setup,

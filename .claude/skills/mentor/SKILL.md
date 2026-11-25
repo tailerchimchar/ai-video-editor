@@ -127,6 +127,9 @@ Examples the pipeline has already learned (kept as living log):
   `suggested_fix` / `fix_seconds` so the loop can shift/extend, not
   just drop.
 
+- 2026-11-25 (League, story video): Zeri story v3 was "rly rly good" but had NO early game. Rule: a League story video always opens with the early game. Start at ~0:50 if both bot lanes fight over the bush, else 1:00 through ~2:00 (levels 1–2). Also keep any heavy level-3 trade or scuttle fight, a give-and-recall for an item (e.g. Cull), a move into the jungle, and being chunked low from early trades. The owner's **first back** is always in the video. Mid/late game is fine as is; late fights may want more lead-in context.
+- 2026-11-25 (League, narration): when the owner narrates a decision ("went Yun Tal because it scales better than Kraken Slayer"), the matching footage belongs under it: the purchase in the shop / walking out of base, and optionally the build path and an item image on screen.
+
 ## The corrections flywheel — `mentor_record_correction`
 
 When Noodlz corrects the pipeline in chat ("kills off by 1s", "the
