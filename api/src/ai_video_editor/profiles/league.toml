@@ -181,3 +181,12 @@ hype_cues = [
 # Use for streamer names + terms Whisper turns into common english.
 [transcription.name_aliases]
 "Noodlz" = ["noodles", "noodle", "neuro", "needles", "newdles"]
+
+
+# ----- Narration camera box (fractions of the frame) -----
+# Bottom-right corner just above the minimap (starts at y~0.71 on 1080p).
+[camera]
+anchor = "bottom_right"
+x = 0.99
+y = 0.70
+width_frac = 0.18

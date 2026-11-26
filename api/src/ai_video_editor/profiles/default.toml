@@ -13,3 +13,10 @@ default_aspect = "16:9"
 [regions]
 
 [sounds]
+
+# Narration camera box default for games without their own block.
+[camera]
+anchor = "top_left"
+x = 0.02
+y = 0.06
+width_frac = 0.18
