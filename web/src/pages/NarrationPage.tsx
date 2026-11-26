@@ -7,6 +7,7 @@ import { ExportPanel } from "@/components/narration/ExportPanel";
 import { RecordControls } from "@/components/narration/RecordControls";
 import { TakeTimeline } from "@/components/narration/TakeTimeline";
 import { VideoPlayer } from "@/components/VideoPlayer";
+import { VideoSwitcher } from "@/components/VideoSwitcher";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -68,11 +69,14 @@ function NarrationWorkspace({ target }: { target: TargetRef }) {
   );
 
   const backLink = (
-    <Link to="/">
-      <Button variant="ghost" size="sm">
-        ← home
-      </Button>
-    </Link>
+    <>
+      <VideoSwitcher kind={target.kind} videoKey={target.key} />
+      <Link to="/">
+        <Button variant="ghost" size="sm">
+          ← home
+        </Button>
+      </Link>
+    </>
   );
 
   if (narration.session.isError) {
