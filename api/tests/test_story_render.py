@@ -38,6 +38,12 @@ def _plan(mic: int | None = 2, chapters: list[Chapter] | None = None) -> StoryPl
 
 
 @pytest.fixture
+def no_levelling(monkeypatch):
+    """For tests counting chapter encodes: skip the final loudness pass."""
+    monkeypatch.setattr(render, "level_audio", lambda story: None)
+
+
+@pytest.fixture
 def fake_ffmpeg(monkeypatch, tmp_path):
     """Capture every ffmpeg argv/timeout, every card config and the concat list."""
     calls: dict[str, list] = {"ffmpeg": [], "cards": [], "concat": []}
@@ -244,6 +250,7 @@ def test_chapter_cmd_without_audio_uses_a_silent_track():
     assert maps == ["[v]", "1:a"]
 
 
+@pytest.mark.usefixtures("no_levelling")
 def test_render_probes_audio_once_and_goes_video_only(fake_ffmpeg, monkeypatch, tmp_path):
     probes = []
     monkeypatch.setattr(render, "_probe_audio_count", lambda p: probes.append(p) or 0)
@@ -260,6 +267,7 @@ def test_render_keeps_audio_when_probe_is_unknown(fake_ffmpeg, monkeypatch, tmp_
     assert all("anullsrc=r=48000:cl=stereo" not in c for c, _ in fake_ffmpeg["ffmpeg"])
 
 
+@pytest.mark.usefixtures("no_levelling")
 def test_mic_stream_missing_from_source_falls_back_to_game_audio(
     fake_ffmpeg, monkeypatch, tmp_path
 ):
@@ -268,3 +276,33 @@ def test_mic_stream_missing_from_source_falls_back_to_game_audio(
     for cmd, _ in fake_ffmpeg["ffmpeg"]:
         fc = cmd[cmd.index("-filter_complex") + 1]
         assert "[0:a:2]" not in fc and "[0:a:0]anull[a]" in fc
+
+
+def test_loudnorm_cmd_copies_video_and_levels_audio():
+    cmd = render.loudnorm_cmd("story.mp4", "story.level.mp4")
+    assert cmd[cmd.index("-c:v") + 1] == "copy"
+    assert cmd[cmd.index("-af") + 1] == render.LOUDNORM_FILTER
+    assert "I=-16" in render.LOUDNORM_FILTER
+    assert cmd[cmd.index("-i") + 1] == "story.mp4" and cmd[-1] == "story.level.mp4"
+
+
+def test_story_audio_is_levelled_after_concat(fake_ffmpeg, tmp_path):
+    out = render.render_story("src.mp4", _plan(), tmp_path / "out", cards=False)
+    last_cmd, _ = fake_ffmpeg["ffmpeg"][-1]
+    assert render.LOUDNORM_FILTER in last_cmd
+    assert last_cmd[last_cmd.index("-i") + 1] == out.as_posix()
+    assert out.is_file() and not out.with_name("story.level.mp4").exists()
+
+
+def test_levelling_failure_raises_and_cleans_up(fake_ffmpeg, monkeypatch, tmp_path):
+    def run(cmd, timeout):
+        if render.LOUDNORM_FILTER in cmd:
+            Path(cmd[-1]).write_bytes(b"half")
+            return False, "loudnorm boom"
+        Path(cmd[-1]).write_bytes(b"x")
+        return True, None
+
+    monkeypatch.setattr(render, "_run_ffmpeg", run)
+    with pytest.raises(render.StoryRenderError, match="loudnorm boom"):
+        render.render_story("src.mp4", _plan(), tmp_path / "out", cards=False)
+    assert not (tmp_path / "out" / "story.level.mp4").exists()

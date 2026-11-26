@@ -12,6 +12,13 @@ from ai_video_editor.story import render
 from ai_video_editor.story.broll import BRollInsert
 from ai_video_editor.story.planner import Chapter, StoryPlan
 
+
+@pytest.fixture(autouse=True)
+def _no_audio_levelling(monkeypatch):
+    """The final loudness pass is tested in test_story_render.py; skip it here."""
+    monkeypatch.setattr(render, "level_audio", lambda story: None)
+
+
 YUN_TAL, BF, DAGGER = 3032, 1038, 1042
 
 

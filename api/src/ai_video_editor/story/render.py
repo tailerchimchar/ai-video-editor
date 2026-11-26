@@ -474,6 +474,51 @@ def _probe_audio_count(path: str) -> int | None:
         return None
 
 
+# Recordings differ by 15 dB or more (Zeri 2026-11-23 came in at about
+# -49 dB where Jhin was -34 dB), so every story is levelled to one
+# loudness: EBU R128 at -16 LUFS, the usual target for online video.
+LOUDNORM_FILTER = "loudnorm=I=-16:TP=-1.5:LRA=11"
+
+
+def loudnorm_cmd(src: str, out_path: str) -> list[str]:
+    """Level the audio of a finished story; the video stream is copied."""
+    return [
+        "ffmpeg",
+        "-y",
+        "-v",
+        "error",
+        "-i",
+        src,
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a:0",
+        "-c:v",
+        "copy",
+        "-af",
+        LOUDNORM_FILTER,
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-ar",
+        "48000",
+        "-movflags",
+        "+faststart",
+        out_path,
+    ]
+
+
+def level_audio(story: Path) -> None:
+    """Replace `story` with its loudness-levelled copy. Raises StoryRenderError."""
+    tmp = story.with_name(story.stem + ".level.mp4")
+    ok, err = _run_ffmpeg(loudnorm_cmd(story.as_posix(), tmp.as_posix()), chapter_timeout(0, 3600))
+    if not ok:
+        tmp.unlink(missing_ok=True)
+        raise StoryRenderError(f"audio levelling failed: {err}")
+    tmp.replace(story)
+
+
 def chapter_timeout(start: float, end: float) -> float:
     return 60 + 3 * (end - start)
 
@@ -680,6 +725,7 @@ def render_story(
     ok, err = _concat(parts, story.as_posix())
     if not ok:
         raise StoryRenderError(f"concat failed: {err}")
+    level_audio(story)
     if review:
         _review(story, plan, out_dir)
     return story

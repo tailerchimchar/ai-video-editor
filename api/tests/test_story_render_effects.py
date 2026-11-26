@@ -16,6 +16,12 @@ from ai_video_editor.story import render
 from ai_video_editor.story.planner import Chapter, ChapterEffect, StoryPlan
 
 
+@pytest.fixture(autouse=True)
+def _no_audio_levelling(monkeypatch):
+    """The final loudness pass is tested in test_story_render.py; skip it here."""
+    monkeypatch.setattr(render, "level_audio", lambda story: None)
+
+
 def _fx(kind, start, end, **params):
     return ChapterEffect(kind=kind, start_s=start, end_s=end, params=params)
 
