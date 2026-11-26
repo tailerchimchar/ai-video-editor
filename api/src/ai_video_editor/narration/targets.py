@@ -41,6 +41,10 @@ class NarrationTarget(Protocol):
         """Browser URL of the video (under the `/workspace` static mount)."""
         ...
 
+    def list_keys(self) -> list[str]:
+        """Keys whose video exists, newest first."""
+        ...
+
 
 _REGISTRY: dict[str, NarrationTarget] = {}
 
@@ -58,6 +62,11 @@ def get_target(kind: str) -> NarrationTarget:
         return _REGISTRY[kind]
     except KeyError:
         raise UnknownTargetError(f"unknown narration kind: {kind!r}") from None
+
+
+def registered_targets() -> list[NarrationTarget]:
+    """Every registered target, in registration order."""
+    return list(_REGISTRY.values())
 
 
 def fingerprint(path: Path) -> str:
@@ -96,6 +105,21 @@ class StoryRoundTarget:
 
     def video_url(self, key: str) -> str:
         return f"/workspace/story/{_checked_key(key)}/{self._VIDEO_NAME}"
+
+    def list_keys(self) -> list[str]:
+        """Round folders that hold a story.mp4 (skipping `_*`), newest first.
+        Keys start with their date, so a reverse name sort is newest first."""
+        root = Path(settings.workspace_dir) / "story"
+        if not root.is_dir():
+            return []
+        keys = [
+            p.name
+            for p in root.iterdir()
+            if not p.name.startswith("_")
+            and re.fullmatch(KEY_PATTERN, p.name)
+            and (p / self._VIDEO_NAME).is_file()
+        ]
+        return sorted(keys, reverse=True)
 
 
 def default_targets() -> list[NarrationTarget]:

@@ -47,6 +47,9 @@ class FakeTarget:
     def video_url(self, key: str) -> str:
         return f"/fake/{key}.mp4"
 
+    def list_keys(self) -> list[str]:
+        return []
+
 
 def test_story_registered_by_default():
     assert get_target("story").kind == "story"
@@ -102,3 +105,28 @@ def test_fingerprint_changes_on_rewrite(tmp_path):
     f.write_bytes(b"bbbbbb")
     os.utime(f, ns=(1, 1))
     assert fingerprint(f) != a
+
+
+def test_story_list_keys(ws):
+    story = ws / "story"
+    for name, has_video in [
+        ("2026-11-20_2001_jhin_8-2-13", True),
+        ("2026-11-23_2056_zeri_8-7-12", True),
+        ("_demo", True),
+        ("2026-11-25_0900_novideo_1-1-1", False),
+    ]:
+        (story / name).mkdir(parents=True)
+        if has_video:
+            (story / name / "story.mp4").write_bytes(b"x")
+    (story / "stray.txt").write_text("x")
+    keys = StoryRoundTarget().list_keys()
+    assert keys == ["2026-11-23_2056_zeri_8-7-12", "2026-11-20_2001_jhin_8-2-13"]
+
+
+def test_story_list_keys_no_story_folder(ws):
+    assert StoryRoundTarget().list_keys() == []
+
+
+def test_registered_targets_lists_registry(clean_registry):
+    register_target(FakeTarget())
+    assert "fake" in [t.kind for t in targets.registered_targets()]

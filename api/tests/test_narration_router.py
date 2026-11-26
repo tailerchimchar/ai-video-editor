@@ -38,6 +38,11 @@ class FakeTarget:
     def video_url(self, key: str) -> str:
         return f"/workspace/fake/{key}/video.mp4"
 
+    def list_keys(self) -> list[str]:
+        if not self.root.is_dir():
+            return []
+        return sorted(p.name for p in self.root.iterdir() if (p / "video.mp4").is_file())
+
 
 @pytest.fixture
 def video(sandbox, monkeypatch) -> Path:
