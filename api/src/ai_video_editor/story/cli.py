@@ -3,6 +3,7 @@ into `plan_story` + `render_story`.
 
     story-render --asset ID --round <panel folder name or path> [--no-cards] [--out DIR]
                  [--plays | --no-plays] [--no-early] [--no-broll] [--no-requests]
+                 [--fresh-vision]
 
 With `PLAYS_DRIVE_CUTS=true` and a frozen `WORKSPACE/plays/<asset>.json`,
 chapters come from the plays by default; `--plays` forces that path (and
@@ -38,6 +39,7 @@ from ..league.play_models import GameModel
 from ..league.riot_timeline import RiotTimeline, _from_cache, cache_dir_for, load_cached
 from ..refs import normalize_clip_ref
 from .broll import BRollInsert, place_broll, plan_broll
+from .early_cache import CACHE_FILENAME, early_cache_key, read_early_cache, write_early_cache
 from .planner import Beat, plan_story, plan_story_from_plays
 from .render import StoryRenderError, render_story
 from .requests import apply_requests, load_requests
@@ -150,10 +152,14 @@ def _early_backend(asset_id: str):
     return default_backend(asset_id, cap_usd=settings.game_understanding_budget_usd)
 
 
-def load_early(asset_id: str, timeline: RiotTimeline, src: str) -> list[EarlySegment] | None:
+def load_early(
+    asset_id: str, timeline: RiotTimeline, src: str, *, fresh_vision: bool = False
+) -> list[EarlySegment] | None:
     """Early-game segments from the cached raw timeline, refined by the vision
-    check (Task B) when `story_early_confirm` and that module exists. None when
-    there is no raw timeline or no owner."""
+    check (Task B) when `story_early_confirm` and that module exists. The
+    confirmed result is cached per asset (`early_cache`) so re-renders agree;
+    `fresh_vision` bypasses and refreshes it. None when there is no raw
+    timeline or no owner."""
     raw = _read_json(cache_dir_for(asset_id) / "timeline.json")
     if not isinstance(raw, dict) or timeline.owner_pid is None:
         return None
@@ -170,17 +176,28 @@ def load_early(asset_id: str, timeline: RiotTimeline, src: str) -> list[EarlySeg
         _log.info("story: early-game confirmer not available; using unconfirmed windows")
         return segments
     back = first_back_s(raw, timeline.owner_pid, timeline.offset_s)
+    backend = _early_backend(asset_id)
+    backend_id = f"{getattr(backend, 'name', '')}:{getattr(backend, 'model', '')}"
+    key = early_cache_key(segments, back, backend_id, timeline.offset_s)
+    cache_path = cache_dir_for(asset_id) / CACHE_FILENAME
+    if not fresh_vision:
+        hit = read_early_cache(cache_path, key)
+        if hit is not None:
+            return hit
     try:
-        return confirm_early(
+        confirmed = confirm_early(
             src,
             segments,
             first_back_s=back,
-            backend=_early_backend(asset_id),
+            backend=backend,
             start_s=max(0.0, 45.0 + timeline.offset_s),  # recording seconds
         )
     except Exception as e:
         _log.warning("early-game confirm failed for %s: %s", asset_id, e)
         return segments
+    if any(seg.confirmed for seg in confirmed):  # confirm_early swallows failures: don't pin those
+        write_early_cache(cache_path, key, confirmed)
+    return confirmed
 
 
 def load_broll(
@@ -279,6 +296,7 @@ def render_round(
     no_early: bool = False,
     no_broll: bool = False,
     no_requests: bool = False,
+    fresh_vision: bool = False,
     out: str | None = None,
     source: str | None = None,
     review: bool = False,
@@ -305,7 +323,7 @@ def render_round(
             raise StoryInputError(f"no plays file for asset {asset_id}: {plays_file}")
         game = GameModel.model_validate_json(plays_file.read_text(encoding="utf-8"))
         early = (
-            load_early(asset_id, timeline, src)
+            load_early(asset_id, timeline, src, fresh_vision=fresh_vision)
             if settings.story_early_game and not no_early
             else None
         )
@@ -363,6 +381,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--no-early", action="store_true", help="plays path: skip early-game chapters")
     ap.add_argument("--no-broll", action="store_true", help="skip item purchase cutaways")
     ap.add_argument("--no-requests", action="store_true", help="ignore the owner's requests.json")
+    ap.add_argument(
+        "--fresh-vision", action="store_true", help="re-run the early-game vision check"
+    )
     ap.add_argument("--out", help="output dir (default WORKSPACE/story/<round>/)")
     ap.add_argument("--source", help="source video path (default: the asset's path)")
     ap.add_argument("--review", action="store_true", help="0.25 fps critic, $5 story budget")
@@ -376,6 +397,7 @@ def main(argv: list[str] | None = None) -> int:
             no_early=args.no_early,
             no_broll=args.no_broll,
             no_requests=args.no_requests,
+            fresh_vision=args.fresh_vision,
             out=args.out,
             source=args.source,
             review=args.review,
