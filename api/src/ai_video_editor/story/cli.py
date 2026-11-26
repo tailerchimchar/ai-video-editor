@@ -23,6 +23,7 @@ import json
 import logging
 import sqlite3
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -265,6 +266,92 @@ def round_dir(round_arg: str) -> Path:
     return p if p.is_dir() else Path(settings.workspace_dir) / "panel" / round_arg
 
 
+class StoryInputError(Exception):
+    """A missing input (timeline, asset, plays file, bad requests.json)."""
+
+
+def render_round(
+    asset_id: str,
+    round: str,
+    *,
+    plays: bool | None = None,
+    no_cards: bool = False,
+    no_early: bool = False,
+    no_broll: bool = False,
+    no_requests: bool = False,
+    out: str | None = None,
+    source: str | None = None,
+    review: bool = False,
+    say: Callable[[str], None] = _log.info,
+) -> Path:
+    """Plan and render one round's story; shared by the CLI and the API job.
+
+    `plays`: True forces the frozen plays file (error without it), False forces
+    the panel beats, None follows `PLAYS_DRIVE_CUTS`. Raises `StoryInputError`
+    for missing inputs and `StoryRenderError` for a failed render."""
+    rnd = round_dir(round)
+    timeline = load_timeline(asset_id)
+    if timeline is None:
+        raise StoryInputError(f"no usable Riot timeline cached for asset {asset_id}")
+    src = source or asset_path(asset_id)
+    if not src:
+        raise StoryInputError(f"asset {asset_id} not found; pass --source")
+    plays_file = Path(settings.workspace_dir) / "plays" / f"{asset_id}.json"
+    use_plays = bool(plays) or (
+        plays is None and settings.plays_drive_cuts and plays_file.is_file()
+    )
+    if use_plays:
+        if not plays_file.is_file():
+            raise StoryInputError(f"no plays file for asset {asset_id}: {plays_file}")
+        game = GameModel.model_validate_json(plays_file.read_text(encoding="utf-8"))
+        early = (
+            load_early(asset_id, timeline, src)
+            if settings.story_early_game and not no_early
+            else None
+        )
+        plan = plan_story_from_plays(
+            game,
+            timeline,
+            mic_stream=load_mic_stream(asset_id),
+            max_s=360.0,
+            asset_id=asset_id,
+            early=early,
+        )
+    else:
+        plan = plan_story(
+            timeline,
+            load_beats(rnd),
+            load_lane(asset_id),
+            mic_stream=load_mic_stream(asset_id),
+            card_s=0.0 if no_cards else settings.story_card_seconds,
+            asset_id=asset_id,
+        )
+    items: dict[int, ItemInfo] = {}
+    if settings.story_broll and not no_broll:
+        inserts, items = load_broll(asset_id, timeline)
+        if inserts:
+            plan = place_broll(plan, inserts, items)
+    out_dir = Path(out) if out else Path(settings.workspace_dir) / "story" / rnd.name
+    if not no_requests:
+        try:
+            plan, warnings = apply_requests(plan, load_requests(out_dir), timeline)
+        except ValueError as e:
+            raise StoryInputError(f"story requests: {e}") from e
+        for w in warnings:
+            say(f"story requests: {w}")
+    story = render_story(
+        src,
+        plan,
+        out_dir,
+        cards=not no_cards and not use_plays,
+        review=review,
+        items=items,
+    )
+    budget = ", over_budget: protected chapters alone exceed the max" if plan.over_budget else ""
+    say(f"{story} ({len(plan.chapters)} chapters, {plan.total_s:.0f}s, audio={plan.audio}{budget})")
+    return Path(story)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="story-render", description=__doc__.splitlines()[0])
     ap.add_argument("--asset", required=True, help="asset id")
@@ -280,77 +367,26 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--source", help="source video path (default: the asset's path)")
     ap.add_argument("--review", action="store_true", help="0.25 fps critic, $5 story budget")
     args = ap.parse_args(argv)
-
-    rnd = round_dir(args.round)
-    timeline = load_timeline(args.asset)
-    if timeline is None:
-        print(f"no usable Riot timeline cached for asset {args.asset}", file=sys.stderr)
-        return 2
-    src = args.source or asset_path(args.asset)
-    if not src:
-        print(f"asset {args.asset} not found; pass --source", file=sys.stderr)
-        return 2
-    plays_file = Path(settings.workspace_dir) / "plays" / f"{args.asset}.json"
-    use_plays = args.plays or (
-        not args.no_plays and settings.plays_drive_cuts and plays_file.is_file()
-    )
-    if use_plays:
-        if not plays_file.is_file():
-            print(f"no plays file for asset {args.asset}: {plays_file}", file=sys.stderr)
-            return 2
-        game = GameModel.model_validate_json(plays_file.read_text(encoding="utf-8"))
-        early = (
-            load_early(args.asset, timeline, src)
-            if settings.story_early_game and not args.no_early
-            else None
-        )
-        plan = plan_story_from_plays(
-            game,
-            timeline,
-            mic_stream=load_mic_stream(args.asset),
-            max_s=360.0,
-            asset_id=args.asset,
-            early=early,
-        )
-    else:
-        plan = plan_story(
-            timeline,
-            load_beats(rnd),
-            load_lane(args.asset),
-            mic_stream=load_mic_stream(args.asset),
-            card_s=0.0 if args.no_cards else settings.story_card_seconds,
-            asset_id=args.asset,
-        )
-    items: dict[int, ItemInfo] = {}
-    if settings.story_broll and not args.no_broll:
-        inserts, items = load_broll(args.asset, timeline)
-        if inserts:
-            plan = place_broll(plan, inserts, items)
-    out_dir = Path(args.out) if args.out else Path(settings.workspace_dir) / "story" / rnd.name
-    if not args.no_requests:
-        try:
-            plan, warnings = apply_requests(plan, load_requests(out_dir), timeline)
-        except ValueError as e:
-            print(f"story requests: {e}", file=sys.stderr)
-            return 2
-        for w in warnings:
-            print(f"story requests: {w}")
     try:
-        story = render_story(
-            src,
-            plan,
-            out_dir,
-            cards=not args.no_cards and not use_plays,
+        render_round(
+            args.asset,
+            args.round,
+            plays=True if args.plays else (False if args.no_plays else None),
+            no_cards=args.no_cards,
+            no_early=args.no_early,
+            no_broll=args.no_broll,
+            no_requests=args.no_requests,
+            out=args.out,
+            source=args.source,
             review=args.review,
-            items=items,
+            say=print,
         )
+    except StoryInputError as e:
+        print(e, file=sys.stderr)
+        return 2
     except StoryRenderError as e:
         print(f"story render failed: {e}", file=sys.stderr)
         return 1
-    budget = ", over_budget: protected chapters alone exceed the max" if plan.over_budget else ""
-    print(
-        f"{story} ({len(plan.chapters)} chapters, {plan.total_s:.0f}s, audio={plan.audio}{budget})"
-    )
     return 0
 
 

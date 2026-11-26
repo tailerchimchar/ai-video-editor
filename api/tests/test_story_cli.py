@@ -485,3 +485,19 @@ def test_invalid_requests_file_fails_before_render(ws, monkeypatch, capsys):
     assert seen["rc"] == 2
     assert "plan" not in seen
     assert "request #1" in capsys.readouterr().err
+
+
+def test_render_round_returns_path_and_raises_typed_errors(ws, monkeypatch):
+    tl = _one_kill_timeline()
+    monkeypatch.setattr(cli, "load_timeline", lambda a: tl)
+    monkeypatch.setattr(cli, "load_lane", lambda a: None)
+    monkeypatch.setattr(cli, "render_story", lambda *a, **k: Path("story.mp4"))
+    lines: list[str] = []
+    out = cli.render_round("a1", "r1", plays=False, source="C:/x.mp4", say=lines.append)
+    assert out == Path("story.mp4")
+    assert lines and "chapters" in lines[-1]
+    with pytest.raises(cli.StoryInputError, match="plays file"):
+        cli.render_round("a1", "r1", plays=True, source="C:/x.mp4")
+    monkeypatch.setattr(cli, "load_timeline", lambda a: None)
+    with pytest.raises(cli.StoryInputError, match="timeline"):
+        cli.render_round("a1", "r1", source="C:/x.mp4")
