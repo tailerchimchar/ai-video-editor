@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import ClassVar, Protocol, runtime_checkable
 
 
-class UnknownTarget(LookupError):
+class UnknownTargetError(LookupError):
     """No registered kind, or the key does not resolve to a video."""
 
 
@@ -20,7 +20,7 @@ class NarrationTarget(Protocol):
     kind: ClassVar[str]
 
     def video_path(self, key: str) -> Path:
-        """The video the owner narrates over. Raises UnknownTarget."""
+        """The video the owner narrates over. Raises UnknownTargetError."""
         ...
 
     def work_dir(self, key: str) -> Path:
