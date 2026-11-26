@@ -27,7 +27,8 @@ class EffectChoice(str, Enum):
 class Candidate(BaseModel):
     """One moment worth asking the panel about. `facts` is the whole state
     the panel sees (keys: minute, kills, deaths, numbers, outnumbered_win,
-    multikill, objective, is_last_fight, enemy_champions): champions only,
+    multikill, objective, is_last_fight, enemy_champions, outcome,
+    owner_role): champions only,
     never mic text or summoner names. `anchor_s` (game clock, not shown to
     the panel) is the owner kill a slow-mo centres on, when there is one."""
 

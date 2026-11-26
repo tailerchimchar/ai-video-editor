@@ -17,7 +17,11 @@ _STATE = (
     "game, told chronologically): game minute, the owner's kills and deaths, "
     'team numbers like "4v5" (owner side first), whether the owner\'s team won '
     "it a player down, the longest multikill chain, an objective taken right "
-    "after, whether it is the last fight of the game, and the enemy champions."
+    "after, whether it is the last fight of the game, the enemy champions, "
+    "whether the owner's team won, lost or traded the fight evenly (outcome), "
+    "and what the owner did in it (owner_role: initiator_kill = the owner "
+    "started it with a kill, follow_up, caught_first = the owner was caught "
+    "and died first, absent)."
 )
 
 _MENTOR = (
@@ -47,8 +51,10 @@ VIEWER_PROMPT = (
 EDITOR_PROMPT = (
     f"{_STATE}\n\nYou are the editing-expert. Pick the one effect this moment "
     "should get, from what the renderer can do today. Know where slow-mo helps "
-    "and where it kills momentum. Most moments get none; effects are for the "
-    f"few that carry the story.\n\n{_MENTOR}"
+    "and where it kills momentum. A story video gets 3 to 6 effects in "
+    "total, so roughly one moment in three gets one: the fights the owner "
+    "started or won, the last fight, multikills. Pick none for routine or lost "
+    f"moments.\n\n{_MENTOR}"
 )
 
 EFFECT_DESCRIPTIONS: dict[str, str] = {

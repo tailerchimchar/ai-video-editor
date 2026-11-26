@@ -4,8 +4,9 @@ suggestions.
 Order by play score x viewer "pop" probability (0.5 when the viewer had no
 opinion); drop `none`; keep at most one letterbox_focus (the best-ranked:
 in practice the last or biggest fight); no two suggestions overlap; every
-span is clamped inside its chapter (dropped when nothing is left). Fewer than
-MIN_ITEMS is fine when the candidates run out.
+span is clamped inside its chapter (dropped when nothing is left). When the
+panel picks fewer than MIN_ITEMS, the best-ranked remaining candidates are
+topped up (`topup_effect`); fewer is fine only when those run out too.
 """
 
 from __future__ import annotations
@@ -56,39 +57,74 @@ def _overlaps(a: tuple[float, float], b: tuple[float, float]) -> bool:
     return a[0] < b[1] and b[0] < a[1]
 
 
+def topup_effect(c: Candidate) -> EffectChoice:
+    """The effect a top-up pick gets: the last fight goes cinematic, a fight
+    with an owner kill gets slow-mo on that kill; anything else is skipped."""
+    if c.facts.get("is_last_fight"):
+        return EffectChoice.letterbox_focus
+    if c.anchor_s is not None:
+        return EffectChoice.slowmo
+    return EffectChoice.none
+
+
+def _try_add(
+    kept: list[SuggestionItem],
+    c: Candidate,
+    v: Verdict,
+    effect: EffectChoice,
+    chapter_spans: dict[int, tuple[float, float]],
+    why: str,
+) -> bool:
+    if effect is EffectChoice.none:
+        return False
+    if effect is EffectChoice.letterbox_focus and any(
+        i.kind == EffectChoice.letterbox_focus.value for i in kept
+    ):
+        return False
+    start, end, params = effect_span(effect, c)
+    lo, hi = chapter_spans.get(c.chapter_index, (start, end))
+    start, end = max(start, lo), min(end, hi)
+    if end <= start or any(_overlaps((start, end), (i.start_s, i.end_s)) for i in kept):
+        return False
+    kept.append(
+        SuggestionItem(
+            id=f"s-{c.id}-{effect.value}",
+            kind=effect.value,
+            chapter_index=c.chapter_index,
+            start_s=start,
+            end_s=end,
+            params=params,
+            reason=why,
+            play_score=v.score if v.score_p is not None else None,
+            pop_p=v.pop_p,
+            backend=v.backend,
+        )
+    )
+    return True
+
+
 def rank(
     scored: list[Scored],
     chapter_spans: dict[int, tuple[float, float]],
     max_items: int = MAX_ITEMS,
+    min_items: int = MIN_ITEMS,
 ) -> list[SuggestionItem]:
     ordered = sorted(scored, key=lambda cv: (-_value(cv[1]), cv[0].start_s))
     kept: list[SuggestionItem] = []
+    used: set[str] = set()
     for c, v in ordered:
         if len(kept) >= max_items:
             break
-        if v.effect is EffectChoice.none:
-            continue
-        if v.effect is EffectChoice.letterbox_focus and any(
-            i.kind == EffectChoice.letterbox_focus.value for i in kept
-        ):
-            continue
-        start, end, params = effect_span(v.effect, c)
-        lo, hi = chapter_spans.get(c.chapter_index, (start, end))
-        start, end = max(start, lo), min(end, hi)
-        if end <= start or any(_overlaps((start, end), (i.start_s, i.end_s)) for i in kept):
-            continue
-        kept.append(
-            SuggestionItem(
-                id=f"s-{c.id}-{v.effect.value}",
-                kind=v.effect.value,
-                chapter_index=c.chapter_index,
-                start_s=start,
-                end_s=end,
-                params=params,
-                reason=reason(c, v),
-                play_score=v.score if v.score_p is not None else None,
-                pop_p=v.pop_p,
-                backend=v.backend,
-            )
-        )
+        if _try_add(kept, c, v, v.effect, chapter_spans, reason(c, v)):
+            used.add(c.id)
+    # The owner asked for 3-6 moments: when the panel picks fewer, top up
+    # from the best-ranked candidates it passed on, labelled as top-ups.
+    for c, v in ordered:
+        if len(kept) >= min_items:
+            break
+        if c.id not in used:
+            effect = topup_effect(c)
+            why = f"top-up ({effect.value}; panel picked fewer than {min_items}) · {reason(c, v)}"
+            if _try_add(kept, c, v, effect, chapter_spans, why):
+                used.add(c.id)
     return kept

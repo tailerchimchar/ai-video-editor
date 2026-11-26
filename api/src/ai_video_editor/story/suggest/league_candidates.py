@@ -140,6 +140,10 @@ def _candidate(
         "objective": _objective(tl, fight, play),
         "is_last_fight": False,
         "enemy_champions": _enemies(fight.events),
+        # From the plays file (None when this fight has no play): won/lost/even
+        # and what the owner did (initiator_kill, follow_up, caught_first, absent).
+        "outcome": play.result.outcome if play is not None else None,
+        "owner_role": play.owner.role if play is not None else None,
     }
     return Candidate(
         id=f"c{index}-{round(start)}",

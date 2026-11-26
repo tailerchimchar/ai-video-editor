@@ -123,6 +123,8 @@ def test_facts_keys_are_exactly_the_contract_and_carry_no_text():
         "objective",
         "is_last_fight",
         "enemy_champions",
+        "outcome",
+        "owner_role",
     }
     assert "you" not in str(c.facts) and "ally" not in str(c.facts)
 

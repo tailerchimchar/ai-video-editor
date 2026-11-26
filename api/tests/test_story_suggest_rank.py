@@ -81,7 +81,37 @@ def test_cap_at_six():
     assert len(rank(scored, WIDE)) == 6
 
 
-def test_fewer_than_three_is_fine():
+def test_panel_picking_none_everywhere_is_topped_up_to_three():
+    # Real Jhin run 2026-11-25: Jev said "none" for all 13 fights.
+    none = EffectChoice.none
+    scored = [
+        (_cand("k1", 100, 110, anchor=105), _v(none, score=2, pop_p=0.3)),
+        (_cand("quiet", 200, 210, kills=0), _v(none, score=2, pop_p=0.9)),
+        (_cand("k2", 300, 310, anchor=305), _v(none, score=2, pop_p=0.2)),
+        (_cand("last", 400, 420, anchor=410, is_last_fight=True), _v(none, score=3, pop_p=0.2)),
+    ]
+    out = rank(scored, WIDE)
+    assert [(i.id, i.kind) for i in out] == [
+        ("s-last-letterbox_focus", "letterbox_focus"),
+        ("s-k1-slowmo", "slowmo"),
+        ("s-k2-slowmo", "slowmo"),
+    ]
+    assert all(i.reason.startswith("top-up (") for i in out)
+
+
+def test_top_up_never_replaces_panel_picks_and_stops_at_three():
+    scored = [
+        (_cand("a", 100, 110, anchor=105), _v(EffectChoice.zoom, score=4, pop_p=0.9)),
+        (_cand("b", 200, 210, anchor=205), _v(EffectChoice.none, score=2, pop_p=0.5)),
+        (_cand("c", 300, 310, anchor=305), _v(EffectChoice.none, score=2, pop_p=0.4)),
+        (_cand("d", 400, 410, anchor=405), _v(EffectChoice.none, score=2, pop_p=0.3)),
+    ]
+    out = rank(scored, WIDE)
+    assert [i.id for i in out] == ["s-a-zoom", "s-b-slowmo", "s-c-slowmo"]
+    assert not out[0].reason.startswith("top-up")
+
+
+def test_fewer_than_three_is_fine_when_nothing_can_be_topped_up():
     assert len(rank([(_cand("a", 1, 5), _v(EffectChoice.zoom))], WIDE)) == 1
     assert rank([], WIDE) == []
 

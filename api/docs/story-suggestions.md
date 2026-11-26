@@ -34,7 +34,8 @@ story/<round>/suggestions.json  ──>  owner ticks  ──>  apply  ──>  r
 | `defaults.py` | Rules fallback: last fight → letterbox_focus (score 5), outnumbered win → slowmo (4), multikill ≥3 → 4, multikill 2 → zoom (3), else none (2) |
 | `verdict.py` | Reads the 3 answers; a `rules` answer or probability 0 is **no opinion** |
 | `params.py` | Default spans/params: letterbox `{bar: 0.12}` + focus `{}`; slowmo `{factor: 0.5}` over ≤2.5 s around the owner's kill; zoom `{factor: 1.3, roi: "center"}` |
-| `rank.py` | score × pop probability (0.5 without opinion), drop `none`, one letterbox_focus, no overlaps, inside the chapter, max 6; builds `reason` |
+| `placement.py` | where an item starts in the rendered story.mp4 (`video_s`, for "jump there"): title card + chapter footage, slow-mo stretched |
+| `rank.py` | score × pop probability (0.5 without opinion), drop `none`, one letterbox_focus, no overlaps, inside the chapter, max 6; when the panel picks fewer than 3, tops up from the best-ranked rest (last fight → letterbox_focus, a fight with an owner kill → slowmo; reason starts `top-up (`); builds `reason` |
 | `engine.py` | `SuggestionEngine` protocol; `JevPanelEngine` |
 | `store.py` | `SuggestionStore` protocol; `FileSuggestionStore` (`suggestions.json`, atomic writes) |
 | `apply.py` | Accepted items → `story.requests.Effect` (letterbox_focus = letterbox + focus), duplicates skipped, status `applied` |
