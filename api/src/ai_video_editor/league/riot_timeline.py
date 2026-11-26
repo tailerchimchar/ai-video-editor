@@ -305,6 +305,27 @@ def cache_dir_for(asset_id: str) -> Path:
     return Path(settings.workspace_dir) / "riot" / asset_id
 
 
+HUD_SOURCE = "hud"
+
+
+def _stored_meta(cache_dir: Path) -> dict | None:
+    try:
+        meta = json.loads((cache_dir / "meta.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return meta if isinstance(meta, dict) else None
+
+
+def hud_offset(cache_dir: Path) -> float | None:
+    """The stored offset when it was measured off the HUD (`riot-hud-sync`),
+    else None. A HUD measurement is ground truth: fetches and calibration
+    never overwrite it (Yunara 2026-11-26: a re-run reset +8.2 s to -17)."""
+    meta = _stored_meta(cache_dir)
+    if meta and meta.get("offset_source") == HUD_SOURCE and meta.get("offset_s") is not None:
+        return float(meta["offset_s"])
+    return None
+
+
 def save_cache(
     cache_dir: Path,
     match: dict,
@@ -318,6 +339,13 @@ def save_cache(
 ) -> None:
     """Write the three cache files. `riot_id` is stored so a changed
     RIOT_ID invalidates the entry."""
+    previous = _stored_meta(cache_dir)
+    if (
+        previous
+        and previous.get("match_id") == match_id
+        and previous.get("offset_source") == HUD_SOURCE
+    ):
+        offset_s, offset_source = float(previous["offset_s"]), HUD_SOURCE
     cache_dir.mkdir(parents=True, exist_ok=True)
     (cache_dir / "match.json").write_text(json.dumps(match), encoding="utf-8")
     (cache_dir / "timeline.json").write_text(json.dumps(timeline), encoding="utf-8")
@@ -359,14 +387,16 @@ def record_offset(
 ) -> None:
     """Store the final calibrated offset (and how it was obtained) in an
     existing cache entry, overwriting any earlier value including a
-    `sync_only` one, so later `load_or_fetch` callers get recording seconds
-    that match the clips. No-op when nothing is cached."""
+    `sync_only` one (but a `hud` one only with another `hud` one), so later
+    `load_or_fetch` callers get recording seconds that match the clips. No-op when nothing is cached."""
     d = cache_dir or cache_dir_for(asset_id)
     path = d / "meta.json"
     try:
         meta = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return
+    if meta.get("offset_source") == HUD_SOURCE and source != HUD_SOURCE:
+        return  # a HUD measurement is only replaced by a new HUD measurement
     meta["offset_s"] = float(offset_s)
     if source is not None:
         meta["offset_source"] = source
