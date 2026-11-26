@@ -6,6 +6,7 @@ tags: [moc]
 ## Story video
 - [[Story format]]
 - [[Opening runs to the first back]]
+- [[Skip quiet laning, keep heavy trades]]
 - [[Early fight start]]
 - [[Show the dive setup]]
 - [[Show how an outnumbered fight started]]

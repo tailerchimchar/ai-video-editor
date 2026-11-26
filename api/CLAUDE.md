@@ -260,6 +260,11 @@ free with the owner's apps open) and log a memory audit under
    gaming/viewer/editing experts in parallel → mentor chairs →
    `clips.json` + `panel-decision.md`.
 6. `story-render --asset <id> --round <round> --plays`.
+   Early game: HUD HP/mana bars (`league/hud_bars.py`, one frame every 5 s)
+   decide a quiet opening (0:50) vs a fight (0:20) and find heavy trades; a
+   late first back skips the quiet lane phase but keeps heavy trades and the
+   30 s before the recall, and the first back's main item is overlaid
+   (`knowledge/rules/Skip quiet laning, keep heavy trades.md`).
 6a. Optional, before narrating: `story_suggest_edits` → owner ticks → `story_apply_suggestions` (Jev, no Anthropic; `docs/story-suggestions.md`).
 6b. Narrate in the web page (`/narrate/story/<round>`); export → `narrated.mp4`.
 7. Owner watches the story; fixes are recorded with `mentor_record_correction`.
