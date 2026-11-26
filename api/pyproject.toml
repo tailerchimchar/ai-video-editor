@@ -39,6 +39,7 @@ grokbot-publish-round = "ai_video_editor.grokbot.publish:main"
 grokbot-note = "ai_video_editor.grokbot.note:main"
 secret-scan = "ai_video_editor.tools.secret_scan:main"
 story-render = "ai_video_editor.story.cli:main"
+story-join = "ai_video_editor.story.join:main"
 
 [dependency-groups]
 dev = [
