@@ -388,7 +388,8 @@ def record_offset(
     """Store the final calibrated offset (and how it was obtained) in an
     existing cache entry, overwriting any earlier value including a
     `sync_only` one (but a `hud` one only with another `hud` one), so later
-    `load_or_fetch` callers get recording seconds that match the clips. No-op when nothing is cached."""
+    `load_or_fetch` callers get recording seconds that match the clips.
+    No-op when nothing is cached."""
     d = cache_dir or cache_dir_for(asset_id)
     path = d / "meta.json"
     try:
