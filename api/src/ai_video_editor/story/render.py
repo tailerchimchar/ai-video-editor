@@ -21,7 +21,7 @@ from ..edits import apply_sfx
 from ..intros.config import IntroConfig, _TextLogoConfig
 from ..intros.render import render_intro
 from ..league.items import ItemInfo
-from ..sfx_library import kaching_path
+from ..sfx_library import death_path, kaching_path, sfx_onset_s
 from ..vlm.watch_montage import WatchResult, save_critique, watch_montage
 from .broll import BRollInsert
 from .planner import Chapter, StoryPlan
@@ -329,18 +329,35 @@ def _render_card(title: str, out_path: Path) -> None:
         raise StoryRenderError(f"title card {title!r} normalise failed: {err}")
 
 
-def _with_kill_sfx(part: Path, ch: Chapter, i: int) -> Path:
-    """Kaching on each owner kill; the sfx file replaces the part when it works."""
-    if not (settings.story_kill_sfx and ch.kill_times_s):
+def _sfx_entries(ch: Chapter) -> list[tuple[Path, float, float]]:
+    """(file, recording-second, volume) for each owner kill and death, per config."""
+    entries: list[tuple[Path, float, float]] = []
+    if settings.story_kill_sfx and ch.kill_times_s:
+        entries += [(kaching_path(), t, 0.8) for t in ch.kill_times_s]
+    if settings.story_death_sfx and ch.death_times_s:
+        entries += [(death_path(), t, settings.story_death_sfx_volume) for t in ch.death_times_s]
+    return entries
+
+
+def _with_sfx(part: Path, ch: Chapter, i: int) -> Path:
+    """Kaching on owner kills, a glass-break on owner deaths. Each lands on its
+    moment (the file's leading silence is subtracted). The mixed file replaces
+    the part when it works."""
+    entries = _sfx_entries(ch)
+    if not entries:
         return part
     out = part.with_name(f"chapter_{i:02d}_sfx.mp4")
     sfx = [
-        {"sfx_path": str(kaching_path()), "at_seconds": round(t - ch.start_s, 3), "volume": 0.8}
-        for t in ch.kill_times_s
+        {
+            "sfx_path": str(path),
+            "at_seconds": max(0.0, round(t - ch.start_s - sfx_onset_s(path), 3)),
+            "volume": vol,
+        }
+        for path, t, vol in entries
     ]
     ok, err = apply_sfx(part.as_posix(), out.as_posix(), sfx=sfx)
     if not ok:
-        _log.warning("story: kill sfx failed for chapter %d: %s", i, err)
+        _log.warning("story: sfx failed for chapter %d: %s", i, err)
         return part
     return out
 
@@ -408,7 +425,7 @@ def render_story(
         ok, err = _run_ffmpeg(cmd, chapter_timeout(ch.start_s, ch.end_s))
         if not ok:
             raise StoryRenderError(f"chapter {i} ({ch.title!r}) failed: {err}")
-        parts.append(_with_kill_sfx(part, ch, i).as_posix())
+        parts.append(_with_sfx(part, ch, i).as_posix())
 
     story = out_dir / "story.mp4"
     ok, err = _concat(parts, story.as_posix())
