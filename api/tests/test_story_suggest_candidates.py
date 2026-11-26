@@ -153,3 +153,8 @@ def test_registering_a_new_game_needs_no_edits():
 
     register_candidate_builder("test_game", Stub())
     assert isinstance(candidate_builder("test_game"), Stub)
+
+
+def test_league_chapter_spans_are_game_clock():
+    plan = _plan(_chapter(100, 130), _chapter(900, 960))
+    assert _builder().chapter_spans(plan, _timeline([])) == {0: (100.0, 130.0), 1: (900.0, 960.0)}

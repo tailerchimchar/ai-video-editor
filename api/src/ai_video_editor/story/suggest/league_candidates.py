@@ -100,6 +100,15 @@ class LeagueCandidateBuilder:
             out[-1].facts["is_last_fight"] = True
         return out
 
+    def chapter_spans(
+        self, plan: StoryPlan, timeline: RiotTimeline
+    ) -> dict[int, tuple[float, float]]:
+        off = timeline.offset_s
+        return {
+            i: (round(c.start_s - off, 2), round(c.end_s - off, 2))
+            for i, c in enumerate(plan.chapters)
+        }
+
 
 def _chapter_fights(chapter: Chapter, all_fights: list[Fight]) -> list[Fight]:
     """Fights with an owner kill/assist/death inside the chapter, cut to it."""

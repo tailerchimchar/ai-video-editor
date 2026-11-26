@@ -21,6 +21,10 @@ class UnknownGameError(LookupError):
 class CandidateBuilder(Protocol):
     def build(self, plan: StoryPlan, timeline: Any) -> list[Candidate]: ...
 
+    def chapter_spans(self, plan: StoryPlan, timeline: Any) -> dict[int, tuple[float, float]]:
+        """Each chapter's span in game-clock seconds, keyed by chapter index."""
+        ...
+
 
 _BUILDERS: dict[str, CandidateBuilder] = {}
 # Modules that register the built-in builders on import (loaded on first lookup,
