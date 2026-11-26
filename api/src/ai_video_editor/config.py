@@ -83,6 +83,8 @@ class Settings(BaseSettings):
     play_sweep_enabled: bool = False
     story_transition_s: float = 0.25
     story_kill_sfx: bool = True
+    story_death_sfx: bool = True
+    story_death_sfx_volume: float = 0.9
     # Plays story: early-game chapters (league/early_game.py) always open it;
     # late fights (game time > 20:00) start this many seconds earlier; the
     # vision check (vlm/early_confirm.py) refines the early windows.
