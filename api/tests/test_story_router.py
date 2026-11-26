@@ -46,6 +46,24 @@ def test_add_validates_appends_and_indexes(client, rnd):
     assert client.get("/api/v1/story/r1/requests").json() == r.json()
 
 
+def test_add_accepts_trim_and_mute(client, rnd):
+    r = client.post(
+        "/api/v1/story/r1/requests", json={"kind": "trim", "at": "31:10", "start": "31:20"}
+    )
+    assert r.status_code == 200
+    r = client.post(
+        "/api/v1/story/r1/requests",
+        json={"kind": "mute", "at": "12:10", "start": "12:00", "end": "12:30"},
+    )
+    assert [x["kind"] for x in r.json()["requests"]] == ["trim", "mute"]
+    saved = json.loads(_requests_file().read_text(encoding="utf-8"))
+    assert [q["kind"] for q in saved["requests"]] == ["trim", "mute"]
+    bad = client.post(
+        "/api/v1/story/r1/requests", json={"kind": "mute", "at": "12:10", "end": "x:y"}
+    )
+    assert bad.status_code == 422
+
+
 def test_add_invalid_is_422_and_writes_nothing(client, rnd):
     bad = client.post("/api/v1/story/r1/requests", json={"kind": "add_chapter", "at": "99:99:99"})
     assert bad.status_code == 422

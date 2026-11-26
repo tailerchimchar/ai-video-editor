@@ -5,7 +5,12 @@ teamfight cinematic") are applied on top of the automatic plan every time the
 story renders. Times are the game clock the owner sees ("20:05", "1:02:05" or
 seconds as a number); recording seconds = game clock + `timeline.offset_s`.
 
-`apply_requests` is pure. Order: drops, adds, extends, effects. Request
+Kinds: `add_chapter`, `extend`, `drop`, `trim` (shrink the chapter at `at`
+to the game-clock `start`..`end`), `mute` (silence only the owner's mic over
+`start`..`end`, default the whole chapter; game audio keeps playing) and
+`effect`.
+
+`apply_requests` is pure. Order: drops, adds, extends, trims, mutes, effects. Request
 chapters are applied after budgeting, so no budget ever drops them.
 """
 
@@ -82,6 +87,24 @@ class Drop(_Timed):
     kind: Literal["drop"] = "drop"
 
 
+class _Range(_Timed):
+    start: Clock | None = None
+    end: Clock | None = None
+
+    @field_validator("start", "end", mode="after")
+    @classmethod
+    def _opt_clock(cls, v):
+        return v if v is None else _checked(v)
+
+
+class Trim(_Range):
+    kind: Literal["trim"] = "trim"
+
+
+class Mute(_Range):
+    kind: Literal["mute"] = "mute"
+
+
 class Effect(_Timed):
     kind: Literal["effect"] = "effect"
     effect: EffectKind
@@ -95,7 +118,9 @@ class Effect(_Timed):
         return v if v is None else _checked(v)
 
 
-OwnerRequest = Annotated[AddChapter | Extend | Drop | Effect, Field(discriminator="kind")]
+OwnerRequest = Annotated[
+    AddChapter | Extend | Drop | Trim | Mute | Effect, Field(discriminator="kind")
+]
 
 
 class StoryRequests(BaseModel):
@@ -187,6 +212,7 @@ def _union(a: Chapter, b: Chapter) -> Chapter:
             "death_times_s": sorted(set(a.death_times_s) | set(b.death_times_s)),
             "broll": a.broll + b.broll,
             "effects": a.effects + b.effects,
+            "mic_mutes": a.mic_mutes + b.mic_mutes,
         }
     )
 
@@ -218,6 +244,31 @@ def _card_s(plan: StoryPlan) -> float:
         return 0.0
     dur = sum(c.end_s - c.start_s for c in plan.chapters)
     return max(0.0, (plan.total_s - dur) / len(plan.chapters))
+
+
+def _clip_ranges(
+    ranges: list[tuple[float, float]], start: float, end: float
+) -> list[tuple[float, float]]:
+    out = [(max(a, start), min(b, end)) for a, b in ranges]
+    return [(a, b) for a, b in out if b > a]
+
+
+def _trimmed(c: Chapter, start: float, end: float) -> dict:
+    """Chapter fields for the window [start, end] inside it: events, effects,
+    mutes and b-roll outside the window are dropped or clamped."""
+    effects = [
+        e.model_copy(update={"start_s": max(e.start_s, start), "end_s": min(e.end_s, end)})
+        for e in c.effects
+    ]
+    return {
+        "start_s": start,
+        "end_s": end,
+        "kill_times_s": [t for t in c.kill_times_s if start <= t <= end],
+        "death_times_s": [t for t in c.death_times_s if start <= t <= end],
+        "effects": [e for e in effects if e.end_s > e.start_s],
+        "mic_mutes": _clip_ranges(c.mic_mutes, start, end),
+        "broll": [b for b in c.broll if b.mic_start_s >= start and b.mic_end_s <= end],
+    }
 
 
 def _label(req) -> str:
@@ -273,6 +324,33 @@ def apply_requests(
         entries = _keep(chapters)
         entries[i] = (new, [(c.start_s, c.end_s)], True)
         chapters = _settle(entries, timeline)
+
+    for r in (r for r in reqs.requests if isinstance(r, Trim)):
+        i = _containing(chapters, _rec(r.at, timeline))
+        if i is None:
+            warnings.append(f"{_label(r)}: no chapter there to trim")
+            continue
+        c = chapters[i]
+        start = c.start_s if r.start is None else max(c.start_s, _rec(r.start, timeline))
+        end = c.end_s if r.end is None else min(c.end_s, _rec(r.end, timeline))
+        if end <= start:
+            warnings.append(f"{_label(r)}: trim window is empty")
+            continue
+        chapters[i] = c.model_copy(update=_trimmed(c, round(start, 2), round(end, 2)))
+
+    for r in (r for r in reqs.requests if isinstance(r, Mute)):
+        i = _containing(chapters, _rec(r.at, timeline))
+        if i is None:
+            warnings.append(f"{_label(r)}: no chapter there to mute")
+            continue
+        c = chapters[i]
+        start = c.start_s if r.start is None else max(c.start_s, _rec(r.start, timeline))
+        end = c.end_s if r.end is None else min(c.end_s, _rec(r.end, timeline))
+        if end <= start:
+            warnings.append(f"{_label(r)}: mute range falls outside its chapter")
+            continue
+        mute = (round(start, 2), round(end, 2))
+        chapters[i] = c.model_copy(update={"mic_mutes": [*c.mic_mutes, mute]})
 
     for r in (r for r in reqs.requests if isinstance(r, Effect)):
         i = _containing(chapters, _rec(r.at, timeline))

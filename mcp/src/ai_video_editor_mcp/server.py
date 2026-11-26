@@ -156,9 +156,7 @@ def list_session_buckets(game: str, session: str) -> dict:
     - voice_over list -> hold for VO scripting
     """
     with _client() as c:
-        return c.get(
-            f"{API}/highlights/{game}/{session}/buckets"
-        ).json()
+        return c.get(f"{API}/highlights/{game}/{session}/buckets").json()
 
 
 @mcp.tool()
@@ -429,7 +427,8 @@ def zoom_compilation_clip(
     `clip_ref` accepts a 1-based index ('2'), a UUID prefix, or a time
     string ('0:32' tries reel time first, then source time)."""
     return _compile_edit(
-        compilation_id, "effect",
+        compilation_id,
+        "effect",
         {"clip_ref": clip_ref, "kind": "zoom", "factor": factor, "roi": roi},
     )
 
@@ -446,9 +445,9 @@ def focus_compilation_clip(
     """Add a spotlight (darken-everywhere-except-circle) effect to one
     clip in a compilation. Positions are fractions of frame size."""
     return _compile_edit(
-        compilation_id, "effect",
-        {"clip_ref": clip_ref, "kind": "focus", "x": x, "y": y,
-         "radius": radius, "dim": dim},
+        compilation_id,
+        "effect",
+        {"clip_ref": clip_ref, "kind": "focus", "x": x, "y": y, "radius": radius, "dim": dim},
     )
 
 
@@ -458,7 +457,8 @@ def caption_compilation_clip(compilation_id: str, clip_ref: str, text: str) -> d
     onto one clip in the compilation. Use this to brand/title a moment
     like 'CLUTCH' or 'PENTAKILL'."""
     return _compile_edit(
-        compilation_id, "effect",
+        compilation_id,
+        "effect",
         {"clip_ref": clip_ref, "kind": "caption", "text": text},
     )
 
@@ -471,7 +471,8 @@ def extend_compilation_clip(
     and/or seconds past its current end). The clip gets re-rendered;
     everything else stays cached."""
     return _compile_edit(
-        compilation_id, "extend",
+        compilation_id,
+        "extend",
         {"clip_ref": clip_ref, "before": before, "after": after},
     )
 
@@ -582,9 +583,7 @@ def tiktok_caption_clip(compilation_id: str, clip_ref: str) -> dict:
 
     Only this clip re-renders. Use `segment_caption_clip` to revert.
     """
-    return _compile_edit(
-        compilation_id, "caption_mode", {"clip_ref": clip_ref, "mode": "tiktok"}
-    )
+    return _compile_edit(compilation_id, "caption_mode", {"clip_ref": clip_ref, "mode": "tiktok"})
 
 
 @mcp.tool()
@@ -592,9 +591,7 @@ def segment_caption_clip(compilation_id: str, clip_ref: str) -> dict:
     """Revert a clip's captions back to the default segment style
     (one bottom-center line per Whisper segment). Companion to
     `tiktok_caption_clip`."""
-    return _compile_edit(
-        compilation_id, "caption_mode", {"clip_ref": clip_ref, "mode": "segment"}
-    )
+    return _compile_edit(compilation_id, "caption_mode", {"clip_ref": clip_ref, "mode": "segment"})
 
 
 @mcp.tool()
@@ -851,9 +848,7 @@ def insert_compilation_intro_after(
     if intro_name is not None:
         body["intro_name"] = intro_name
     with _client() as c:
-        return c.post(
-            f"{API}/edit/compile/{compilation_id}/insert_intro", json=body
-        ).json()
+        return c.post(f"{API}/edit/compile/{compilation_id}/insert_intro", json=body).json()
 
 
 @mcp.tool()
@@ -872,9 +867,7 @@ def insert_compilation_intro_at(
     if intro_name is not None:
         body["intro_name"] = intro_name
     with _client() as c:
-        return c.post(
-            f"{API}/edit/compile/{compilation_id}/insert_intro", json=body
-        ).json()
+        return c.post(f"{API}/edit/compile/{compilation_id}/insert_intro", json=body).json()
 
 
 @mcp.tool()
@@ -920,9 +913,7 @@ def remove_clip_caption(compilation_id: str, clip_ref: str, segment_index: int) 
     """
     body = {"clip_ref": clip_ref, "segment_index": segment_index}
     with _client() as c:
-        return c.post(
-            f"{API}/edit/compile/{compilation_id}/clip_captions/remove", json=body
-        ).json()
+        return c.post(f"{API}/edit/compile/{compilation_id}/clip_captions/remove", json=body).json()
 
 
 @mcp.tool()
@@ -975,9 +966,7 @@ def edit_clip_captions(compilation_id: str, clip_ref: str, segments: list[dict])
     """
     body = {"clip_ref": clip_ref, "segments": segments}
     with _client() as c:
-        return c.post(
-            f"{API}/edit/compile/{compilation_id}/clip_captions", json=body
-        ).json()
+        return c.post(f"{API}/edit/compile/{compilation_id}/clip_captions", json=body).json()
 
 
 @mcp.tool()
@@ -1000,9 +989,7 @@ def reorder_compilation_clips(compilation_id: str, mode: str) -> dict:
     `show_clip_numbers` is on.
     """
     with _client() as c:
-        return c.post(
-            f"{API}/edit/compile/{compilation_id}/reorder", json={"mode": mode}
-        ).json()
+        return c.post(f"{API}/edit/compile/{compilation_id}/reorder", json={"mode": mode}).json()
 
 
 @mcp.tool()
@@ -1081,9 +1068,7 @@ def list_compilation_history(compilation_id: str) -> dict:
 
 
 @mcp.tool()
-def revert_compilation(
-    compilation_id: str, steps: int = 1, to_version: int | None = None
-) -> dict:
+def revert_compilation(compilation_id: str, steps: int = 1, to_version: int | None = None) -> dict:
     """Undo edits by restoring an older spec snapshot from the journal.
 
     Two modes (use one):
@@ -1572,9 +1557,7 @@ def compile_cross_asset_montage(
     if beat_flash_source:
         body["beat_flash_source"] = beat_flash_source
     with _client() as c:
-        job_id = c.post(f"{API}/shorts/cross_asset_montage", json=body).json()[
-            "job_id"
-        ]
+        job_id = c.post(f"{API}/shorts/cross_asset_montage", json=body).json()["job_id"]
         return _wait_for_job(c, job_id)
 
 
@@ -1594,9 +1577,7 @@ def preview_cross_asset_montage(game: str, window: str = "week") -> dict:
     if window not in ("day", "week", "all"):
         return {"status": "failed", "error": "window must be 'day', 'week', or 'all'"}
     with _client() as c:
-        return c.get(
-            f"{API}/shorts/cross_asset_montage/preview?game={game}&window={window}"
-        ).json()
+        return c.get(f"{API}/shorts/cross_asset_montage/preview?game={game}&window={window}").json()
 
 
 @mcp.tool()
@@ -1676,9 +1657,7 @@ def compile_outplayed_montage(
     if analyze_pool_size is not None:
         body["analyze_pool_size"] = analyze_pool_size
     with _client() as c:
-        job_id = c.post(f"{API}/shorts/outplayed_montage", json=body).json()[
-            "job_id"
-        ]
+        job_id = c.post(f"{API}/shorts/outplayed_montage", json=body).json()["job_id"]
         return _wait_for_job(c, job_id)
 
 
@@ -1700,9 +1679,7 @@ def preview_outplayed_montage(
     if since_days is not None:
         params.append(f"since_days={since_days}")
     with _client() as c:
-        return c.get(
-            f"{API}/shorts/outplayed_montage/preview?{'&'.join(params)}"
-        ).json()
+        return c.get(f"{API}/shorts/outplayed_montage/preview?{'&'.join(params)}").json()
 
 
 @mcp.tool()
@@ -1744,9 +1721,7 @@ def list_outplayed_clips(
     if limit is not None:
         params.append(f"limit={limit}")
     with _client() as c:
-        return c.get(
-            f"{API}/shorts/browse/outplayed?{'&'.join(params)}"
-        ).json()
+        return c.get(f"{API}/shorts/browse/outplayed?{'&'.join(params)}").json()
 
 
 @mcp.tool()
@@ -1766,9 +1741,7 @@ def list_highlights_sessions(game: str | None = None) -> dict:
 
 
 @mcp.tool()
-def list_highlights_clips(
-    session_folder: str, game: str | None = None
-) -> dict:
+def list_highlights_clips(session_folder: str, game: str | None = None) -> dict:
     """List clips inside one analyzed highlights session folder.
 
     `session_folder` is the folder name (e.g. `07-04-2026_15h15`,
@@ -1779,9 +1752,7 @@ def list_highlights_clips(
     """
     params = f"?game={game}" if game else ""
     with _client() as c:
-        return c.get(
-            f"{API}/shorts/browse/highlights/{session_folder}{params}"
-        ).json()
+        return c.get(f"{API}/shorts/browse/highlights/{session_folder}{params}").json()
 
 
 # ---------------------------------------------------------------------
@@ -1865,9 +1836,7 @@ def compile_custom_montage(
     if burn_title is not None:
         body["burn_title"] = burn_title
     with _client() as c:
-        job_id = c.post(f"{API}/shorts/custom_montage", json=body).json()[
-            "job_id"
-        ]
+        job_id = c.post(f"{API}/shorts/custom_montage", json=body).json()["job_id"]
         return _wait_for_job(c, job_id)
 
 
@@ -2354,6 +2323,11 @@ def story_add_request(
       `after_s` default 20, optional `title`, `note`).
     - `extend`: grow the chapter at `at` by `before_s` / `after_s`.
     - `drop`: remove the chapter at `at`.
+    - `trim`: shrink the chapter at `at` to `start`..`end` (game clock; either
+      may be omitted). Never grows it; kills/effects/b-roll outside go.
+    - `mute`: silence only the owner's mic over `start`..`end` (default the
+      whole chapter at `at`), e.g. off-game talk to narrate over later. Game
+      audio keeps playing.
     - `effect`: `effect` is letterbox | slowmo | zoom | focus, over
       `start`..`end` (game clock; default the chapter around `at`),
       optional numeric/str `params`.
@@ -2364,6 +2338,10 @@ def story_add_request(
       story_add_request(round, "effect", "31:10", effect="letterbox", start="31:05", end="31:20")
       story_add_request(round, "effect", "31:10", effect="slowmo", start="31:08", end="31:14")
       story_add_request(round, "effect", "31:10", effect="focus", start="31:05", end="31:20")
+
+    "cut the first 10 s of the chapter at 31:10" / "mute my mic 12:00-12:30":
+      story_add_request(round, "trim", "31:10", start="31:20")
+      story_add_request(round, "mute", "12:10", start="12:00", end="12:30")
 
     Returns the updated list with indexes. Invalid input comes back as an
     error detail (nothing is saved).

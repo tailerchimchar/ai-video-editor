@@ -14,7 +14,9 @@ from ai_video_editor.story.requests import (
     Drop,
     Effect,
     Extend,
+    Mute,
     StoryRequests,
+    Trim,
     apply_requests,
     game_clock_s,
     load_requests,
@@ -56,13 +58,15 @@ def test_load_parses_each_kind(tmp_path):
                     {"kind": "extend", "at": 100, "after_s": 3},
                     {"kind": "drop", "at": "1:00"},
                     {"kind": "effect", "effect": "slowmo", "at": 5, "params": {"factor": 0.4}},
+                    {"kind": "trim", "at": 5, "start": "0:02"},
+                    {"kind": "mute", "at": 5},
                 ]
             }
         ),
         encoding="utf-8",
     )
     kinds = [type(r) for r in load_requests(tmp_path).requests]
-    assert kinds == [AddChapter, Extend, Drop, Effect]
+    assert kinds == [AddChapter, Extend, Drop, Effect, Trim, Mute]
 
 
 def test_load_invalid_names_the_bad_entry(tmp_path):
@@ -274,3 +278,94 @@ def test_apply_is_pure():
     before = plan.model_copy(deep=True)
     _apply(plan, [Drop(at=115 - OFFSET), AddChapter(at="20:05")])
     assert plan == before
+
+
+# --- trim / mute ---
+# Clocks are game seconds = recording seconds - OFFSET (-21.6).
+
+
+def test_trim_shrinks_to_the_window_and_drops_outside_data():
+    from ai_video_editor.story.broll import BRollInsert
+    from ai_video_editor.story.planner import ChapterEffect
+
+    ch = _ch(
+        100.0, 200.0,
+        kill_times_s=[110.0, 150.0, 190.0], death_times_s=[105.0, 160.0],
+        effects=[
+            ChapterEffect(kind="slowmo", start_s=105.0, end_s=120.0),
+            ChapterEffect(kind="zoom", start_s=140.0, end_s=170.0),
+        ],
+        mic_mutes=[(100.0, 130.0), (160.0, 180.0)],
+        broll=[
+            BRollInsert(item_id=1, mic_start_s=102, mic_end_s=106, src_start_s=1, src_end_s=5),
+            BRollInsert(item_id=2, mic_start_s=150, mic_end_s=154, src_start_s=1, src_end_s=5),
+        ],
+    )  # fmt: skip
+    req = Trim(at=150.0 - OFFSET, start=125.0 - OFFSET, end=175.0 - OFFSET)
+    plan, warns = _apply(_plan([ch]), [req])
+    c = plan.chapters[0]
+    assert not warns
+    assert (c.start_s, c.end_s) == (125.0, 175.0)
+    assert c.kill_times_s == [150.0] and c.death_times_s == [160.0]
+    assert [(e.kind, e.start_s, e.end_s) for e in c.effects] == [("zoom", 140.0, 170.0)]
+    assert c.mic_mutes == [(125.0, 130.0), (160.0, 175.0)]
+    assert [b.item_id for b in c.broll] == [2]
+
+
+def test_trim_start_only_and_never_grows():
+    ch = _ch(100.0, 200.0)
+    at = 150.0 - OFFSET
+    plan, _ = _apply(_plan([ch]), [Trim(at=at, start=120.0 - OFFSET)])
+    assert (plan.chapters[0].start_s, plan.chapters[0].end_s) == (120.0, 200.0)
+    plan, _ = _apply(_plan([ch]), [Trim(at=at, start=50.0 - OFFSET, end=500.0 - OFFSET)])
+    assert (plan.chapters[0].start_s, plan.chapters[0].end_s) == (100.0, 200.0)
+
+
+def test_trim_total_follows():
+    plan, _ = _apply(_plan([_ch(100.0, 200.0)]), [Trim(at=150.0 - OFFSET, end=130.0 - OFFSET)])
+    assert plan.total_s == 30.0
+
+
+def test_trim_warns_without_chapter_or_for_empty_window():
+    _, warns = _apply(_plan([_ch(100.0, 200.0)]), [Trim(at=900.0)])
+    assert len(warns) == 1 and "no chapter" in warns[0]
+    plan, warns = _apply(
+        _plan([_ch(100.0, 200.0)]),
+        [Trim(at=150.0 - OFFSET, start=300.0 - OFFSET, end=400.0 - OFFSET)],
+    )
+    assert len(warns) == 1 and "empty" in warns[0]
+    assert (plan.chapters[0].start_s, plan.chapters[0].end_s) == (100.0, 200.0)
+
+
+def test_mute_defaults_to_the_whole_chapter():
+    plan, warns = _apply(_plan([_ch(100.0, 200.0)]), [Mute(at=150.0 - OFFSET)])
+    assert not warns and plan.chapters[0].mic_mutes == [(100.0, 200.0)]
+
+
+def test_mute_range_is_clamped_and_appends():
+    ch = _ch(100.0, 200.0, mic_mutes=[(100.0, 110.0)])
+    plan, _ = _apply(
+        _plan([ch]), [Mute(at=150.0 - OFFSET, start=180.0 - OFFSET, end=260.0 - OFFSET)]
+    )
+    assert plan.chapters[0].mic_mutes == [(100.0, 110.0), (180.0, 200.0)]
+
+
+def test_mute_warns_without_chapter_or_outside():
+    _, warns = _apply(_plan([_ch(100.0, 200.0)]), [Mute(at=900.0)])
+    assert "no chapter" in warns[0]
+    _, warns = _apply(
+        _plan([_ch(100.0, 200.0)]),
+        [Mute(at=150.0 - OFFSET, start=300.0 - OFFSET, end=310.0 - OFFSET)],
+    )
+    assert "outside" in warns[0]
+
+
+def test_order_extend_then_trim_then_mute():
+    reqs = [
+        Mute(at=150.0 - OFFSET),
+        Trim(at=150.0 - OFFSET, start=120.0 - OFFSET, end=180.0 - OFFSET),
+        Extend(at=150.0 - OFFSET, after_s=50.0),
+    ]
+    c = _apply(_plan([_ch(100.0, 200.0)]), reqs)[0].chapters[0]
+    assert (c.start_s, c.end_s) == (120.0, 180.0)  # trimmed after the extend
+    assert c.mic_mutes == [(120.0, 180.0)]  # muted after the trim
