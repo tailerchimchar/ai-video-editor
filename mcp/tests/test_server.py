@@ -169,3 +169,70 @@ def test_watch_montage_posts_custom_name_body():
     assert body["custom_name"] == "Valorant_best_of_v1"
     assert body["save_markdown"] is True
     assert out["critique"]["overall_verdict"] == "needs_edits"
+
+
+def test_story_list_and_remove_request():
+    seen: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path))
+        return httpx.Response(200, json={"round": "r1", "requests": []})
+
+    with _patch_client(handler):
+        server.story_list_requests("r1")
+        server.story_remove_request("r1", 2)
+
+    assert seen == [
+        ("GET", "/api/v1/story/r1/requests"),
+        ("DELETE", "/api/v1/story/r1/requests/2"),
+    ]
+
+
+def test_story_add_request_sends_only_set_fields():
+    import json as _json
+
+    bodies: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.path == "/api/v1/story/r1/requests"
+        bodies.append(_json.loads(request.content))
+        return httpx.Response(200, json={"round": "r1", "requests": [{"index": 0}]})
+
+    with _patch_client(handler):
+        server.story_add_request("r1", "add_chapter", "20:05", title="Walk out", after_s=15)
+        server.story_add_request(
+            "r1",
+            "effect",
+            "31:10",
+            effect="slowmo",
+            start="31:08",
+            end="31:14",
+            params={"speed": 0.5},
+        )
+
+    assert bodies[0] == {"kind": "add_chapter", "at": "20:05", "title": "Walk out", "after_s": 15}
+    assert bodies[1] == {
+        "kind": "effect",
+        "at": "31:10",
+        "effect": "slowmo",
+        "start": "31:08",
+        "end": "31:14",
+        "params": {"speed": 0.5},
+    }
+
+
+def test_story_render_polls_the_job():
+    import json as _json
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            assert request.url.path == "/api/v1/story/r1/render"
+            assert _json.loads(request.content) == {"asset_id": "a1", "plays": True}
+            return httpx.Response(200, json={"job_id": "j1"})
+        assert request.url.path == "/api/v1/jobs/j1"
+        return httpx.Response(200, json={"status": "completed", "output_path": "story.mp4"})
+
+    with _patch_client(handler):
+        out = server.story_render("r1", "a1")
+    assert out["output_path"] == "story.mp4"

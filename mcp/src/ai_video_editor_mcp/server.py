@@ -2320,6 +2320,96 @@ def get_feedback_summary(compilation_id: str | None = None) -> dict:
         return c.get(f"{API}/feedback/summary", params=params).json()
 
 
+@mcp.tool()
+def story_list_requests(round: str) -> dict:
+    """List the owner's story requests for a round (panel folder name).
+
+    Returns `{round, requests: [{index, kind, at, ...}]}`. `index` is
+    0-based and is what `story_remove_request` takes. Read-only.
+    """
+    with _client() as c:
+        return c.get(f"{API}/story/{round}/requests").json()
+
+
+@mcp.tool()
+def story_add_request(
+    round: str,
+    kind: str,
+    at: str,
+    before_s: float | None = None,
+    after_s: float | None = None,
+    title: str | None = None,
+    note: str | None = None,
+    effect: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    params: dict | None = None,
+) -> dict:
+    """Record one owner request for a round's story. It is applied the next
+    time the story renders (`story_render`); nothing renders here.
+
+    `round` = panel folder name. `at` = the GAME clock the owner sees
+    ("20:05", "1:02:05" or seconds), not recording time. `kind`:
+    - `add_chapter`: a new chapter around `at` (`before_s` default 5,
+      `after_s` default 20, optional `title`, `note`).
+    - `extend`: grow the chapter at `at` by `before_s` / `after_s`.
+    - `drop`: remove the chapter at `at`.
+    - `effect`: `effect` is letterbox | slowmo | zoom | focus, over
+      `start`..`end` (game clock; default the chapter around `at`),
+      optional numeric/str `params`.
+
+    Examples. "walk out of base at 20:05":
+      story_add_request(round, "add_chapter", "20:05", title="Walking out of base")
+    "make the last teamfight cinematic" (fight at 31:10): three calls, same window:
+      story_add_request(round, "effect", "31:10", effect="letterbox", start="31:05", end="31:20")
+      story_add_request(round, "effect", "31:10", effect="slowmo", start="31:08", end="31:14")
+      story_add_request(round, "effect", "31:10", effect="focus", start="31:05", end="31:20")
+
+    Returns the updated list with indexes. Invalid input comes back as an
+    error detail (nothing is saved).
+    """
+    body: dict = {"kind": kind, "at": at}
+    for key, val in (
+        ("before_s", before_s),
+        ("after_s", after_s),
+        ("title", title),
+        ("note", note),
+        ("effect", effect),
+        ("start", start),
+        ("end", end),
+        ("params", params),
+    ):
+        if val is not None:
+            body[key] = val
+    with _client() as c:
+        return c.post(f"{API}/story/{round}/requests", json=body).json()
+
+
+@mcp.tool()
+def story_remove_request(round: str, index: int) -> dict:
+    """Remove one story request by its 0-based `index` (see
+    `story_list_requests`). Indexes shift after a removal, so list again
+    before removing a second one. Returns the updated list."""
+    with _client() as c:
+        return c.delete(f"{API}/story/{round}/requests/{index}").json()
+
+
+@mcp.tool()
+def story_render(round: str, asset_id: str, plays: bool = True) -> dict:
+    """Re-render a round's story with its current requests applied (same as
+    the `story-render` CLI). `plays=True` builds chapters from the frozen
+    plays file; False uses the panel beats. Heavy ffmpeg work: one at a time.
+
+    Job-based; this tool waits for completion. On success `output_path` is
+    the story video. On timeout the job continues in the background.
+    """
+    with _client() as c:
+        r = c.post(f"{API}/story/{round}/render", json={"asset_id": asset_id, "plays": plays})
+        if r.status_code != 200:
+            return {"status": "failed", "error": r.text}
+        return _wait_for_job(c, r.json()["job_id"], timeout_s=1800)
+
+
 def main() -> None:
     mcp.run()
 
