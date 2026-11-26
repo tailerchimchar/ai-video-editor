@@ -5,6 +5,7 @@ import { CameraBoxEditor } from "@/components/narration/CameraBoxEditor";
 import { CameraSettings } from "@/components/narration/CameraSettings";
 import { ExportPanel } from "@/components/narration/ExportPanel";
 import { RecordControls } from "@/components/narration/RecordControls";
+import { SuggestionsPanel } from "@/components/narration/SuggestionsPanel";
 import { TakeTimeline } from "@/components/narration/TakeTimeline";
 import { VideoPlayer } from "@/components/VideoPlayer";
 import { VideoSwitcher } from "@/components/VideoSwitcher";
@@ -185,6 +186,8 @@ function NarrationWorkspace({ target }: { target: TargetRef }) {
               onSave={(camera) => narration.saveCamera.mutate(camera)}
             />
           </section>
+
+          <SuggestionsPanel target={target} />
 
           <ExportPanel
             stale={view.stale}
