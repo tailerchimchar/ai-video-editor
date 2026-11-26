@@ -436,3 +436,52 @@ def test_broll_off_by_setting_or_flag(ws, monkeypatch):
     assert seen["rows"] == 0 and seen["plan"].chapters[0].broll == []
     seen = _broll_main(ws, monkeypatch, ["--no-broll"])
     assert seen["rows"] == 0 and seen["plan"].chapters[0].broll == []
+
+
+def _requests_main(ws, monkeypatch, argv=(), *, requests=None):
+    rnd = ws / "panel" / "r1"
+    _write(rnd / "gaming-expert.json", [{"clip_ref": "23m15s", "story_beats": [
+        {"t_start": 1395.0, "t_end": 1410.0, "beat": "Neeko pick"}]}])  # fmt: skip
+    if requests is not None:
+        _write(ws / "story" / "r1" / "requests.json", requests)
+    monkeypatch.setattr(cli, "load_timeline", lambda a: _one_kill_timeline())
+    monkeypatch.setattr(cli, "load_lane", lambda a: None)
+    seen = {}
+
+    def fake_render(src, plan, out_dir, **_):
+        seen["plan"] = plan
+        return Path(out_dir) / "story.mp4"
+
+    monkeypatch.setattr(cli, "render_story", fake_render)
+    seen["rc"] = cli.main(
+        ["--asset", "a1", "--round", "r1", "--source", "C:/x.mp4", "--no-cards", *argv]
+    )
+    return seen
+
+
+_ADD = {"requests": [{"kind": "add_chapter", "at": 100, "title": "Walk out"}]}
+
+
+def test_requests_file_changes_the_rendered_plan(ws, monkeypatch):
+    seen = _requests_main(ws, monkeypatch, requests=_ADD)
+    assert seen["rc"] == 0
+    assert [c.title for c in seen["plan"].chapters] == ["Walk out", "Neeko pick"]
+    # the render never rewrites the owner's file
+    assert json.loads((ws / "story" / "r1" / "requests.json").read_text()) == _ADD
+
+
+def test_unmatched_request_warning_is_printed(ws, monkeypatch, capsys):
+    _requests_main(ws, monkeypatch, requests={"requests": [{"kind": "drop", "at": 9000}]})
+    assert "drop at 9000" in capsys.readouterr().out
+
+
+def test_no_requests_flag_ignores_the_file(ws, monkeypatch):
+    seen = _requests_main(ws, monkeypatch, ["--no-requests"], requests=_ADD)
+    assert [c.title for c in seen["plan"].chapters] == ["Neeko pick"]
+
+
+def test_invalid_requests_file_fails_before_render(ws, monkeypatch, capsys):
+    seen = _requests_main(ws, monkeypatch, requests={"requests": [{"kind": "bogus"}]})
+    assert seen["rc"] == 2
+    assert "plan" not in seen
+    assert "request #1" in capsys.readouterr().err
