@@ -4,8 +4,12 @@ Pure: no network, no VLM. All times returned are recording seconds
 (`t_game + offset_s`, the same conversion `RiotTimeline` uses).
 
 Kinds: `opening` (always), `first_back` (owner's first shop trip after 2:30),
-`level3_trade`, `jungle_move`, `low_hp`, `give_recall`. Overlapping segments
-are merged (kind chosen by `_PRIORITY`) and nothing ends after first back + 8 s.
+`level3_trade`, `jungle_move`, `low_hp`, `heavy_trade`, `give_recall`.
+Overlapping segments are merged (kind chosen by `_PRIORITY`) and nothing ends
+after first back + 8 s.
+
+HUD bar samples (`league.hud_bars.BarSample`, read by the caller) are optional
+inputs: `opening_bars` confirm a quiet opening, `lane_bars` find heavy trades.
 """
 
 from __future__ import annotations
@@ -15,14 +19,22 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+from .hud_bars import BarSample, drops
 from .map_zones import zone_of
 from .riot_timeline import FIGHT_KINDS, RiotTimeline
 
-EarlyKind = Literal["opening", "level3_trade", "jungle_move", "low_hp", "give_recall", "first_back"]
+EarlyKind = Literal[
+    "opening", "level3_trade", "jungle_move", "low_hp", "heavy_trade", "give_recall", "first_back"
+]
 
 STARTING_ITEMS_END_S = 150.0  # purchases before game 2:30 are starting items
-BACK_PRE_S = 12.0
+BACK_PRE_S = 12.0  # give_recall windows
 BACK_POST_S = 8.0
+# Owner 2026-11-26: "skip to like the first recall or like the 30 seconds
+# leading up to the recall". The first-back window starts this long before
+# the purchase: the 30 s lead-up plus the 8 s recall channel.
+RECALL_CHANNEL_S = 8.0
+RECALL_LEAD_UP_S = 30.0
 GIVE_RECALL_MAX_S = 360.0
 SAME_TRIP_S = 20.0
 
@@ -34,8 +46,14 @@ BRAWL_START_S = 20.0
 # one happens, at 0:50 when nothing does. Riot data cannot prove "nothing
 # happened" (no damage events, positions once a minute), and when unsure the
 # owner chose "never miss a fight": the opening starts at BRAWL_START_S.
-# QUIET_START_S is for a future vision check that confirms a quiet opening.
+# Owner 2026-11-26: "check 1 frame every 5 s; if there's fighting or people
+# losing HP, start at 0:20". HUD bars sampled over game 0:20-0:50 that are
+# readable and flat confirm a quiet opening, which starts at QUIET_START_S.
 QUIET_START_S = 50.0
+OPENING_HP_DROP = 0.03
+OPENING_MANA_DROP = 0.05
+QUIET_MIN_SAMPLES = 5
+BAR_STEP_S = 5.0  # one HUD frame every 5 s
 DEFAULT_START_S = BRAWL_START_S
 WARD_FIGHT_CHECK_S = 75.0
 BRAWL_CHECK_S = 65.0
@@ -52,8 +70,21 @@ TRADE_KILL_WINDOW_S = 20.0
 TRADE_HP_FRAC = 0.5
 FRAME_PAD_S = 10.0
 LOW_HP_FRAC = 0.25
+# Owner 2026-11-26: skip the boring lane phase "EXCEPT IF THERE ARE HEAVY
+# TRADES". One HP drop this big between two 5 s samples is a heavy trade.
+HEAVY_TRADE_HP_DROP = 0.20
+HEAVY_PRE_S = 10.0
+HEAVY_POST_S = 8.0
 
-_PRIORITY = ("first_back", "opening", "level3_trade", "low_hp", "give_recall", "jungle_move")
+_PRIORITY = (
+    "first_back",
+    "opening",
+    "level3_trade",
+    "heavy_trade",
+    "low_hp",
+    "give_recall",
+    "jungle_move",
+)
 
 
 class EarlySegment(BaseModel):
@@ -145,16 +176,49 @@ def _first_ward_kill_s(raw: dict) -> float | None:
     return None
 
 
-def _opening(timeline: RiotTimeline, raw: dict, *, team_game: bool) -> EarlySegment:
-    why = _brawl_before_1_05(timeline, raw, team_game=team_game)
-    start = BRAWL_START_S if why else DEFAULT_START_S
+def _bars_verdict(bars: list[BarSample] | None, offset_s: float) -> tuple[float, str] | None:
+    """(start game-second, reason) from the opening's HUD bars, or None when
+    they cannot tell (none, or fewer than QUIET_MIN_SAMPLES readable)."""
+    if not bars:
+        return None
+    hits = drops(bars, "hp", OPENING_HP_DROP) + drops(bars, "mana", OPENING_MANA_DROP)
+    if hits:
+        t = min(t for t, _ in hits) - offset_s
+        return BRAWL_START_S, f"HP/mana drop at {_mmss(t)}"
+    if sum(b.hp is not None for b in bars) >= QUIET_MIN_SAMPLES:
+        return QUIET_START_S, "quiet opening (HUD bars flat 0:20-0:50)"
+    return None
+
+
+def _opening_end(timeline: RiotTimeline, raw: dict) -> float:
+    """Game second the opening ends: 2:00, or level 2 + 10 s, at most 2:30."""
     end = OPENING_END_S
     lvl2 = _owner_level_up_s(raw, timeline.owner_pid, 2)
     if lvl2 is not None:
         end = min(max(end, lvl2 + LEVEL2_PAD_S), OPENING_END_CAP_S)
-    reason = f"opening from {int(start) // 60}:{int(start) % 60:02d}"
+    return end
+
+
+def _opening(
+    timeline: RiotTimeline,
+    raw: dict,
+    *,
+    team_game: bool,
+    opening_bars: list[BarSample] | None = None,
+) -> EarlySegment:
+    """Riot evidence of a fight starts at 0:20; otherwise the HUD bars decide
+    (a drop: 0:20, flat: 0:50); unsure stays at 0:20 (never miss a fight)."""
+    why = _brawl_before_1_05(timeline, raw, team_game=team_game)
+    verdict = None if why else _bars_verdict(opening_bars, timeline.offset_s)
+    if why:
+        start = BRAWL_START_S
+    elif verdict:
+        start, why = verdict
+    else:
+        start = DEFAULT_START_S
+    reason = f"opening from {_mmss(start)}"
     reason += f" ({why})" if why else " (no Riot evidence either way; never miss a level-1 trade)"
-    return _seg("opening", timeline, start, end, reason)
+    return _seg("opening", timeline, start, _opening_end(timeline, raw), reason)
 
 
 def _seg(
@@ -172,9 +236,8 @@ def _first_back(timeline: RiotTimeline, raw: dict) -> EarlySegment | None:
     if not buys:
         return None
     t = buys[0]
-    return _seg(
-        "first_back", timeline, t - BACK_PRE_S, t + BACK_POST_S, f"first back at game {_mmss(t)}"
-    )
+    lead = RECALL_CHANNEL_S + RECALL_LEAD_UP_S
+    return _seg("first_back", timeline, t - lead, t + BACK_POST_S, f"first back at game {_mmss(t)}")
 
 
 def _mmss(t: float) -> str:
@@ -281,20 +344,60 @@ def _merge(segs: list[EarlySegment]) -> list[EarlySegment]:
     return out
 
 
+def _heavy_trades(lane_bars: list[BarSample] | None) -> list[EarlySegment]:
+    """One `heavy_trade` (recording seconds) per HP drop of at least
+    HEAVY_TRADE_HP_DROP between two consecutive readable lane samples."""
+    return [
+        EarlySegment(
+            kind="heavy_trade",
+            start_s=round(max(0.0, t - HEAVY_PRE_S), 3),
+            end_s=round(t + HEAVY_POST_S, 3),
+            reason=f"heavy trade: HP -{drop:.0%} by recording {t:.0f}s",
+        )
+        for t, drop in drops(lane_bars or [], "hp", HEAVY_TRADE_HP_DROP)
+    ]
+
+
+def lane_phase_s(timeline: RiotTimeline, raw_timeline: dict) -> tuple[float, float] | None:
+    """(opening end, first-back window start) in recording seconds: the lane
+    phase that is skipped unless it has heavy trades. None when there is no
+    first back or it is close enough to run continuously from the opening
+    (nothing is skipped, so there is nothing to sample)."""
+    if timeline.owner_pid is None:
+        return None
+    back = _first_back(timeline, raw_timeline)
+    if back is None:
+        return None
+    end = round(_opening_end(timeline, raw_timeline) + timeline.offset_s, 3)
+    if back.start_s - end <= CONTINUOUS_MAX_GAP_S:
+        return None
+    return end, back.start_s
+
+
 def early_segments(
-    timeline: RiotTimeline, raw_timeline: dict, *, team_game: bool = False
+    timeline: RiotTimeline,
+    raw_timeline: dict,
+    *,
+    team_game: bool = False,
+    opening_bars: list[BarSample] | None = None,
+    lane_bars: list[BarSample] | None = None,
 ) -> list[EarlySegment]:
     """Early-game windows (recording seconds), merged and sorted. Always
     contains an `opening`; contains `first_back` whenever the owner bought
     anything after 2:30. Everything except `give_recall` (which by
     definition comes after first back) ends no later than first back + 8 s.
-    The opening runs without a cut until the first back ends (owner
-    2026-11-26: show the wave crash and the recall). `team_game`: a custom /
-    tournament game, where a bush standoff before 1:05 is a real fight."""
+
+    The opening runs without a cut until the first back ends when the back
+    comes soon after it (owner 2026-11-26: show the wave crash and the
+    recall). A later back keeps only the opening, the heavy trades (from
+    `lane_bars`), the level-3 / low-HP / jungle windows and the 30 s before
+    the recall; the rest of the lane phase is skipped. `team_game`: a custom /
+    tournament game, where a bush standoff before 1:05 is a real fight.
+    `opening_bars`: HUD samples over game 0:20-0:50 (quiet-opening check)."""
     if timeline.owner_pid is None:
         return []
     raw = raw_timeline
-    opening = _opening(timeline, raw, team_game=team_game)
+    opening = _opening(timeline, raw, team_game=team_game, opening_bars=opening_bars)
     segs = [opening]
     buys = _owner_purchases_s(raw, timeline.owner_pid)
     back = _first_back(timeline, raw)
@@ -306,6 +409,7 @@ def early_segments(
     segs += _frame_segments(
         timeline, raw, opening.end_s - timeline.offset_s, buys[0] if buys else None
     )
+    segs += _heavy_trades(lane_bars)
     if buys:
         cap = buys[0] + BACK_POST_S + timeline.offset_s
         segs = [s.model_copy(update={"end_s": min(s.end_s, cap)}) for s in segs]
@@ -315,18 +419,23 @@ def early_segments(
     return _merge(segs)
 
 
-# The opening stretches to the first back when the gap is at most this long;
-# a later back (a long first lane phase) keeps the separate windows.
-OPENING_TO_BACK_MAX_GAP_S = 300.0
+# Owner 2026-11-26: "if the enemy is good or it's an even lane, no one really
+# recalls until like maybe 4 minutes or 5 minutes ... we need to skip like a
+# lot of the boring laning phase". The opening only runs continuously into the
+# first-back window when that window starts at most this long after it ends.
+# (Replaces OPENING_TO_BACK_MAX_GAP_S = 300 s, which kept the whole lane.)
+CONTINUOUS_MAX_GAP_S = 60.0
 
 
 def _through_first_back(segs: list[EarlySegment]) -> list[EarlySegment]:
     """One continuous `opening` from the opening's start to the first back's
     end, swallowing every window in between (owner 2026-11-26: "keep the game
-    going up until the first back ... show that i crash the wave and recall")."""
+    going up until the first back ... show that i crash the wave and recall"),
+    when the first-back window starts within CONTINUOUS_MAX_GAP_S of the
+    opening's end. Otherwise the windows stay separate and the gaps are cut."""
     opening = next((s for s in segs if s.kind == "opening"), None)
     back = next((s for s in segs if s.kind == "first_back"), None)
-    if opening is None or back is None or back.start_s - opening.end_s > OPENING_TO_BACK_MAX_GAP_S:
+    if opening is None or back is None or back.start_s - opening.end_s > CONTINUOUS_MAX_GAP_S:
         return segs
     lo, hi = opening.start_s, max(back.end_s, opening.end_s)
     whole = opening.model_copy(

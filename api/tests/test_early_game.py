@@ -270,11 +270,12 @@ def test_jungle_move_before_first_back():
     frames[5]["events"] = [buy(310.0)]
     tl, r = build(frames)
     segs = early_segments(tl, r)
-    # The jungle move sits inside the continuous opening-to-first-back window
-    # (owner 2026-11-26), so it is no longer a window of its own.
-    assert kinds(segs) == ["opening"]
-    assert segs[0].start_s <= 180.0 + OFFSET <= segs[0].end_s
-    assert segs[0].end_s == 310.0 + 8 + OFFSET
+    # Owner 2026-11-26 (skip quiet laning): a back at 5:10 is too late to run
+    # continuously, so the jungle move is its own window between the two.
+    assert kinds(segs) == ["opening", "jungle_move", "first_back"]
+    jm = segs[1]
+    assert jm.start_s <= 180.0 + OFFSET <= jm.end_s
+    assert segs[2].end_s == 310.0 + 8 + OFFSET
 
 
 def test_jungle_after_first_back_is_ignored():
@@ -291,9 +292,10 @@ def test_low_hp_before_first_back():
     frames[6]["events"] = [buy(400.0)]
     tl, r = build(frames)
     segs = early_segments(tl, r)
-    # Swallowed by the continuous opening (owner 2026-11-26).
-    assert kinds(segs) == ["opening"]
-    assert segs[0].start_s <= 240.0 + OFFSET <= segs[0].end_s
+    # Owner 2026-11-26 (skip quiet laning): a 6:40 back is not continuous, so
+    # the close call stays as its own window.
+    assert kinds(segs) == ["opening", "low_hp", "first_back"]
+    assert segs[1].start_s <= 240.0 + OFFSET <= segs[1].end_s
 
 
 def test_hp_above_quarter_is_not_low():
@@ -408,21 +410,160 @@ def test_through_first_back_merges_and_swallows_in_between():
     segs = [
         _seg("opening", 100, 220),
         _seg("jungle_move", 250, 280),
-        _seg("first_back", 300, 320),
+        _seg("first_back", 280, 320),  # window starts 60 s after the opening (owner 2026-11-26)
     ]
     out = _through_first_back(segs)
     assert [(s.kind, s.start_s, s.end_s) for s in out] == [("opening", 100, 320)]
 
 
 def test_through_first_back_leaves_far_back_alone():
-    segs = [_seg("opening", 100, 220), _seg("first_back", 521, 540)]  # gap 301 s
+    # Owner 2026-11-26 (skip quiet laning): a gap over 60 s is no longer continuous.
+    segs = [_seg("opening", 100, 220), _seg("first_back", 281, 320)]  # gap 61 s
     assert _through_first_back(segs) == segs
 
 
 def test_through_first_back_keeps_give_recall_after():
-    segs = [_seg("opening", 100, 220), _seg("first_back", 300, 320), _seg("give_recall", 400, 420)]
+    # Back window 60 s after the opening: continuous (owner 2026-11-26).
+    segs = [_seg("opening", 100, 220), _seg("first_back", 280, 320), _seg("give_recall", 400, 420)]
     out = _through_first_back(segs)
     assert [(s.kind, s.start_s, s.end_s) for s in out] == [
         ("opening", 100, 320),
         ("give_recall", 400, 420),
     ]
+
+
+# --- quiet-opening check from the HUD bars (owner 2026-11-26) ---
+
+from ai_video_editor.league.early_game import (  # noqa: E402
+    CONTINUOUS_MAX_GAP_S,
+    lane_phase_s,
+)
+from ai_video_editor.league.hud_bars import BarSample  # noqa: E402
+
+
+def bars(values, start_game=20.0, step=5.0, mana=None):
+    """BarSamples at game 0:20, 0:25, ... in recording seconds."""
+    manas = mana or [1.0] * len(values)
+    return [
+        BarSample(t_rec_s=start_game + i * step + OFFSET, hp=v, mana=m)
+        for i, (v, m) in enumerate(zip(values, manas, strict=True))
+    ]
+
+
+def test_flat_bars_confirm_a_quiet_opening_at_0_50():
+    tl, r = build(quiet())
+    op = early_segments(tl, r, opening_bars=bars([1.0] * 7))[0]
+    assert op.start_s == 150.0  # game 0:50 + offset
+    assert "quiet opening (HUD bars flat 0:20-0:50)" in op.reason
+
+
+def test_hp_drop_in_bars_starts_at_0_20():
+    tl, r = build(quiet())
+    op = early_segments(tl, r, opening_bars=bars([1.0, 1.0, 1.0, 0.96, 0.96, 0.96, 0.96]))[0]
+    assert op.start_s == 120.0
+    assert "HP/mana drop at 0:35" in op.reason
+
+
+def test_mana_drop_in_bars_starts_at_0_20():
+    tl, r = build(quiet())
+    mana = [1.0, 1.0, 0.94, 0.94, 0.94, 0.94, 0.94]
+    op = early_segments(tl, r, opening_bars=bars([1.0] * 7, mana=mana))[0]
+    assert op.start_s == 120.0 and "HP/mana drop at 0:30" in op.reason
+
+
+def test_small_wobble_is_not_a_drop():
+    tl, r = build(quiet())
+    mana = [1.0, 0.97, 0.97, 1.0, 1.0, 1.0, 1.0]
+    op = early_segments(tl, r, opening_bars=bars([1.0, 0.98, 1.0, 1.0, 1.0, 1.0, 1.0], mana=mana))[
+        0
+    ]
+    assert op.start_s == 150.0
+
+
+def test_too_few_readable_bars_stay_at_0_20():
+    tl, r = build(quiet())
+    op = early_segments(tl, r, opening_bars=bars([1.0, None, None, None, 1.0, 1.0, 1.0]))[0]
+    assert op.start_s == 120.0 and "no Riot evidence" in op.reason
+
+
+def test_riot_evidence_beats_flat_bars():
+    frames = quiet()
+    frames[0]["events"] = [kill(58.0, killer=ENEMY, victim=7)]
+    tl, r = build(frames)
+    op = early_segments(tl, r, opening_bars=bars([1.0] * 7))[0]
+    assert op.start_s == 120.0 and "champion kill" in op.reason
+
+
+# --- late first back: skip quiet laning, keep heavy trades (owner 2026-11-26) ---
+
+
+def test_first_back_window_is_30s_lead_up_plus_recall_channel():
+    frames = quiet(10)
+    frames[6]["events"] = [buy(400.0, 3070)]
+    tl, r = build(frames)
+    back = of_kind(early_segments(tl, r), "first_back")[0]
+    assert (back.start_s, back.end_s) == (400.0 - 38 + OFFSET, 400.0 + 8 + OFFSET)
+
+
+def test_back_window_within_60s_of_opening_end_is_continuous():
+    # Opening ends at game 2:00; the window starts at buy - 38.
+    assert CONTINUOUS_MAX_GAP_S == 60.0
+    frames = quiet(10)
+    frames[3]["events"] = [buy(218.0, 3070)]  # window starts at 180: gap 60
+    tl, r = build(frames)
+    assert kinds(early_segments(tl, r)) == ["opening"]
+    frames[3]["events"] = [buy(219.0, 3070)]  # gap 61
+    tl, r = build(frames)
+    assert kinds(early_segments(tl, r)) == ["opening", "first_back"]
+
+
+def test_late_back_skips_the_quiet_lane_phase():
+    frames = quiet(10)
+    frames[6]["events"] = [buy(400.0, 3070)]
+    tl, r = build(frames)
+    segs = early_segments(tl, r)
+    assert [(s.kind, s.start_s, s.end_s) for s in segs] == [
+        ("opening", 120.0, 220.0),
+        ("first_back", 462.0, 508.0),
+    ]
+
+
+def test_heavy_trade_from_lane_bars_is_kept():
+    frames = quiet(10)
+    frames[6]["events"] = [buy(400.0, 3070)]
+    tl, r = build(frames)
+    lane = bars([1.0, 1.0, 0.75, 0.75, 0.9, 0.8], start_game=200.0)  # -0.25 at 210
+    segs = early_segments(tl, r, lane_bars=lane)
+    heavy = of_kind(segs, "heavy_trade")
+    assert [(s.start_s, s.end_s) for s in heavy] == [(300.0, 318.0)]  # 310 - 10 .. + 8
+    assert "HP -25%" in heavy[0].reason
+    assert kinds(segs) == ["opening", "heavy_trade", "first_back"]
+
+
+def test_small_hp_loss_in_lane_is_not_a_heavy_trade():
+    frames = quiet(10)
+    frames[6]["events"] = [buy(400.0, 3070)]
+    tl, r = build(frames)
+    lane = bars([1.0, 0.85, 0.7, 0.6], start_game=200.0)  # steady poke, never -20% at once
+    assert "heavy_trade" not in kinds(early_segments(tl, r, lane_bars=lane))
+
+
+def test_heavy_trade_inside_a_continuous_opening_is_swallowed():
+    frames = quiet(10)
+    frames[3]["events"] = [buy(200.0, 3070)]
+    tl, r = build(frames)
+    lane = bars([1.0, 0.7], start_game=140.0)
+    assert kinds(early_segments(tl, r, lane_bars=lane)) == ["opening"]
+
+
+def test_lane_phase_span_for_late_and_continuous_backs():
+    frames = quiet(10)
+    frames[6]["events"] = [buy(400.0, 3070)]
+    tl, r = build(frames)
+    assert lane_phase_s(tl, r) == (220.0, 462.0)  # opening end .. back window start
+    frames[6]["events"] = []
+    frames[3]["events"] = [buy(200.0, 3070)]
+    tl, r = build(frames)
+    assert lane_phase_s(tl, r) is None  # continuous: nothing to sample
+    tl, r = build(quiet(10))
+    assert lane_phase_s(tl, r) is None  # no back
