@@ -481,11 +481,14 @@ def _play_chapter(p: Play, timeline: RiotTimeline, lead_in_s: float = 0.0) -> Ch
     if ally_start is not None:
         start = min(start, ally_start)
     start = max(0.0, start)
-    # An owner kill/death on (or up to EVENT_POST_S past) the window's end keeps
-    # EVENT_POST_S of footage after it.
-    tail = _times_in(timeline, "kill", start, end + EVENT_POST_S, shift) + _times_in(
-        timeline, "death", start, end + EVENT_POST_S, shift
-    )
+    # An owner kill/assist/death on (or up to EVENT_POST_S past) the window's
+    # end keeps EVENT_POST_S of footage after it (assists too: Yunara's Cho'Gath
+    # kill was cut on the frame it died, owner 2026-11-26).
+    tail = [
+        t
+        for k in ("kill", "assist", "death")
+        for t in _times_in(timeline, k, start, end + EVENT_POST_S, shift)
+    ]
     if tail:
         end = max(end, max(tail) + EVENT_POST_S)
     if timeline.game_end_s is not None:

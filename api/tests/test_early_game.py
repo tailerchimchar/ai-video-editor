@@ -112,6 +112,16 @@ def test_first_back_ignores_other_players_and_none_when_absent():
     assert first_back_s(raw(frames), OWNER, OFFSET) is None
 
 
+def test_first_back_counts_an_early_cull_back():
+    # Kai'sa 2026-11-26: quiet lane, back at game 2:24 for Cull; the old
+    # 2:30 starting-items cutoff skipped it.
+    frames = quiet()
+    frames[0]["events"] = [buy(4, 1055)]
+    frames[2]["events"] = [buy(144.6, 1083)]
+    frames[3]["events"] = [buy(200.0, 3070)]
+    assert first_back_s(raw(frames), OWNER, OFFSET) == pytest.approx(144.6 + OFFSET)
+
+
 # --- step 2: opening ---
 
 

@@ -64,6 +64,30 @@ def test_games_and_chapters_are_placed_after_each_card():
     assert jm.duration_s == 235.0 and jm.inserts == []
 
 
+def test_swipe_overlap_without_cards():
+    p1 = _plan(_ch("The opening", 60, 160))
+    p2 = _plan(_ch("The opening", 20, 120))
+    jm = build_join_map(
+        video=Path("j.mp4"),
+        title="t",
+        rounds=["r1", "r2"],
+        labels=["A", "B"],
+        plans=[p1, p2],
+        offsets_s=[0.0, 0.0],
+        story_durations_s=[100.0, 100.0],
+        card_s=0.0,
+        story_card_s=2.5,
+        story_jsons=[Path("a"), Path("b")],
+        digest_jsons=[None, None],
+        subscribe=(1, 5.0, Path("sub.mov")),
+        transition_s=0.5,
+    )
+    g1, g2 = jm.games
+    assert (g1.video_start_s, g1.video_end_s) == (0.0, 100.0)
+    assert (g2.video_start_s, g2.story_start_s, g2.video_end_s) == (99.5, 99.5, 199.5)
+    assert jm.duration_s == 199.5 and jm.inserts[0].at_s == 99.5 + SUBSCRIBE_LEAD_S
+
+
 def test_subscribe_insert_lands_in_the_game_after_n():
     jm = _map(subscribe=(1, 4.0, Path("sub.mov")))
     [ins] = jm.inserts

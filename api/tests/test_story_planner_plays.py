@@ -415,6 +415,13 @@ def test_kill_just_past_window_end_is_pulled_in():
     assert c.end_s == 121.5 + EVENT_POST_S
 
 
+def test_assist_on_window_end_keeps_post_buffer():
+    # Yunara 2026-11-26: the Cho'Gath kill (owner assist) was cut on the frame it died.
+    play = make_play("k", approach=100, outcome=120, first_kill=110, last_kill=120)
+    tl = _tl_events([_ev("assist", 120.0)])
+    assert _plan(_game(play), tl).chapters[0].end_s == 120.0 + EVENT_POST_S
+
+
 def test_post_buffer_never_past_game_end():
     play = make_play("k", type="closeout", approach=100, outcome=120, first_kill=110, last_kill=120)
     tl = _tl_events([_ev("kill", 120.0)], end=120.5)

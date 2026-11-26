@@ -1,26 +1,30 @@
-"""story-join: one video from several games' story.mp4, a card per game.
+"""story-join: one video from several games' story.mp4, a swipe between games.
+
+Each game after the first slides in from the right over the previous one
+(SWIPE_S, xfade slideleft) with a whoosh (WORKSPACE/sfx/whoosh.wav, made by
+tools/brand/make_whoosh.py). No title cards (owner 2026-11-26). The like &
+subscribe overlay (WORKSPACE/assets/subscribe_animation/subscribe_alpha.mov)
+plays once, bottom centre just above the ability bar, SUBSCRIBE_LEAD_S into
+the game after game `subscribe_after`. The default is 1: the midpoint of a
+2-game video, the 1/3 point of a 3-game one. Everything is one ffmpeg pass.
 
 Also writes `<out>.join.json`, the map of the joined video (see join_map.py),
-and `<out>.chapters.txt`, the YouTube description chapters. The like &
-subscribe overlay (WORKSPACE/assets/subscribe_animation/subscribe_alpha.mov)
-plays once, SUBSCRIBE_LEAD_S into the game after game `subscribe_after`. The
-default is 1: the midpoint of a 2-game video, the 1/3 point of a 3-game one
-(owner 2026-11-26).
+and `<out>.chapters.txt`, the YouTube description chapters.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 from ..config import settings
 from .join_map import SUBSCRIBE_LEAD_S, build_join_map, youtube_chapters
 from .planner import StoryPlan
-from .render import StoryRenderError, _concat, _encode_opts, _render_card, _run_ffmpeg
+from .render import FPS, StoryRenderError, _encode_opts, _run_ffmpeg
 
 _ROUND_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})_\d{4}_([^_]+)_(\d+)-(\d+)-(\d+)$")
 # Round folders use plain ASCII champion names; show the real spelling.
@@ -40,7 +44,12 @@ _CHAMP_DISPLAY = {
 
 SUBSCRIBE_ASSET = ("assets", "subscribe_animation", "subscribe_alpha.mov")
 SUBSCRIBE_WIDTH_FRAC = 0.30  # of the frame width
-SUBSCRIBE_MARGIN_FRAC = 0.03  # top-left: clear of the HUD, minimap and kill feed
+# Bottom centre, its bottom edge just above the ability / summoner bar (the
+# HUD panel starts about 86% down at 16:9). Owner 2026-11-26.
+SUBSCRIBE_BOTTOM_FRAC = 0.84
+WHOOSH_ASSET = ("sfx", "whoosh.wav")
+WHOOSH_DEFAULT_PEAK_S = 0.3
+SWIPE_S = 0.5
 
 
 def round_label(round_name: str) -> str:
@@ -72,31 +81,92 @@ def subscribe_asset() -> Path:
     return Path(settings.workspace_dir).joinpath(*SUBSCRIBE_ASSET)
 
 
-def subscribe_overlay_cmd(story: str, asset: str, out: str, at_s: float) -> list[str]:
-    """The story with the transparent subscribe overlay at `at_s`, top-left,
-    SUBSCRIBE_WIDTH_FRAC of the frame wide. Audio is copied; the video is
-    re-encoded with the story settings so the result still concat-copies."""
-    w, m = SUBSCRIBE_WIDTH_FRAC, SUBSCRIBE_MARGIN_FRAC
-    graph = (
-        f"[1:v]setpts=PTS-STARTPTS+{at_s}/TB[s0];"
-        f"[s0][0:v]scale2ref=w=main_w*{w}:h=ow/mdar[s][base];"
-        f"[base][s]overlay=x=main_w*{m}:y=main_h*{m}:eof_action=pass,format=yuv420p[v]"
-    )
+def whoosh_asset() -> Path:
+    return Path(settings.workspace_dir).joinpath(*WHOOSH_ASSET)
+
+
+def _whoosh_peak(asset: Path) -> float:
+    try:
+        return float(json.loads(asset.with_suffix(".json").read_text())["peak_s"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return WHOOSH_DEFAULT_PEAK_S
+
+
+def swipe_offsets(durations: list[float], swipe_s: float = SWIPE_S) -> list[float]:
+    """Joined-video time where each swipe starts (one per game after the first):
+    every game after the first starts `swipe_s` before the previous one ends."""
+    out: list[float] = []
+    t = 0.0
+    for d in durations[:-1]:
+        t += d - swipe_s
+        out.append(round(t, 3))
+    return out
+
+
+def join_cmd(
+    stories: list[str],
+    durations: list[float],
+    out: str,
+    *,
+    swipe_s: float = SWIPE_S,
+    whoosh: tuple[str, float] | None = None,
+    subscribe: tuple[str, float] | None = None,
+) -> list[str]:
+    """One ffmpeg pass: games chained with xfade slideleft + acrossfade;
+    `whoosh` (path, peak_s) mixed so its peak lands mid-swipe; `subscribe`
+    (path, at_s) overlaid bottom centre. Every input is normalised to the
+    story settings so xfade accepts it."""
+    n = len(stories)
+    offs = swipe_offsets(durations, swipe_s)
+    inputs: list[str] = []
+    for s in stories:
+        inputs += ["-i", s]
+    g: list[str] = []
+    for i in range(n):
+        g.append(f"[{i}:v]fps={FPS},settb=AVTB,format=yuv420p,setsar=1[v{i}]")
+        g.append(f"[{i}:a]aresample=48000,aformat=channel_layouts=stereo[a{i}]")
+    v, a = "[v0]", "[a0]"
+    for i in range(1, n):
+        g.append(
+            f"{v}[v{i}]xfade=transition=slideleft:duration={swipe_s}:offset={offs[i - 1]}[x{i}]"
+        )
+        g.append(f"{a}[a{i}]acrossfade=d={swipe_s}[c{i}]")
+        v, a = f"[x{i}]", f"[c{i}]"
+    nxt = n
+    if whoosh is not None and n > 1:
+        path, peak = whoosh
+        inputs += ["-i", path]
+        w, nxt = nxt, nxt + 1
+        labels = "".join(f"[w{i}]" for i in range(n - 1))
+        g.append(f"[{w}:a]aresample=48000,aformat=channel_layouts=stereo,asplit={n - 1}{labels}")
+        for i, o in enumerate(offs):
+            ms = max(0, round((o + swipe_s / 2 - peak) * 1000))
+            g.append(f"[w{i}]adelay={ms}|{ms}[wd{i}]")
+        mix = "".join(f"[wd{i}]" for i in range(n - 1))
+        g.append(f"{a}{mix}amix=inputs={n}:duration=first:normalize=0[am]")
+        a = "[am]"
+    if subscribe is not None:
+        path, at = subscribe
+        inputs += ["-i", path]
+        sidx = nxt
+        wf, bf = SUBSCRIBE_WIDTH_FRAC, SUBSCRIBE_BOTTOM_FRAC
+        g.append(f"[{sidx}:v]setpts=PTS-STARTPTS+{at}/TB[s0]")
+        g.append(f"[s0]{v}scale2ref=w=main_w*{wf}:h=ow/mdar[s][base]")
+        g.append(
+            f"[base][s]overlay=x=(main_w-overlay_w)/2:y=main_h*{bf}-overlay_h"
+            f":eof_action=pass,format=yuv420p[vs]"
+        )
+        v = "[vs]"
     return [
         settings.ffmpeg_path,
         "-y",
-        "-i",
-        story,
-        "-i",
-        asset,
+        *inputs,
         "-filter_complex",
-        graph,
+        ";".join(g),
         "-map",
-        "[v]",
+        v,
         "-map",
-        "0:a?",
-        "-c:a",
-        "copy",
+        a,
         *_encode_opts(),
         out,
     ]
@@ -125,7 +195,7 @@ def _asset_duration(path: Path) -> float:
     try:
         return round(_duration(path), 2)
     except (OSError, ValueError, subprocess.SubprocessError):
-        return 4.0
+        return 5.0
 
 
 def _offset(plan: StoryPlan) -> float:
@@ -139,47 +209,41 @@ def join_stories(
     rounds: list[str],
     out: Path,
     *,
-    cards: bool = True,
     subscribe_after: int | None = 1,
     title: str | None = None,
+    swipe_s: float = SWIPE_S,
 ) -> Path:
-    """Concatenate each round's story.mp4, with a `Game n · label` card before
-    each. Overlay the subscribe animation in the game after `subscribe_after`
-    (None, an out-of-range value or a missing asset: no overlay). Write the
-    join map and chapter list next to the mp4."""
+    """Join each round's story.mp4 with a right-to-left swipe and a whoosh
+    (when WORKSPACE/sfx/whoosh.wav exists) between games. Overlay the
+    subscribe animation in the game after `subscribe_after` (None, an
+    out-of-range value or a missing asset: no overlay). Write the join map
+    and chapter list next to the mp4."""
     out = Path(out)
     stories = [story_path(r) for r in rounds]
     for r, s in zip(rounds, stories, strict=True):
         if not s.is_file():
             raise StoryRenderError(f"story video missing for round {r}: {s}")
     out.parent.mkdir(parents=True, exist_ok=True)
+    durations = [_duration(s) for s in stories]
     asset = subscribe_asset()
-    use_sub = subscribe_after is not None and 1 <= subscribe_after < len(rounds) and asset.is_file()
-    card_s = 0.0
-    with tempfile.TemporaryDirectory(prefix="story_join_") as tmp:
-        parts: list[str] = []
-        for n, (r, s) in enumerate(zip(rounds, stories, strict=True), start=1):
-            if cards:
-                card = Path(tmp) / f"card_{n}.mp4"
-                _render_card(f"Game {n} · {round_label(r)}", card)
-                card_s = _duration(card)
-                parts.append(card.as_posix())
-            if use_sub and subscribe_after is not None and n == subscribe_after + 1:
-                with_sub = Path(tmp) / f"story_{n}_subscribe.mp4"
-                cmd = subscribe_overlay_cmd(
-                    s.as_posix(), asset.as_posix(), with_sub.as_posix(), SUBSCRIBE_LEAD_S
-                )
-                ok, err = _run_ffmpeg(cmd, 60 + 3 * _duration(s))
-                if not ok:
-                    raise StoryRenderError(f"subscribe overlay failed: {err}")
-                parts.append(with_sub.as_posix())
-            else:
-                parts.append(s.as_posix())
-        ok, err = _concat(parts, out.as_posix())
+    sub_at: float | None = None
+    if subscribe_after is not None and 1 <= subscribe_after < len(rounds) and asset.is_file():
+        game_start = sum(durations[:subscribe_after]) - subscribe_after * swipe_s
+        sub_at = round(game_start + SUBSCRIBE_LEAD_S, 3)
+    wh = whoosh_asset()
+    cmd = join_cmd(
+        [s.as_posix() for s in stories],
+        durations,
+        out.as_posix(),
+        swipe_s=swipe_s,
+        whoosh=(wh.as_posix(), _whoosh_peak(wh)) if wh.is_file() else None,
+        subscribe=(asset.as_posix(), sub_at) if sub_at is not None else None,
+    )
+    ok, err = _run_ffmpeg(cmd, 120 + 3 * sum(durations))
     if not ok:
-        raise StoryRenderError(f"join concat failed: {err}")
-    sub = (subscribe_after, _asset_duration(asset), asset) if use_sub else None
-    write_join_files(rounds, out, card_s=card_s, title=title, subscribe=sub)
+        raise StoryRenderError(f"join failed: {err}")
+    sub = (subscribe_after, _asset_duration(asset), asset) if sub_at is not None else None
+    write_join_files(rounds, out, transition_s=swipe_s, title=title, subscribe=sub)
     return out
 
 
@@ -187,7 +251,7 @@ def write_join_files(
     rounds: list[str],
     out: Path,
     *,
-    card_s: float,
+    transition_s: float = SWIPE_S,
     title: str | None = None,
     subscribe: tuple[int, float, Path] | None = None,
 ) -> Path:
@@ -207,11 +271,12 @@ def write_join_files(
         plans=plans,
         offsets_s=[_offset(p) for p in plans],
         story_durations_s=[_duration(story_path(r)) for r in rounds],
-        card_s=card_s,
+        card_s=0.0,
         story_card_s=settings.story_card_seconds,
         story_jsons=[story_path(r).parent / "story.json" for r in rounds],
         digest_jsons=[d if d.is_file() else None for d in digests],
         subscribe=subscribe,
+        transition_s=transition_s,
     )
     map_path = out.with_suffix(".join.json")
     map_path.write_text(jm.model_dump_json(indent=2), encoding="utf-8")
@@ -223,7 +288,6 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="story-join", description=__doc__.splitlines()[0])
     ap.add_argument("rounds", nargs="+", help="round names, in game order (at least 2)")
     ap.add_argument("--out", help="output mp4 (default WORKSPACE/story/joined_...)")
-    ap.add_argument("--no-cards", action="store_true", help="skip the game cards")
     ap.add_argument("--title", help="video title for the join map")
     ap.add_argument(
         "--subscribe-after",
@@ -239,7 +303,6 @@ def main(argv: list[str] | None = None) -> int:
         res = join_stories(
             args.rounds,
             out,
-            cards=not args.no_cards,
             subscribe_after=args.subscribe_after or None,
             title=args.title,
         )

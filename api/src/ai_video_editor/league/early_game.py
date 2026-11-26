@@ -27,7 +27,10 @@ EarlyKind = Literal[
     "opening", "level3_trade", "jungle_move", "low_hp", "heavy_trade", "give_recall", "first_back"
 ]
 
-STARTING_ITEMS_END_S = 150.0  # purchases before game 2:30 are starting items
+# Purchases before game 1:00 are starting items (bought in fountain). It was
+# 2:30 until the Kai'sa game (2026-11-26): a quiet-lane back at 2:24 for Cull
+# was skipped.
+STARTING_ITEMS_END_S = 60.0
 BACK_PRE_S = 12.0  # give_recall windows
 BACK_POST_S = 8.0
 # Owner 2026-11-26: "skip to like the first recall or like the 30 seconds
@@ -114,7 +117,7 @@ def _owner_purchases_s(raw_timeline: dict, owner_pid: int) -> list[float]:
 
 
 def first_back_s(raw_timeline: dict, owner_pid: int, offset_s: float) -> float | None:
-    """Recording seconds of the owner's first purchase after game 2:30
+    """Recording seconds of the owner's first purchase after game 1:00
     (starting items excluded); None when the owner bought nothing then."""
     buys = _owner_purchases_s(raw_timeline, owner_pid)
     return round(buys[0] + offset_s, 3) if buys else None

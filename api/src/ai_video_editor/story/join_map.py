@@ -75,8 +75,11 @@ def build_join_map(
     digest_jsons: list[Path | None],
     series: str | None = None,
     subscribe: tuple[int, float, Path] | None = None,
+    transition_s: float = 0.0,
 ) -> JoinMap:
-    """`card_s`: the join's own "Game n" card before each game (0 without cards).
+    """`transition_s`: each game after the first starts this long before the
+    previous one ends (the swipe overlaps them; owner 2026-11-26 dropped the
+    title cards). `card_s`: a "Game n" card before each game (0 without cards).
     `story_card_s`: a story's per-chapter card length (stories with cards=False
     have none). `offsets_s`: each game's recording offset (game clock =
     recording - offset). `subscribe`: (after game n, 1-based; overlay
@@ -84,6 +87,8 @@ def build_join_map(
     games: list[JoinGame] = []
     t = 0.0
     for i, r in enumerate(rounds):
+        if i:
+            t -= transition_s
         story_start = t + card_s
         plan = plans[i]
         starts = chapter_footage_starts(plan, story_card_s)
