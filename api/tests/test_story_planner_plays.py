@@ -7,10 +7,19 @@ from _play_factory import make_play
 
 from ai_video_editor.league.play_models import GameModel
 from ai_video_editor.league.riot_timeline import RiotTimeline, TimelineEvent
-from ai_video_editor.story.planner import EVENT_POST_S, GAME_END_TAIL_S, plan_story_from_plays
+from ai_video_editor.story.planner import (
+    ENDING_TAIL_S,
+    ENDING_TITLE,
+    EVENT_POST_S,
+    Chapter,
+    _with_ending,
+    plan_story_from_plays,
+)
 
 
-def _tl(kills: list[float] | None = None, end: float | None = 2000.0) -> RiotTimeline:
+# game_end_s defaults to None: plan_story_from_plays ends every plan on the
+# nexus when it is known (_with_ending), which these tests are not about.
+def _tl(kills: list[float] | None = None, end: float | None = None) -> RiotTimeline:
     events = [TimelineEvent("kill", t, t, [], {}) for t in kills or []]
     return RiotTimeline("m", "high", 0.0, end, events, [])
 
@@ -74,7 +83,8 @@ def test_fallback_window_when_vlm_pending():
 
 def test_clamped_to_game_end():
     g = _game(make_play("a", approach=1990, outcome=2100))
-    assert _plan(g).chapters[0].end_s == 2001.0
+    # Clamped to the game end, then (owner 2026-11-26) stretched over the nexus.
+    assert _plan(g, _tl(end=2000.0)).chapters[0].end_s == 2000.0 + ENDING_TAIL_S
 
 
 def test_close_and_lane_kinds():
@@ -214,7 +224,7 @@ def _ev(kind, t):
     return TimelineEvent(kind, t, t, [], {})
 
 
-def _tl_events(events, offset=0.0, source=None, end=3000.0):
+def _tl_events(events, offset=0.0, source=None, end=None):
     tl = RiotTimeline("m", "high", offset, end, events, [])
     tl.offset_source = source
     return tl
@@ -360,6 +370,7 @@ def test_outnumbered_not_for_lane_chapter():
 def test_outnumbered_start_after_previous_chapter():
     prev = make_play("a", approach=1990, outcome=2030, rec_minus_game=-17.0)
     g, tl = _zeri()
+    tl.game_end_s = None  # not about the ending chapter
     plan = _plan(_game(prev, g.plays[0]), tl)
     assert [c.play_id for c in plan.chapters] == ["a", "p43"]
     assert plan.chapters[1].start_s == 2030
@@ -396,4 +407,56 @@ def test_post_buffer_never_past_game_end():
     play = make_play("k", type="closeout", approach=100, outcome=120, first_kill=110, last_kill=120)
     tl = _tl_events([_ev("kill", 120.0)], end=120.5)
     c = _plan(_game(play), tl).chapters[0]
-    assert c.end_s == 120.5 + GAME_END_TAIL_S
+    # The post buffer is clamped to the game end; the nexus tail (owner
+    # 2026-11-26) then stretches the last chapter ENDING_TAIL_S past it.
+    assert c.end_s == 120.5 + ENDING_TAIL_S
+
+
+# --- _with_ending ---
+
+
+def _ch(a, b, title="x", kind="fight"):
+    return Chapter(title=title, start_s=a, end_s=b, kind=kind)
+
+
+def _etl(end):
+    return _tl(end=end)
+
+
+def test_ending_stretches_last_chapter_within_20s_of_the_end():
+    out = _with_ending([_ch(100, 180)], _etl(190.0))
+    assert [(c.start_s, c.end_s) for c in out] == [(100, 190.0 + ENDING_TAIL_S)]
+
+
+def test_ending_appended_when_last_chapter_ends_long_before_the_end():
+    out = _with_ending([_ch(100, 150)], _etl(300.0))
+    assert len(out) == 2 and out[0].end_s == 150
+    assert (out[1].title, out[1].kind) == (ENDING_TITLE, "close")
+    assert (out[1].start_s, out[1].end_s) == (292.0, 305.0)
+
+
+def test_ending_appended_after_surrender_style_gap_never_overlaps():
+    out = _with_ending([_ch(100, 295)], _etl(300.0 + 30))  # 35 s short: appended
+    assert out[1].start_s >= out[0].end_s
+
+
+def test_ending_unchanged_when_chapter_already_past_the_end():
+    chapters = [_ch(100, 400)]
+    assert _with_ending(chapters, _etl(300.0)) == chapters
+
+
+def test_ending_unchanged_without_game_end():
+    chapters = [_ch(100, 150)]
+    assert _with_ending(chapters, _etl(None)) == chapters
+
+
+def test_ending_on_an_empty_plan_is_just_the_ending_chapter():
+    (c,) = _with_ending([], _etl(300.0))
+    assert (c.title, c.start_s, c.end_s) == (ENDING_TITLE, 292.0, 305.0)
+
+
+def test_plan_from_plays_ends_on_the_nexus():
+    g = _game(make_play("a", approach=100, outcome=120))
+    plan = _plan(g, _tl(end=500.0))
+    assert plan.chapters[-1].title == ENDING_TITLE
+    assert plan.chapters[-1].end_s == 505.0

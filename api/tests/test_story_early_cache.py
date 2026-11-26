@@ -58,7 +58,7 @@ def wired(tmp_path, monkeypatch):
     d.mkdir(parents=True, exist_ok=True)
     (d / "timeline.json").write_text(json.dumps({"info": {"frames": []}}), encoding="utf-8")
     base = [_seg()]
-    monkeypatch.setattr(cli, "early_segments", lambda tl, raw: list(base))
+    monkeypatch.setattr(cli, "early_segments", lambda tl, raw, **kw: list(base))
     monkeypatch.setattr(cli, "first_back_s", lambda *a, **k: 200.0)
     monkeypatch.setattr(cli, "_early_backend", lambda aid: SimpleNamespace(name="fake", model="m"))
     calls = []

@@ -152,6 +152,14 @@ def _early_backend(asset_id: str):
     return default_backend(asset_id, cap_usd=settings.game_understanding_budget_usd)
 
 
+def is_team_game(asset_id: str) -> bool:
+    """A custom game (tournaments such as ACL): Riot's `gameType` CUSTOM_GAME.
+    Ranked / normal queues are solo-queue content (owner 2026-11-26)."""
+    match = _read_json(cache_dir_for(asset_id) / "match.json")
+    info = match.get("info", {}) if isinstance(match, dict) else {}
+    return info.get("gameType") == "CUSTOM_GAME"
+
+
 def load_early(
     asset_id: str, timeline: RiotTimeline, src: str, *, fresh_vision: bool = False
 ) -> list[EarlySegment] | None:
@@ -164,7 +172,7 @@ def load_early(
     if not isinstance(raw, dict) or timeline.owner_pid is None:
         return None
     try:
-        segments = early_segments(timeline, raw)
+        segments = early_segments(timeline, raw, team_game=is_team_game(asset_id))
     except (KeyError, ValueError, TypeError) as e:
         _log.warning("early-game segments unavailable for %s: %s", asset_id, e)
         return None

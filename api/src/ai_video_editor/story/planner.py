@@ -108,6 +108,9 @@ class Chapter(BaseModel):
     broll: list[BRollInsert] = []
     # Owner-requested effects (story/requests.py), rendered by story/render.py.
     effects: list[ChapterEffect] = []
+    # Recording-second ranges where the owner's mic is muted (owner request:
+    # off-game talk he will narrate over later). Game audio keeps playing.
+    mic_mutes: list[tuple[float, float]] = []
 
 
 class StoryPlan(BaseModel):
@@ -347,6 +350,32 @@ def plan_story(
     )
 
 
+# Every story ends on the nexus exploding (owner 2026-11-26: Kai'sa and the
+# Yunara surrender both stopped short of it). The last chapter reaches
+# ENDING_TAIL_S past Riot's game end; when it ends more than ENDING_JOIN_S
+# before the end, a short ending chapter is added instead.
+ENDING_TAIL_S = 5.0
+ENDING_JOIN_S = 20.0
+ENDING_PRE_S = 8.0
+ENDING_TITLE = "The end"
+
+
+def _with_ending(chapters: list[Chapter], timeline: RiotTimeline) -> list[Chapter]:
+    """`chapters` (start order) ending on the nexus: the last one stretched to
+    game end + ENDING_TAIL_S, or an ending chapter appended."""
+    if timeline.game_end_s is None:
+        return chapters
+    end = round(timeline.game_end_s + ENDING_TAIL_S, 2)
+    if chapters and chapters[-1].end_s >= end:
+        return chapters
+    if chapters and chapters[-1].end_s >= timeline.game_end_s - ENDING_JOIN_S:
+        return [*chapters[:-1], chapters[-1].model_copy(update={"end_s": end})]
+    start = round(timeline.game_end_s - ENDING_PRE_S, 2)
+    if chapters:
+        start = max(start, chapters[-1].end_s)
+    return [*chapters, Chapter(title=ENDING_TITLE, start_s=start, end_s=end, kind="close")]
+
+
 PLAY_PRE_FALLBACK_S = 8.0
 PLAY_POST_FALLBACK_S = 3.0
 _UNRANKED = 10**6
@@ -539,7 +568,7 @@ def plan_story_from_plays(
         worst = max(droppable, key=lambda c: rank_of.get(c.play_id) or _UNRANKED)
         kept.remove(worst)
     plays_total = _total(_no_overlap(kept))
-    kept = _no_overlap(early_chapters + kept)
+    kept = _with_ending(_no_overlap(early_chapters + kept), timeline)
     total = _total(kept)
     return StoryPlan(
         asset_id=asset_id,

@@ -120,11 +120,12 @@ def test_no_early_events_is_opening_plus_first_back_only():
     frames[3]["events"] = [buy(200.0, 3070)]
     tl, r = build(frames)
     segs = early_segments(tl, r)
-    assert kinds(segs) == ["opening", "first_back"]
-    op, fb = segs
-    assert (op.start_s, op.end_s) == (160.0, 220.0)  # 1:00-2:00 + offset
-    assert (fb.start_s, fb.end_s) == (288.0, 308.0)  # 200-12 .. 200+8 + offset
-    assert fb.confirmed is False
+    # Owner 2026-11-26: the opening runs without a cut to the end of the first
+    # back (wave crash + recall), so the back is no longer a separate window.
+    assert kinds(segs) == ["opening"]
+    (op,) = segs
+    assert (op.start_s, op.end_s) == (160.0, 308.0)  # 1:00 .. 200+8 + offset
+    assert op.confirmed is False
 
 
 def test_opening_present_without_any_purchase():
@@ -140,11 +141,27 @@ def test_opening_starts_at_0_20_when_kill_before_1_05():
     assert early_segments(tl, r)[0].start_s == 120.0  # game 0:20 + offset 100
 
 
-def test_opening_starts_at_0_20_when_both_laners_in_bush():
+def test_opening_starts_at_0_20_when_both_laners_in_bush_in_a_team_game():
     frames = quiet()
     frames[1] = frame(1, pos=BUSH, enemy_pos=BUSH)
     tl, r = build(frames)
-    assert early_segments(tl, r)[0].start_s == 120.0  # game 0:20 + offset 100
+    assert early_segments(tl, r, team_game=True)[0].start_s == 120.0  # 0:20 + offset 100
+
+
+def test_bush_standoff_alone_is_not_a_brawl_in_solo_queue():
+    # Owner 2026-11-26: solo-queue laners sit in the bush without fighting.
+    frames = quiet()
+    frames[1] = frame(1, pos=BUSH, enemy_pos=BUSH)
+    tl, r = build(frames)
+    assert early_segments(tl, r, team_game=False)[0].start_s == 160.0  # default 1:00
+    assert early_segments(tl, r)[0].start_s == 160.0  # team_game defaults to False
+
+
+def test_kill_before_1_05_pulls_start_in_solo_queue_too():
+    frames = quiet()
+    frames[0]["events"] = [kill(58.0, killer=ENEMY, victim=7)]
+    tl, r = build(frames)
+    assert early_segments(tl, r, team_game=False)[0].start_s == 120.0
 
 
 def test_opening_one_laner_in_bush_is_not_enough():
@@ -229,9 +246,11 @@ def test_jungle_move_before_first_back():
     frames[5]["events"] = [buy(310.0)]
     tl, r = build(frames)
     segs = early_segments(tl, r)
-    j = of_kind(segs, "jungle_move")
-    assert len(j) == 1
-    assert j[0].start_s <= 180.0 + OFFSET <= j[0].end_s
+    # The jungle move sits inside the continuous opening-to-first-back window
+    # (owner 2026-11-26), so it is no longer a window of its own.
+    assert kinds(segs) == ["opening"]
+    assert segs[0].start_s <= 180.0 + OFFSET <= segs[0].end_s
+    assert segs[0].end_s == 310.0 + 8 + OFFSET
 
 
 def test_jungle_after_first_back_is_ignored():
@@ -247,8 +266,10 @@ def test_low_hp_before_first_back():
     frames[4] = frame(4, pos=LANE, hp=(100, 500))
     frames[6]["events"] = [buy(400.0)]
     tl, r = build(frames)
-    lo = of_kind(early_segments(tl, r), "low_hp")
-    assert len(lo) == 1 and lo[0].start_s <= 240.0 + OFFSET <= lo[0].end_s
+    segs = early_segments(tl, r)
+    # Swallowed by the continuous opening (owner 2026-11-26).
+    assert kinds(segs) == ["opening"]
+    assert segs[0].start_s <= 240.0 + OFFSET <= segs[0].end_s
 
 
 def test_hp_above_quarter_is_not_low():
@@ -267,8 +288,9 @@ def test_give_recall_purchase_before_6_00_that_is_not_first_back():
     frames[5]["events"] = [buy(330.0, 1056)]
     tl, r = build(frames)
     segs = early_segments(tl, r)
-    assert kinds(segs) == ["opening", "first_back", "give_recall"]
-    assert segs[2].start_s == 330.0 - 12 + OFFSET
+    # first_back is inside the continuous opening; give_recall (after it) stays.
+    assert kinds(segs) == ["opening", "give_recall"]
+    assert segs[1].start_s == 330.0 - 12 + OFFSET
 
 
 def test_purchase_after_6_00_or_same_trip_is_not_give_recall():
@@ -297,8 +319,9 @@ def test_overlapping_segments_merge_and_priority_kind_wins():
     )
     tl, r = build(frames)
     segs = early_segments(tl, r)
-    assert kinds(segs) == ["opening", "first_back"]
-    assert "jungle" in segs[1].reason and "first back" in segs[1].reason
+    # Opening, jungle move and first back are one continuous opening now.
+    assert kinds(segs) == ["opening"]
+    assert segs[0].end_s == 200.0 + 8 + OFFSET
 
 
 def test_sorted_nonoverlapping_and_capped_at_first_back_plus_8():
@@ -341,4 +364,41 @@ def test_real_cache_smoke():
     assert "opening" in kinds(segs)
     assert all(a.end_s < b.start_s for a, b in itertools.pairwise(segs))
     back = first_back_s(cached[1], tl.owner_pid, tl.offset_s)
-    assert back is not None and "first_back" in kinds(segs)
+    # The first back is covered by the continuous opening when it is close
+    # enough, otherwise it stays its own window.
+    assert back is not None
+    op = of_kind(segs, "opening")[0]
+    assert "first_back" in kinds(segs) or op.end_s >= back + tl.offset_s
+
+
+# --- _through_first_back ---
+
+from ai_video_editor.league.early_game import _through_first_back  # noqa: E402
+
+
+def _seg(kind, a, b):
+    return EarlySegment(kind=kind, start_s=a, end_s=b, reason="x")
+
+
+def test_through_first_back_merges_and_swallows_in_between():
+    segs = [
+        _seg("opening", 100, 220),
+        _seg("jungle_move", 250, 280),
+        _seg("first_back", 300, 320),
+    ]
+    out = _through_first_back(segs)
+    assert [(s.kind, s.start_s, s.end_s) for s in out] == [("opening", 100, 320)]
+
+
+def test_through_first_back_leaves_far_back_alone():
+    segs = [_seg("opening", 100, 220), _seg("first_back", 521, 540)]  # gap 301 s
+    assert _through_first_back(segs) == segs
+
+
+def test_through_first_back_keeps_give_recall_after():
+    segs = [_seg("opening", 100, 220), _seg("first_back", 300, 320), _seg("give_recall", 400, 420)]
+    out = _through_first_back(segs)
+    assert [(s.kind, s.start_s, s.end_s) for s in out] == [
+        ("opening", 100, 320),
+        ("give_recall", 400, 420),
+    ]

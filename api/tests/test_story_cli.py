@@ -318,7 +318,7 @@ def _early_main(ws, monkeypatch, argv=(), *, setting=True, cache=True, confirm=N
     monkeypatch.setattr(settings, "story_early_confirm", wants)
     if cache:
         _write(ws / "riot" / "a1" / "timeline.json", {"info": {"frames": []}})
-    monkeypatch.setattr(cli, "early_segments", lambda tl, raw: [seg])
+    monkeypatch.setattr(cli, "early_segments", lambda tl, raw, **kw: [seg])
     monkeypatch.setattr(cli, "first_back_s", lambda raw, pid, off: 200.0)
     seen: dict = {}
     if confirm is not None:
@@ -501,3 +501,29 @@ def test_render_round_returns_path_and_raises_typed_errors(ws, monkeypatch):
     monkeypatch.setattr(cli, "load_timeline", lambda a: None)
     with pytest.raises(cli.StoryInputError, match="timeline"):
         cli.render_round("a1", "r1", source="C:/x.mp4")
+
+
+# --- is_team_game ---
+
+
+def _match_cache(tmp_path, monkeypatch, payload):
+    d = tmp_path / "riot"
+    d.mkdir()
+    if payload is not None:
+        (d / "match.json").write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(cli, "cache_dir_for", lambda asset_id: d)
+
+
+def test_is_team_game_true_for_custom_game(tmp_path, monkeypatch):
+    _match_cache(tmp_path, monkeypatch, {"info": {"gameType": "CUSTOM_GAME"}})
+    assert cli.is_team_game("a") is True
+
+
+def test_is_team_game_false_for_matched_game(tmp_path, monkeypatch):
+    _match_cache(tmp_path, monkeypatch, {"info": {"gameType": "MATCHED_GAME"}})
+    assert cli.is_team_game("a") is False
+
+
+def test_is_team_game_false_without_match_json(tmp_path, monkeypatch):
+    _match_cache(tmp_path, monkeypatch, None)
+    assert cli.is_team_game("a") is False

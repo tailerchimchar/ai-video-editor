@@ -100,13 +100,18 @@ def _in_bush(pos: dict | None) -> bool:
     return math.hypot(pos["x"] - BUSH_CENTER[0], pos["y"] - BUSH_CENTER[1]) <= BUSH_RADIUS
 
 
-def _brawl_before_1_05(timeline: RiotTimeline, raw: dict) -> str | None:
+def _brawl_before_1_05(timeline: RiotTimeline, raw: dict, *, team_game: bool) -> str | None:
     """Why the opening should start early (BRAWL_START_S), else None: a champion kill
-    before 1:05, or the owner and an enemy both in the bot bush at the
-    frame before 1:05 (bot laners are not labelled in the timeline, so
-    any enemy stands in for the enemy bot laner)."""
+    before 1:05, or (team games only) the owner and an enemy both in the bot
+    bush at the frame before 1:05 (bot laners are not labelled in the
+    timeline, so any enemy stands in for the enemy bot laner). Owner
+    2026-11-26: in team/tournament games the level-1 bush fight is real
+    (Jhin); in solo queue both laners sit in the bush without fighting
+    (Yunara, Kai'sa), so the bush alone does not count there."""
     if any(e.kind in FIGHT_KINDS and e.t_game_s < BRAWL_CHECK_S for e in timeline.events):
         return "champion kill before 1:05"
+    if not team_game:
+        return None
     owner = timeline.owner_pid
     enemies = range(6, 11) if timeline.owner_team_id == 100 else range(1, 6)
     for fr in _frames(raw):
@@ -121,8 +126,8 @@ def _brawl_before_1_05(timeline: RiotTimeline, raw: dict) -> str | None:
     return None
 
 
-def _opening(timeline: RiotTimeline, raw: dict) -> EarlySegment:
-    why = _brawl_before_1_05(timeline, raw)
+def _opening(timeline: RiotTimeline, raw: dict, *, team_game: bool) -> EarlySegment:
+    why = _brawl_before_1_05(timeline, raw, team_game=team_game)
     start = BRAWL_START_S if why else DEFAULT_START_S
     end = OPENING_END_S
     lvl2 = _owner_level_up_s(raw, timeline.owner_pid, 2)
@@ -257,15 +262,20 @@ def _merge(segs: list[EarlySegment]) -> list[EarlySegment]:
     return out
 
 
-def early_segments(timeline: RiotTimeline, raw_timeline: dict) -> list[EarlySegment]:
+def early_segments(
+    timeline: RiotTimeline, raw_timeline: dict, *, team_game: bool = False
+) -> list[EarlySegment]:
     """Early-game windows (recording seconds), merged and sorted. Always
     contains an `opening`; contains `first_back` whenever the owner bought
     anything after 2:30. Everything except `give_recall` (which by
-    definition comes after first back) ends no later than first back + 8 s."""
+    definition comes after first back) ends no later than first back + 8 s.
+    The opening runs without a cut until the first back ends (owner
+    2026-11-26: show the wave crash and the recall). `team_game`: a custom /
+    tournament game, where a bush standoff before 1:05 is a real fight."""
     if timeline.owner_pid is None:
         return []
     raw = raw_timeline
-    opening = _opening(timeline, raw)
+    opening = _opening(timeline, raw, team_game=team_game)
     segs = [opening]
     buys = _owner_purchases_s(raw, timeline.owner_pid)
     back = _first_back(timeline, raw)
@@ -281,5 +291,26 @@ def early_segments(timeline: RiotTimeline, raw_timeline: dict) -> list[EarlySegm
         cap = buys[0] + BACK_POST_S + timeline.offset_s
         segs = [s.model_copy(update={"end_s": min(s.end_s, cap)}) for s in segs]
         segs = [s for s in segs if s.start_s < s.end_s]
+    segs = _through_first_back(segs)
     segs += _give_recalls(timeline, raw)
     return _merge(segs)
+
+
+# The opening stretches to the first back when the gap is at most this long;
+# a later back (a long first lane phase) keeps the separate windows.
+OPENING_TO_BACK_MAX_GAP_S = 300.0
+
+
+def _through_first_back(segs: list[EarlySegment]) -> list[EarlySegment]:
+    """One continuous `opening` from the opening's start to the first back's
+    end, swallowing every window in between (owner 2026-11-26: "keep the game
+    going up until the first back ... show that i crash the wave and recall")."""
+    opening = next((s for s in segs if s.kind == "opening"), None)
+    back = next((s for s in segs if s.kind == "first_back"), None)
+    if opening is None or back is None or back.start_s - opening.end_s > OPENING_TO_BACK_MAX_GAP_S:
+        return segs
+    lo, hi = opening.start_s, max(back.end_s, opening.end_s)
+    whole = opening.model_copy(
+        update={"end_s": hi, "reason": f"{opening.reason}; continuous to the first back"}
+    )
+    return [whole, *(s for s in segs if s.end_s <= lo or s.start_s >= hi)]
