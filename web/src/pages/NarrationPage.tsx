@@ -1,0 +1,203 @@
+import { useMemo, useState } from "react";
+import { Link, useParams } from "react-router-dom";
+import { narratedVideoUrl, takeMediaUrl } from "@/api/narration";
+import { CameraBoxEditor } from "@/components/narration/CameraBoxEditor";
+import { CameraSettings } from "@/components/narration/CameraSettings";
+import { ExportPanel } from "@/components/narration/ExportPanel";
+import { RecordControls } from "@/components/narration/RecordControls";
+import { TakeTimeline } from "@/components/narration/TakeTimeline";
+import { VideoPlayer } from "@/components/VideoPlayer";
+import { Badge } from "@/components/ui/Badge";
+import { Button } from "@/components/ui/Button";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { PageShell } from "@/components/ui/PageShell";
+import { useAudioLevel } from "@/hooks/useAudioLevel";
+import { useJob } from "@/hooks/useJob";
+import { useMediaDevices } from "@/hooks/useMediaDevices";
+import { useMediaStream } from "@/hooks/useMediaStream";
+import { useNarrationSession } from "@/hooks/useNarrationSession";
+import { useTakeCapture } from "@/hooks/useTakeCapture";
+import { useTakePlayback } from "@/hooks/useTakePlayback";
+import { useVideoClock } from "@/hooks/useVideoClock";
+import type { TargetRef } from "@/types/narration";
+
+/**
+ * `/narrate/:kind/:key` — record voice (and optionally camera) takes over
+ * a finished video, place the camera box, export `narrated.mp4`.
+ *
+ * Nothing here knows about a game or a kind: the target comes from the
+ * route, the video URL and camera layout from the API.
+ */
+export function NarrationPage() {
+  const { kind, key } = useParams<{ kind: string; key: string }>();
+  if (!kind || !key) return null;
+  // Keyed so switching targets resets every piece of local state.
+  return <NarrationWorkspace key={`${kind}/${key}`} target={{ kind, key }} />;
+}
+
+function NarrationWorkspace({ target }: { target: TargetRef }) {
+  const narration = useNarrationSession(target);
+  const view = narration.session.data;
+
+  // Media input
+  const [cameraOn, setCameraOn] = useState(false);
+  const [microphoneId, setMicrophoneId] = useState("");
+  const [cameraId, setCameraId] = useState("");
+  const media = useMediaStream({ camera: cameraOn, microphoneId, cameraId });
+  const devices = useMediaDevices(media.stream);
+  const level = useAudioLevel(media.stream);
+
+  // Video + takes
+  const [video, setVideo] = useState<HTMLVideoElement | null>(null);
+  const clock = useVideoClock(video);
+  const capture = useTakeCapture({
+    video,
+    stream: media.stream,
+    onTake: (take) => narration.addTake.mutate(take),
+  });
+  const playTake = useTakePlayback(video);
+
+  // Export
+  const [jobId, setJobId] = useState<string | null>(null);
+  const job = useJob(jobId);
+
+  const cameraPreview = useMemo(
+    () =>
+      cameraOn && media.stream && media.stream.getVideoTracks().length > 0 ? media.stream : null,
+    [cameraOn, media.stream],
+  );
+
+  const backLink = (
+    <Link to="/">
+      <Button variant="ghost" size="sm">
+        ← home
+      </Button>
+    </Link>
+  );
+
+  if (narration.session.isError) {
+    return (
+      <PageShell>
+        <PageHeader
+          title="Narrate"
+          subtitle={`${target.kind} · ${target.key}`}
+          trailing={backLink}
+        />
+        <p className="font-mono text-sm text-danger">
+          could not load this video · {(narration.session.error as Error).message}
+        </p>
+      </PageShell>
+    );
+  }
+
+  if (!view) {
+    return (
+      <PageShell>
+        <PageHeader
+          title="Narrate"
+          subtitle={`${target.kind} · ${target.key}`}
+          trailing={backLink}
+        />
+        <p className="font-mono text-sm text-text-muted">loading…</p>
+      </PageShell>
+    );
+  }
+
+  const { session } = view;
+  const busy = capture.recording;
+
+  return (
+    <PageShell>
+      <PageHeader
+        title="Narrate"
+        subtitle={`${target.kind} · ${target.key}`}
+        trailing={
+          <>
+            <Badge tone="muted">{view.game}</Badge>
+            {view.stale && <Badge tone="danger">stale</Badge>}
+            {backLink}
+          </>
+        }
+      />
+
+      <div className="grid grid-cols-1 gap-8 lg:grid-cols-12">
+        <div className="space-y-6 lg:col-span-8">
+          <div className="relative">
+            <VideoPlayer ref={setVideo} src={view.video_url} />
+            <CameraBoxEditor
+              cameraPx={view.camera_px}
+              camera={session.camera}
+              preview={cameraPreview}
+              onSave={(camera) => narration.saveCamera.mutate(camera)}
+            />
+          </div>
+
+          <TakeTimeline
+            takes={session.takes}
+            durationS={clock.duration}
+            currentTimeS={clock.currentTime}
+            disabled={busy}
+            deletingId={
+              narration.removeTake.isPending ? (narration.removeTake.variables ?? null) : null
+            }
+            onPlay={(take) => playTake(take.start_s, takeMediaUrl(view, take))}
+            onDelete={(takeId) => narration.removeTake.mutate(takeId)}
+            onSeek={(s) => {
+              if (video) video.currentTime = s;
+            }}
+          />
+        </div>
+
+        <aside className="space-y-6 lg:col-span-4">
+          <RecordControls
+            recording={capture.recording}
+            canRecord={capture.canRecord}
+            onRecord={capture.start}
+            onStop={capture.stop}
+            cameraOn={cameraOn}
+            onCameraToggle={setCameraOn}
+            microphones={devices.microphones}
+            cameras={devices.cameras}
+            microphoneId={microphoneId}
+            cameraId={cameraId}
+            onMicrophoneChange={setMicrophoneId}
+            onCameraChange={setCameraId}
+            level={level}
+            streamError={media.error}
+            uploading={narration.addTake.isPending}
+            uploadError={narration.addTake.error?.message ?? null}
+          />
+
+          <section className="surface-elevated space-y-3 rounded-lg p-4">
+            <h2 className="font-mono text-xs uppercase tracking-wider text-text-muted">
+              camera box
+            </h2>
+            <p className="font-mono text-xs text-text-dim">
+              Drag the box on the video to move it; drag its corner to resize.
+            </p>
+            <CameraSettings
+              camera={session.camera}
+              busy={narration.saveCamera.isPending}
+              onSave={(camera) => narration.saveCamera.mutate(camera)}
+            />
+          </section>
+
+          <ExportPanel
+            stale={view.stale}
+            takeCount={session.takes.length}
+            onRelock={() => narration.relockTakes.mutate()}
+            onDeleteAllTakes={() => narration.removeAllTakes.mutate(session.takes.map((t) => t.id))}
+            resolvingStale={narration.relockTakes.isPending || narration.removeAllTakes.isPending}
+            onExport={() =>
+              narration.exportVideo.mutate(false, { onSuccess: ({ job_id }) => setJobId(job_id) })
+            }
+            starting={narration.exportVideo.isPending}
+            job={job.data}
+            error={narration.exportVideo.error?.message ?? null}
+            narratedUrl={jobId ? narratedVideoUrl(view, jobId) : null}
+          />
+        </aside>
+      </div>
+    </PageShell>
+  );
+}
