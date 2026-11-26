@@ -2410,6 +2410,66 @@ def story_render(round: str, asset_id: str, plays: bool = True) -> dict:
         return _wait_for_job(c, r.json()["job_id"], timeout_s=1800)
 
 
+@mcp.tool()
+def narration_status(kind: str, key: str) -> dict:
+    """Show a video's narration: takes (id, start_s, duration_s, has_camera),
+    camera box, `stale` (the video changed after the takes were recorded) and
+    the video URL. `kind` is the narratable type ("story"); `key` is its id
+    (for a story, the round folder name). Creates an empty session on first call.
+
+    Recording itself is browser-only: tell the owner to open
+    `/narrate/<kind>/<key>` in the web app, record the takes there, then use
+    `narration_export` here."""
+    with _client() as c:
+        return c.get(f"{API}/narration/{kind}/{key}").json()
+
+
+@mcp.tool()
+def narration_set_camera(
+    kind: str,
+    key: str,
+    enabled: bool,
+    width_frac: float | None = None,
+    x: float | None = None,
+    y: float | None = None,
+) -> dict:
+    """Show or hide the camera box in the narrated export, and optionally
+    move/resize it. `width_frac` is the box width as a fraction of the frame
+    (0.08-0.5); `x`/`y` are the box's top-left corner as frame fractions
+    (0-1). Anything left out keeps the game profile default. Returns the
+    updated session (with the resolved `camera_px`)."""
+    body: dict = {"enabled": enabled}
+    for name, value in (("width_frac", width_frac), ("x", x), ("y", y)):
+        if value is not None:
+            body[name] = value
+    with _client() as c:
+        return c.put(f"{API}/narration/{kind}/{key}/camera", json=body).json()
+
+
+@mcp.tool()
+def narration_remove_take(kind: str, key: str, take_id: str) -> dict:
+    """Delete one recorded take by `take_id` (see `narration_status`).
+    Returns the updated session."""
+    with _client() as c:
+        return c.delete(f"{API}/narration/{kind}/{key}/takes/{take_id}").json()
+
+
+@mcp.tool()
+def narration_export(kind: str, key: str, force: bool = False) -> dict:
+    """Mix the recorded takes over the video into `narrated.mp4` (original
+    audio ducks while the owner talks; camera box only if enabled). Refuses
+    when the video changed after recording (`stale`) unless `force=True`;
+    to keep the takes as they are, ask the owner to re-lock in the web page.
+
+    Job-based; this tool waits for completion. On success `output_path` is the
+    narrated video. On timeout the job continues in the background."""
+    with _client() as c:
+        r = c.post(f"{API}/narration/{kind}/{key}/export", json={"force": force})
+        if r.status_code != 200:
+            return {"status": "failed", "error": r.text}
+        return _wait_for_job(c, r.json()["job_id"], timeout_s=1800)
+
+
 def main() -> None:
     mcp.run()
 
