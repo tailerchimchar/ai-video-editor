@@ -13,6 +13,9 @@ export function useAudioLevel(stream: MediaStream | null): number {
       return;
     }
     const ctx = new AudioContext();
+    // Autoplay policy may start the context suspended until a user gesture.
+    const resume = () => void ctx.resume();
+    if (ctx.state === "suspended") document.addEventListener("pointerdown", resume, { once: true });
     const analyser = ctx.createAnalyser();
     analyser.fftSize = 1024;
     // The analyser is not connected to the speakers, so the owner never
@@ -34,6 +37,7 @@ export function useAudioLevel(stream: MediaStream | null): number {
 
     return () => {
       cancelAnimationFrame(frame);
+      document.removeEventListener("pointerdown", resume);
       source.disconnect();
       void ctx.close();
     };
