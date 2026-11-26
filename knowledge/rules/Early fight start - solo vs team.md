@@ -1,10 +1,13 @@
 ---
 tags: [rule, story, early-game, series]
 taught: 2026-11-26
-status: active
+status: superseded
+superseded_by: "[[Early fight start]]"
 supersedes: "[[Opening at 0-50 (superseded)]]"
 ---
-# Early fight start: solo vs team
+# Early fight start: solo vs team (superseded)
+Replaced on 2026-11-26 by [[Early fight start]]. The trigger is whether anything happens, not solo vs team.
+
 - **[[Team games (ACL)]]:** a level-1 bush fight is real, so the opening
   starts at game **0:20** to show the approach and the whole fight.
 - **[[Solo queue]]:** both laners standing in the bush is not a fight. The

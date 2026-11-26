@@ -6,7 +6,7 @@ tags: [moc]
 ## Story video
 - [[Story format]]
 - [[Opening runs to the first back]]
-- [[Early fight start - solo vs team]]
+- [[Early fight start]]
 - [[Show the dive setup]]
 - [[Show how an outnumbered fight started]]
 - [[Fight starts when the owner engages]]
@@ -18,4 +18,5 @@ tags: [moc]
 - [[Never join across series]]
 
 ## Superseded
+- [[Early fight start - solo vs team]]
 - [[Opening at 0-50 (superseded)]]
