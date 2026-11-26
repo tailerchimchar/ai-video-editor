@@ -26,7 +26,10 @@ BACK_POST_S = 8.0
 GIVE_RECALL_MAX_S = 360.0
 SAME_TRIP_S = 20.0
 
-BRAWL_START_S = 50.0
+# Owner 2026-11-26 (Jhin 11-20): the level-1 fight started around game
+# 0:30-0:40 and 0:50 only caught its end, so an early brawl opens at 0:20 to
+# show the approach and the whole fight.
+BRAWL_START_S = 20.0
 DEFAULT_START_S = 60.0
 BRAWL_CHECK_S = 65.0
 OPENING_END_S = 120.0
@@ -98,7 +101,7 @@ def _in_bush(pos: dict | None) -> bool:
 
 
 def _brawl_before_1_05(timeline: RiotTimeline, raw: dict) -> str | None:
-    """Why the opening should start at 0:50, else None: a champion kill
+    """Why the opening should start early (BRAWL_START_S), else None: a champion kill
     before 1:05, or the owner and an enemy both in the bot bush at the
     frame before 1:05 (bot laners are not labelled in the timeline, so
     any enemy stands in for the enemy bot laner)."""

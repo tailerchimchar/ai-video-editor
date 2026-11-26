@@ -32,7 +32,7 @@ SAMPLE_START_S = 45.0
 AFTER_BACK_S = 8.0
 MAX_FRAMES = 120
 RUN_PAD_S = 3.0
-OPENING_BUSH_AFTER_START_S = 20.0  # opening starts at game 0:50; 1:10 is +20 s
+OPENING_BUSH_AFTER_START_S = 50.0  # a brawl opening starts at game 0:20; 1:10 is +50 s
 NO_OPENING_BUSH_AFTER_SAMPLE_S = 25.0  # sampling starts at game 0:45; 1:10 is +25 s
 _RUN_KINDS: dict[str, EarlyKind] = {
     "bush_fight": "opening",
@@ -119,7 +119,7 @@ def _merge(
         if hits:
             for s in hits:
                 # Confirm and widen to the run, never shrink: the Riot-anchored
-                # windows (opening 0:50/1:00-2:00, first back, recall) are the
+                # windows (opening 0:20/1:00-2:00, first back, recall) are the
                 # owner's minimum early-game coverage (mentor 2026-11-25).
                 s.confirmed = True
                 s.start_s, s.end_s = max(0.0, min(s.start_s, lo)), max(s.end_s, hi)

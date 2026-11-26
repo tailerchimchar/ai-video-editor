@@ -132,18 +132,19 @@ def test_opening_present_without_any_purchase():
     assert kinds(early_segments(tl, r)) == ["opening"]
 
 
-def test_opening_starts_at_0_50_when_kill_before_1_05():
+def test_opening_starts_at_0_20_when_kill_before_1_05():
+    # Owner 2026-11-26: 0:50 missed a fight that began around 0:30.
     frames = quiet()
     frames[0]["events"] = [kill(58.0, killer=ENEMY, victim=7)]
     tl, r = build(frames)
-    assert early_segments(tl, r)[0].start_s == 150.0
+    assert early_segments(tl, r)[0].start_s == 120.0  # game 0:20 + offset 100
 
 
-def test_opening_starts_at_0_50_when_both_laners_in_bush():
+def test_opening_starts_at_0_20_when_both_laners_in_bush():
     frames = quiet()
     frames[1] = frame(1, pos=BUSH, enemy_pos=BUSH)
     tl, r = build(frames)
-    assert early_segments(tl, r)[0].start_s == 150.0
+    assert early_segments(tl, r)[0].start_s == 120.0  # game 0:20 + offset 100
 
 
 def test_opening_one_laner_in_bush_is_not_enough():
