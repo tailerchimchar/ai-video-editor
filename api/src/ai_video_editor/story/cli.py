@@ -2,7 +2,7 @@
 into `plan_story` + `render_story`.
 
     story-render --asset ID --round <panel folder name or path> [--no-cards] [--out DIR]
-                 [--plays | --no-plays] [--no-early] [--no-broll]
+                 [--plays | --no-plays] [--no-early] [--no-broll] [--no-requests]
 
 With `PLAYS_DRIVE_CUTS=true` and a frozen `WORKSPACE/plays/<asset>.json`,
 chapters come from the plays by default; `--plays` forces that path (and
@@ -11,7 +11,9 @@ fails without the file), `--no-plays` forces the panel-beat path.
 Inputs: `WORKSPACE/panel/<round>/gaming-expert.json` story beats (and
 `clips.json` to place clip-relative beats), `WORKSPACE/riot/<asset>/`
 {match,timeline,meta,lane}.json, `WORKSPACE/mic/<asset>.json`.
-Output (default): `WORKSPACE/story/<round>/`.
+Output (default): `WORKSPACE/story/<round>/`. The owner's asks in its
+`requests.json` (story/requests.py) are applied on top of the plan; the render
+never writes that file.
 """
 
 from __future__ import annotations
@@ -37,6 +39,7 @@ from ..refs import normalize_clip_ref
 from .broll import BRollInsert, place_broll, plan_broll
 from .planner import Beat, plan_story, plan_story_from_plays
 from .render import StoryRenderError, render_story
+from .requests import apply_requests, load_requests
 
 _log = logging.getLogger(__name__)
 
@@ -272,6 +275,7 @@ def main(argv: list[str] | None = None) -> int:
     which.add_argument("--no-plays", action="store_true", help="chapters from the panel beats")
     ap.add_argument("--no-early", action="store_true", help="plays path: skip early-game chapters")
     ap.add_argument("--no-broll", action="store_true", help="skip item purchase cutaways")
+    ap.add_argument("--no-requests", action="store_true", help="ignore the owner's requests.json")
     ap.add_argument("--out", help="output dir (default WORKSPACE/story/<round>/)")
     ap.add_argument("--source", help="source video path (default: the asset's path)")
     ap.add_argument("--review", action="store_true", help="0.25 fps critic, $5 story budget")
@@ -323,6 +327,14 @@ def main(argv: list[str] | None = None) -> int:
         if inserts:
             plan = place_broll(plan, inserts, items)
     out_dir = Path(args.out) if args.out else Path(settings.workspace_dir) / "story" / rnd.name
+    if not args.no_requests:
+        try:
+            plan, warnings = apply_requests(plan, load_requests(out_dir), timeline)
+        except ValueError as e:
+            print(f"story requests: {e}", file=sys.stderr)
+            return 2
+        for w in warnings:
+            print(f"story requests: {w}")
     try:
         story = render_story(
             src,
