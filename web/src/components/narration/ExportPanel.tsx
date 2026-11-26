@@ -14,7 +14,7 @@ interface ExportPanelProps {
   starting: boolean;
   job: JobStatus | undefined;
   error: string | null;
-  /** Link to `narrated.mp4`, shown once the job completed. */
+  /** Link to `narrated.mp4`: an earlier export, or this page's once its job completes. */
   narratedUrl: string | null;
 }
 
@@ -79,7 +79,7 @@ export function ExportPanel(props: ExportPanelProps) {
       )}
       {props.error && <p className="font-mono text-xs text-danger">{props.error}</p>}
 
-      {job?.status === "completed" && props.narratedUrl && (
+      {props.narratedUrl && (!job || job.status === "completed") && (
         <a
           href={props.narratedUrl}
           target="_blank"

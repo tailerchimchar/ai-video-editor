@@ -82,6 +82,8 @@ export interface SessionView {
   camera_px: PixelBox;
   /** Game-profile default box for a 1920x1080 frame. */
   default_camera_px?: PixelBox;
+  /** URL of an existing `narrated.mp4`, or null before the first export. */
+  export_url: string | null;
 }
 
 export interface UploadTakeArgs {

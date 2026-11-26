@@ -194,7 +194,7 @@ function NarrationWorkspace({ target }: { target: TargetRef }) {
             starting={narration.exportVideo.isPending}
             job={job.data}
             error={narration.exportVideo.error?.message ?? null}
-            narratedUrl={jobId ? narratedVideoUrl(view, jobId) : null}
+            narratedUrl={jobId ? narratedVideoUrl(view, jobId) : view.export_url}
           />
         </aside>
       </div>
