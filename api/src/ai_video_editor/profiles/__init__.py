@@ -108,11 +108,26 @@ class ProfileMeta(BaseModel):
     default_aspect: Literal["16:9", "9:16"] = "16:9"
 
 
+class CameraDefaults(BaseModel):
+    """Where the narrator's camera box sits by default in this game.
+
+    `x`/`y` are fractions of the frame where the `anchor` corner of the box
+    lands (e.g. bottom_right at x=0.99, y=0.70 puts the box's bottom-right
+    corner there); `width_frac` is the box width as a fraction of the frame.
+    """
+
+    anchor: Literal["top_left", "top_right", "bottom_left", "bottom_right"]
+    x: float = Field(..., ge=0.0, le=1.0)
+    y: float = Field(..., ge=0.0, le=1.0)
+    width_frac: float = Field(..., ge=0.08, le=0.5)
+
+
 class Profile(BaseModel):
     meta: ProfileMeta
     regions: dict[str, Region] = Field(default_factory=dict)
     sounds: dict[str, Sound] = Field(default_factory=dict)
     transcription: Transcription = Field(default_factory=Transcription)
+    camera: CameraDefaults | None = None
 
 
 def _load_toml(path: Path) -> Profile:
