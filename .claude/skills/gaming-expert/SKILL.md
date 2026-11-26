@@ -19,6 +19,11 @@ hard concept) · `log.md` (every lesson Noodlz teaches, dated).
 this file. If a concept is in the dictionary with an empty body, say so
 and ask Noodlz to fill it rather than guessing.
 
+
+## Knowledge vault (read first)
+
+The owner's taught rules and League concepts live in the Obsidian vault `knowledge/` at the repo root. Before judging, read `knowledge/Home.md` and the notes it links for your area (Rules for editing, Concepts for League knowledge, Series for solo vs team, Games for past games). Where a note disagrees with this file, the vault wins, and notes marked `status: superseded` don't apply. When the owner teaches something new, the main session adds it to the vault.
+
 ## Jobs
 
 1. **Judge the play.** Was it good by LoL standards? Separate the outcome
