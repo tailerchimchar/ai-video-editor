@@ -397,3 +397,58 @@ def test_real_ffmpeg_letterbox_and_slowmo(tmp_path, monkeypatch):
 def test_segments_drop_slivers_shorter_than_a_frame():
     segs = render.effect_segments([_fx("zoom", 10.01, 14)], 10.0, 20.0)
     assert _kinds(segs) == [(10.0, 14.0, ["zoom"]), (14.0, 20.0, [])]
+
+
+# --- mic mutes ---
+
+
+def test_audio_filter_mutes_only_the_mic_leg():
+    fg = render.audio_filter(2, dur=10.0, mic_mutes=[(1.5, 4.0), (6.0, 7.25)])
+    mic_leg = fg.split("[m];")[0]
+    assert "volume=0:enable='between(t,1.5,4)'" in mic_leg
+    assert "volume=0:enable='between(t,6,7.25)'" in mic_leg
+    assert fg.count("volume=0:") == 2  # none on the game leg
+    assert fg.index("between") < fg.index("amix")
+
+
+def test_audio_filter_without_mutes_is_unchanged():
+    assert render.audio_filter(2, dur=10.0) == render.audio_filter(2, dur=10.0, mic_mutes=())
+    assert "between" not in render.audio_filter(2, dur=10.0, fade_s=0.5)
+
+
+def test_audio_filter_ignores_mutes_without_a_mic():
+    assert render.audio_filter(None, mic_mutes=[(1.0, 2.0)]) == render.audio_filter(None)
+
+
+def test_chapter_and_broll_and_effect_cmds_carry_mutes():
+    cmd = render.chapter_cmd("s.mp4", 10, 20, "o.mp4", mic_stream=2, mic_mutes=[(1, 2)])
+    assert "between(t,1,2)" in _fc(cmd)
+    cmd = render.effect_segment_cmd(
+        "s.mp4", 10, 20, "o.mp4", [_fx("letterbox", 10, 20)], mic_stream=2, mic_mutes=[(1, 2)]
+    )
+    assert "between(t,1,2)" in _fc(cmd)
+    assert "between" not in _fc(render.chapter_cmd("s.mp4", 10, 20, "o.mp4", mic_stream=2))
+
+
+def test_relative_mutes_clamp_and_drop():
+    got = render.relative_mutes([(5.0, 12.0), (12.0, 13.0), (18.0, 30.0), (0.0, 3.0)], 10.0, 20.0)
+    assert got == [(0.0, 2.0), (2.0, 3.0), (8.0, 10.0)]
+
+
+def test_render_story_passes_chapter_mutes_relative(fake_ffmpeg, tmp_path):
+    ch = Chapter(title="t", start_s=10.0, end_s=20.0, kind="fight", mic_mutes=[(12.0, 15.0)])
+    render.render_story("src.mp4", _story(ch), tmp_path / "out", cards=False)
+    [cmd] = fake_ffmpeg["ffmpeg"]
+    assert "between(t,2,5)" in _fc(cmd)
+
+
+def test_effect_chapter_shifts_mutes_per_segment(fake_ffmpeg, tmp_path):
+    ch = Chapter(
+        title="t", start_s=10.0, end_s=20.0, kind="fight",
+        effects=[_fx("letterbox", 12, 14)], mic_mutes=[(13.0, 16.0)],
+    )  # fmt: skip
+    render.render_story("src.mp4", _story(ch), tmp_path / "out", cards=False)
+    c1, c2, c3 = fake_ffmpeg["ffmpeg"]  # segments 10-12, 12-14, 14-20
+    assert "between" not in _fc(c1)
+    assert "between(t,1,2)" in _fc(c2)  # 13-14 relative to 12
+    assert "between(t,0,2)" in _fc(c3)  # 14-16 relative to 14

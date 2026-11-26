@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from itertools import pairwise
 from pathlib import Path
 
@@ -82,14 +82,27 @@ def _fade_pair(dur: float, fade_s: float) -> str:
     return f"afade=t=in:st=0:d={fade_s},afade=t=out:st={out_at}:d={fade_s}"
 
 
-def audio_filter(mic_stream: int | None, *, dur: float = 0.0, fade_s: float = 0.0) -> str:
+def _mute_filters(mic_mutes) -> str:
+    """One `volume=0` per (start, end) range, seconds from the input start."""
+    return "".join(f",volume=0:enable='between(t,{a:g},{b:g})'" for a, b in mic_mutes)
+
+
+def audio_filter(
+    mic_stream: int | None,
+    *,
+    dur: float = 0.0,
+    fade_s: float = 0.0,
+    mic_mutes: Sequence[tuple[float, float]] = (),
+) -> str:
     """Mic (loudness-normalised when `story_mic_loudnorm`) on top of ducked game
-    audio; game audio alone when no mic is known."""
+    audio; game audio alone when no mic is known. `mic_mutes` silence only the
+    mic over those ranges (seconds relative to the input start); ignored
+    without a mic."""
     fade = f",{_fade_pair(dur, fade_s)}" if fade_s > 0 else ""
     if mic_stream is None:
         return f"[0:a:0]{_fade_pair(dur, fade_s) if fade_s > 0 else 'anull'}[a]"
     game = settings.story_game_audio_volume
-    mic = MIC_LOUDNORM if settings.story_mic_loudnorm else "volume=1.0"
+    mic = (MIC_LOUDNORM if settings.story_mic_loudnorm else "volume=1.0") + _mute_filters(mic_mutes)
     return (
         f"[0:a:{mic_stream}]{mic}[m];[0:a:0]volume={game}[g];"
         f"[m][g]amix=inputs=2:duration=first:normalize=0{fade}[a]"
@@ -105,6 +118,7 @@ def chapter_cmd(
     mic_stream: int | None,
     has_audio: bool = True,
     fade_s: float = 0.0,
+    mic_mutes: Sequence[tuple[float, float]] = (),
 ) -> list[str]:
     """One chapter's argv. `has_audio=False` (the source has no audio stream)
     renders the video with a silent track instead of failing on `0:a:0`."""
@@ -123,7 +137,7 @@ def chapter_cmd(
     return [
         *head,
         "-filter_complex",
-        f"{video};{audio_filter(mic_stream, dur=dur, fade_s=fade_s)}",
+        f"{video};{audio_filter(mic_stream, dur=dur, fade_s=fade_s, mic_mutes=mic_mutes)}",
         "-map",
         "[v]",
         "-map",
@@ -273,6 +287,7 @@ def effect_segment_cmd(
     has_audio: bool = True,
     fade_in_s: float = 0.0,
     fade_out_s: float = 0.0,
+    mic_mutes: Sequence[tuple[float, float]] = (),
 ) -> list[str]:
     """One segment of a chapter with `effects` active over all of it: the
     chapter's normal chain plus the effect filters. Slow-mo stretches video
@@ -302,7 +317,7 @@ def effect_segment_cmd(
     if mic_stream is None:
         audio = f"[0:a:0]{post or 'anull'}[a]"
     else:
-        audio = _relabel(audio_filter(mic_stream), "a", post)
+        audio = _relabel(audio_filter(mic_stream, mic_mutes=mic_mutes), "a", post)
     return [
         *head,
         "-filter_complex",
@@ -352,6 +367,7 @@ def broll_chapter_cmd(
     mic_stream: int | None,
     has_audio: bool = True,
     fade_s: float = 0.0,
+    mic_mutes: Sequence[tuple[float, float]] = (),
 ) -> list[str]:
     """One chapter with item cutaways. The video is the chapter footage cut
     around each insert's window, the purchase footage (with the item icon and
@@ -431,7 +447,7 @@ def broll_chapter_cmd(
         *head,
         *extra,
         "-filter_complex",
-        f"{video};{audio_filter(mic_stream, dur=dur, fade_s=fade_s)}",
+        f"{video};{audio_filter(mic_stream, dur=dur, fade_s=fade_s, mic_mutes=mic_mutes)}",
         "-map",
         "[v]",
         "-map",
@@ -617,6 +633,15 @@ def _review(video: Path, plan: StoryPlan, out_dir: Path) -> None:
     save_critique(result, out_dir / "critique.md")
 
 
+def relative_mutes(
+    mutes: Sequence[tuple[float, float]], start: float, end: float
+) -> list[tuple[float, float]]:
+    """Recording-second `mutes` as ranges relative to `start`, keeping only
+    the parts inside [start, end]."""
+    out = [(round(max(a, start) - start, 3), round(min(b, end) - start, 3)) for a, b in mutes]
+    return [(a, b) for a, b in out if b > a]
+
+
 def _render_effect_chapter(
     asset_path: str,
     ch: Chapter,
@@ -626,6 +651,7 @@ def _render_effect_chapter(
     mic_stream: int | None,
     has_audio: bool,
     fade_s: float,
+    mic_mutes: Sequence[tuple[float, float]] = (),
 ) -> None:
     """Render a chapter with `effects`: one encode per effect segment (the
     chapter fade only on its own ends), stream-copy joined into `part`."""
@@ -644,6 +670,7 @@ def _render_effect_chapter(
             has_audio=has_audio,
             fade_in_s=fade_s if n == 1 else 0.0,
             fade_out_s=fade_s if n == len(segs) else 0.0,
+            mic_mutes=relative_mutes(ch.mic_mutes, a, b),
         )
         out_dur = (b - a) / (slowmo_factor(active) or 1.0)
         # geq (focus) is a per-pixel expression: much slower than the rest.
@@ -696,12 +723,13 @@ def render_story(
             parts.append(card.as_posix())
         part = parts_dir / f"chapter_{i:02d}.mp4"
         common = {"mic_stream": mic, "has_audio": has_audio, "fade_s": fade_s}
+        rel_mutes = relative_mutes(ch.mic_mutes, ch.start_s, ch.end_s)
         if ch.broll and ch.effects:
             _log.warning(
                 "story: chapter %d has broll and effects; rendering broll, skipping effects", i
             )
         if ch.effects and not ch.broll:
-            _render_effect_chapter(asset_path, ch, i, part, **common)
+            _render_effect_chapter(asset_path, ch, i, part, mic_mutes=ch.mic_mutes, **common)
             parts.append(_with_sfx(part, ch, i).as_posix())
             continue
         if ch.broll:
@@ -712,10 +740,13 @@ def render_story(
                 part.as_posix(),
                 ch.broll,
                 icon_paths(ch.broll, items),
+                mic_mutes=rel_mutes,
                 **common,
             )
         else:
-            cmd = chapter_cmd(asset_path, ch.start_s, ch.end_s, part.as_posix(), **common)
+            cmd = chapter_cmd(
+                asset_path, ch.start_s, ch.end_s, part.as_posix(), mic_mutes=rel_mutes, **common
+            )
         ok, err = _run_ffmpeg(cmd, chapter_timeout(ch.start_s, ch.end_s))
         if not ok:
             raise StoryRenderError(f"chapter {i} ({ch.title!r}) failed: {err}")
