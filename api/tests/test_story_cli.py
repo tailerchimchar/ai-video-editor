@@ -385,6 +385,39 @@ def test_early_confirm_missing_module_is_skipped(ws, monkeypatch):
     assert seen["rc"] == 0 and seen["early"][0].start_s == 30
 
 
+def test_load_early_reads_hud_bars_when_the_video_exists(ws, monkeypatch, tmp_path):
+    from ai_video_editor.league.hud_bars import BarSample
+
+    video = tmp_path / "v.mp4"
+    video.write_bytes(b"x")
+    _write(ws / "riot" / "a1" / "timeline.json", {"info": {"frames": []}})
+    monkeypatch.setattr(settings, "story_early_confirm", False)
+    monkeypatch.setattr(cli, "bar_times", lambda tl, raw: ([1.0, 2.0], [9.0]))
+    asked = []
+
+    def fake_sample(path, times):
+        asked.append((path, list(times)))
+        return [BarSample(t_rec_s=t, hp=1.0, mana=1.0) for t in times]
+
+    monkeypatch.setattr(cli, "sample_bars", fake_sample)
+    got = {}
+
+    def fake_segments(tl, raw, **kw):
+        got.update(kw)
+        return []
+
+    monkeypatch.setattr(cli, "early_segments", fake_segments)
+    tl = _one_kill_timeline()
+    tl.owner_pid = 3
+    cli.load_early("a1", tl, str(video))
+    assert asked == [(str(video), [1.0, 2.0, 9.0])]  # one pass, opening then lane
+    assert [b.t_rec_s for b in got["opening_bars"]] == [1.0, 2.0]
+    assert [b.t_rec_s for b in got["lane_bars"]] == [9.0]
+    got.clear()
+    cli.load_early("a1", tl, str(tmp_path / "missing.mp4"))
+    assert got["opening_bars"] is None and got["lane_bars"] is None  # 0:20, never miss a fight
+
+
 # --- item B-roll (AVE-58) ---
 
 

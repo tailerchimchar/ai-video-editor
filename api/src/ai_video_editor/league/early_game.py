@@ -374,6 +374,21 @@ def lane_phase_s(timeline: RiotTimeline, raw_timeline: dict) -> tuple[float, flo
     return end, back.start_s
 
 
+def _every(lo: float, hi: float, step: float = BAR_STEP_S) -> list[float]:
+    n = int((hi - lo) // step) if hi >= lo else -1
+    return [round(lo + k * step, 3) for k in range(n + 1)]
+
+
+def bar_times(timeline: RiotTimeline, raw_timeline: dict) -> tuple[list[float], list[float]]:
+    """Recording seconds to read the HUD bars at, one every 5 s: the opening
+    check (game 0:20-0:50) and the skipped lane phase (opening end to the
+    first-back window), for `opening_bars` and `lane_bars`."""
+    off = timeline.offset_s
+    opening = [t for t in _every(BRAWL_START_S + off, QUIET_START_S + off) if t >= 0]
+    span = lane_phase_s(timeline, raw_timeline)
+    return opening, (_every(*span) if span else [])
+
+
 def early_segments(
     timeline: RiotTimeline,
     raw_timeline: dict,

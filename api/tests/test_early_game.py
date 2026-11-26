@@ -567,3 +567,18 @@ def test_lane_phase_span_for_late_and_continuous_backs():
     assert lane_phase_s(tl, r) is None  # continuous: nothing to sample
     tl, r = build(quiet(10))
     assert lane_phase_s(tl, r) is None  # no back
+
+
+def test_bar_times_every_5s_opening_and_lane():
+    from ai_video_editor.league.early_game import bar_times
+
+    frames = quiet(10)
+    frames[6]["events"] = [buy(400.0, 3070)]
+    tl, r = build(frames)
+    opening, lane = bar_times(tl, r)
+    assert opening == [120.0, 125.0, 130.0, 135.0, 140.0, 145.0, 150.0]  # game 0:20-0:50
+    assert lane[0] == 220.0 and lane[-1] == 460.0 and len(lane) == 49  # up to the window start
+    frames[6]["events"] = []
+    frames[3]["events"] = [buy(200.0, 3070)]
+    tl, r = build(frames)
+    assert bar_times(tl, r)[1] == []  # continuous: no lane to sample

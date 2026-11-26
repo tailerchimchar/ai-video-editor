@@ -31,7 +31,8 @@ from pydantic import ValidationError
 
 from ..config import settings
 from ..grokbot.voice import owner_rows
-from ..league.early_game import EarlySegment, early_segments, first_back_s
+from ..league.early_game import EarlySegment, bar_times, early_segments, first_back_s
+from ..league.hud_bars import BarSample, sample_bars
 from ..league.items import ItemInfo, load_items, owner_purchases
 from ..league.lane import lane_summary_path, parse_lane_frames
 from ..league.lane_models import LaneMinute, LaneSummary
@@ -160,10 +161,29 @@ def is_team_game(asset_id: str) -> bool:
     return info.get("gameType") == "CUSTOM_GAME"
 
 
+def _hud_bars(
+    src: str, timeline: RiotTimeline, raw: dict
+) -> tuple[list[BarSample] | None, list[BarSample] | None]:
+    """HUD bar samples for the quiet-opening check and the lane phase's heavy
+    trades, in one pass. (None, None) without the video or on any failure:
+    the opening then starts at 0:20 and no lane trade is added."""
+    if not src or not Path(src).is_file():
+        return None, None
+    try:
+        opening_t, lane_t = bar_times(timeline, raw)
+        samples = sample_bars(src, opening_t + lane_t)
+    except Exception as e:  # optional enrichment: never fatal
+        _log.warning("story: HUD bars unavailable: %s", e)
+        return None, None
+    n = len(opening_t)
+    return samples[:n], samples[n:]
+
+
 def load_early(
     asset_id: str, timeline: RiotTimeline, src: str, *, fresh_vision: bool = False
 ) -> list[EarlySegment] | None:
-    """Early-game segments from the cached raw timeline, refined by the vision
+    """Early-game segments from the cached raw timeline and the HUD bars read
+    off `src` (quiet-opening check, heavy trades), refined by the vision
     check (Task B) when `story_early_confirm` and that module exists. The
     confirmed result is cached per asset (`early_cache`) so re-renders agree;
     `fresh_vision` bypasses and refreshes it. None when there is no raw
@@ -171,8 +191,15 @@ def load_early(
     raw = _read_json(cache_dir_for(asset_id) / "timeline.json")
     if not isinstance(raw, dict) or timeline.owner_pid is None:
         return None
+    opening_bars, lane_bars = _hud_bars(src, timeline, raw)
     try:
-        segments = early_segments(timeline, raw, team_game=is_team_game(asset_id))
+        segments = early_segments(
+            timeline,
+            raw,
+            team_game=is_team_game(asset_id),
+            opening_bars=opening_bars,
+            lane_bars=lane_bars,
+        )
     except (KeyError, ValueError, TypeError) as e:
         _log.warning("early-game segments unavailable for %s: %s", asset_id, e)
         return None
