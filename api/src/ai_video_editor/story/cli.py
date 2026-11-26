@@ -33,13 +33,13 @@ from ..config import settings
 from ..grokbot.voice import owner_rows
 from ..league.early_game import EarlySegment, bar_times, early_segments, first_back_s
 from ..league.hud_bars import BarSample, sample_bars
-from ..league.items import ItemInfo, load_items, owner_purchases
+from ..league.items import ItemInfo, first_back_main_item, load_items, owner_purchases
 from ..league.lane import lane_summary_path, parse_lane_frames
 from ..league.lane_models import LaneMinute, LaneSummary
 from ..league.play_models import GameModel
 from ..league.riot_timeline import RiotTimeline, _from_cache, cache_dir_for, load_cached
 from ..refs import normalize_clip_ref
-from .broll import BRollInsert, place_broll, plan_broll
+from .broll import BRollInsert, first_back_insert, place_broll, plan_broll, with_first_back
 from .early_cache import CACHE_FILENAME, early_cache_key, read_early_cache, write_early_cache
 from .planner import Beat, plan_story, plan_story_from_plays
 from .render import StoryRenderError, render_story
@@ -266,6 +266,40 @@ def load_broll(
     return inserts, items
 
 
+def load_first_back_broll(
+    asset_id: str, timeline: RiotTimeline, items: dict[int, ItemInfo] | None = None
+) -> tuple[list[BRollInsert], dict[int, ItemInfo]]:
+    """The first back's main item over its purchase footage (owner 2026-11-26:
+    "once we recall get the item i bought"). Needs no mic transcript. Empty,
+    with a log line and never fatal, without a raw timeline, an owner, a
+    first back, item data or the item's icon."""
+    raw = _read_json(cache_dir_for(asset_id) / "timeline.json")
+    if not isinstance(raw, dict) or timeline.owner_pid is None:
+        return [], {}
+    try:
+        back = first_back_s(raw, timeline.owner_pid, timeline.offset_s)
+        purchases = owner_purchases(raw, timeline.owner_pid, timeline.offset_s)
+    except (KeyError, ValueError, TypeError) as e:
+        _log.warning("story broll: first back unavailable for %s: %s", asset_id, e)
+        return [], {}
+    if back is None:
+        return [], {}
+    items = items or load_items()
+    if not items:
+        _log.info("story broll: no item data; first-back item skipped for %s", asset_id)
+        return [], {}
+    main = first_back_main_item(purchases, items, first_back_rec_s=back)
+    if main is None:
+        _log.info("story broll: no main item at the first back for %s", asset_id)
+        return [], {}
+    info = items[main.item_id]
+    if not info.icon_path.is_file():
+        _log.info("story broll: no icon for item %d; first-back item skipped", info.id)
+        return [], {}
+    _log.info("story broll: first-back item %d at %.1fs for %s", info.id, main.t_rec_s, asset_id)
+    return [first_back_insert(main, info)], items
+
+
 def load_lane(asset_id: str) -> LaneSummary | None:
     """`lane.json` when present, else parsed from the cached match + timeline."""
     data = _read_json(lane_summary_path(asset_id))
@@ -382,6 +416,9 @@ def render_round(
     items: dict[int, ItemInfo] = {}
     if settings.story_broll and not no_broll:
         inserts, items = load_broll(asset_id, timeline)
+        first_back, fb_items = load_first_back_broll(asset_id, timeline, items)
+        items = items or fb_items
+        inserts = with_first_back(plan, first_back, inserts)
         if inserts:
             plan = place_broll(plan, inserts, items)
     out_dir = Path(out) if out else Path(settings.workspace_dir) / "story" / rnd.name

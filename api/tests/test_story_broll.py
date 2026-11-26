@@ -141,3 +141,21 @@ def test_story_json_carries_only_ids_and_times():
         "src_end_s",
         "build_path",
     }
+
+
+# --- first-back item insert (owner 2026-11-26) ---
+
+
+def test_first_back_insert_shows_the_purchase_footage_itself():
+    from ai_video_editor.league.items import ItemInfo, Purchase
+    from ai_video_editor.story.broll import first_back_insert
+
+    info = ItemInfo(id=1038, name="B. F. Sword", icon_path=Path("1038.png"), gold_total=1300)
+    ins = first_back_insert(Purchase(item_id=1038, t_rec_s=500.0), info)
+    assert (ins.item_id, ins.mic_start_s, ins.src_start_s) == (1038, 498.0, 498.0)
+    assert 4.0 <= ins.dur_s <= 5.0
+    assert ins.mic_end_s == ins.src_end_s
+    assert ins.build_path is False
+    built = ItemInfo(id=3031, name="IE", icon_path=Path("3031.png"), from_ids=[1038])
+    assert first_back_insert(Purchase(item_id=3031, t_rec_s=1.0), built).src_start_s == 0.0
+    assert first_back_insert(Purchase(item_id=3031, t_rec_s=1.0), built).build_path is True

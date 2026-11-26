@@ -320,6 +320,7 @@ def _early_main(ws, monkeypatch, argv=(), *, setting=True, cache=True, confirm=N
         _write(ws / "riot" / "a1" / "timeline.json", {"info": {"frames": []}})
     monkeypatch.setattr(cli, "early_segments", lambda tl, raw, **kw: [seg])
     monkeypatch.setattr(cli, "first_back_s", lambda raw, pid, off: 200.0)
+    monkeypatch.setattr(cli, "load_items", dict)  # the first-back item must not hit Data Dragon
     seen: dict = {}
     if confirm is not None:
         mod = types.ModuleType("ai_video_editor.vlm.early_confirm")
@@ -421,7 +422,9 @@ def test_load_early_reads_hud_bars_when_the_video_exists(ws, monkeypatch, tmp_pa
 # --- item B-roll (AVE-58) ---
 
 
-def _broll_main(ws, monkeypatch, argv=(), *, setting=True):
+def _broll_main(
+    ws, monkeypatch, argv=(), *, setting=True, mic=True, span=(590.0, 620.0), items=None
+):
     from ai_video_editor.league.items import ItemInfo
     from ai_video_editor.story.planner import Chapter, StoryPlan
 
@@ -438,12 +441,22 @@ def _broll_main(ws, monkeypatch, argv=(), *, setting=True):
 
     def rows(db, asset_id):
         seen["rows"] += 1
-        return [{"text": "yun tal", "start_seconds": 600.0, "end_seconds": 604.0}]
+        return [{"text": "yun tal", "start_seconds": 600.0, "end_seconds": 604.0}] if mic else []
 
-    items = {3032: ItemInfo(id=3032, name="Yun Tal Wildarrows", icon_path=Path("3032.png"))}
+    if items is None:
+        icon = ws / "ddragon" / "3032.png"
+        icon.parent.mkdir(parents=True, exist_ok=True)
+        icon.write_bytes(b"png")
+        items = {3032: ItemInfo(id=3032, name="Yun Tal Wildarrows", icon_path=icon)}
+    seen["load_items"] = 0
+
+    def fake_items():
+        seen["load_items"] += 1
+        return items
+
     monkeypatch.setattr(cli, "owner_rows", rows)
-    monkeypatch.setattr(cli, "load_items", lambda: items)
-    chapter = Chapter(title="a", start_s=590.0, end_s=620.0, kind="fight")
+    monkeypatch.setattr(cli, "load_items", fake_items)
+    chapter = Chapter(title="a", start_s=span[0], end_s=span[1], kind="fight")
     plan = StoryPlan(chapters=[chapter], total_s=30.0, mic_stream=2, audio="mic_over_game")
     monkeypatch.setattr(cli, "plan_story", lambda *a, **k: plan)
 
@@ -469,6 +482,46 @@ def test_broll_off_by_setting_or_flag(ws, monkeypatch):
     assert seen["rows"] == 0 and seen["plan"].chapters[0].broll == []
     seen = _broll_main(ws, monkeypatch, ["--no-broll"])
     assert seen["rows"] == 0 and seen["plan"].chapters[0].broll == []
+
+
+def test_first_back_item_shown_without_any_mic_line(ws, monkeypatch):
+    # Owner 2026-11-26: "once we recall get the item i bought".
+    seen = _broll_main(ws, monkeypatch, mic=False, span=(470.0, 520.0))
+    assert seen["rc"] == 0
+    (ins,) = seen["plan"].chapters[0].broll
+    # bought at game 500 - 17 = 483; the cutaway is the purchase footage itself
+    assert (ins.item_id, ins.mic_start_s, ins.src_start_s) == (3032, 481.0, 481.0)
+    assert 4.0 <= ins.dur_s <= 5.0
+    assert [c.kind for c in seen["plan"].chapters] == ["fight"]
+
+
+def test_first_back_item_outside_every_chapter_adds_nothing(ws, monkeypatch):
+    seen = _broll_main(ws, monkeypatch, mic=False)  # chapter 590-620, buy at 483
+    assert [c.kind for c in seen["plan"].chapters] == ["fight"]
+    assert seen["plan"].chapters[0].broll == []
+
+
+def test_first_back_item_skipped_without_icon(ws, monkeypatch):
+    from ai_video_editor.league.items import ItemInfo
+
+    items = {3032: ItemInfo(id=3032, name="x", icon_path=Path("missing.png"))}
+    seen = _broll_main(ws, monkeypatch, mic=False, span=(470.0, 520.0), items=items)
+    assert seen["rc"] == 0 and seen["plan"].chapters[0].broll == []
+
+
+def test_first_back_item_skipped_without_item_data_or_with_no_broll(ws, monkeypatch):
+    seen = _broll_main(ws, monkeypatch, mic=False, span=(470.0, 520.0), items={})
+    assert seen["rc"] == 0 and seen["plan"].chapters[0].broll == []
+    seen = _broll_main(ws, monkeypatch, ["--no-broll"], mic=False, span=(470.0, 520.0))
+    assert seen["load_items"] == 0 and seen["plan"].chapters[0].broll == []
+
+
+def test_mic_and_first_back_inserts_both_land(ws, monkeypatch):
+    seen = _broll_main(ws, monkeypatch, span=(470.0, 620.0))
+    assert [(i.mic_start_s, i.src_start_s) for i in seen["plan"].chapters[0].broll] == [
+        (481.0, 481.0),
+        (600.0, 481.0),
+    ]
 
 
 def _requests_main(ws, monkeypatch, argv=(), *, requests=None):

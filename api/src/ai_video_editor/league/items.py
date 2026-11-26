@@ -205,3 +205,27 @@ def owner_purchases(raw_timeline: dict, owner_pid: int, offset_s: float) -> list
         Purchase(item_id=int(e["itemId"]), t_rec_s=round(e["timestamp"] / 1000.0 + offset_s, 3))
         for e in kept
     ]
+
+
+# --- first back ---
+
+SHOP_VISIT_S = 10.0  # purchases this soon after the first one are the same visit
+
+
+def first_back_main_item(
+    purchases: list[Purchase], items: dict[int, ItemInfo], *, first_back_rec_s: float
+) -> Purchase | None:
+    """The main item of the first back: the most expensive non-consumable
+    catalogue item (by Data Dragon gold total) bought within SHOP_VISIT_S of
+    the first back's first purchase (`first_back_rec_s`, recording seconds).
+    The earliest wins a tie. None when the visit bought nothing that counts."""
+    visit = [
+        p
+        for p in purchases
+        if first_back_rec_s - 1e-6 <= p.t_rec_s <= first_back_rec_s + SHOP_VISIT_S
+        and p.item_id in items
+        and not items[p.item_id].consumable
+    ]
+    if not visit:
+        return None
+    return max(visit, key=lambda p: (items[p.item_id].gold_total, -p.t_rec_s))

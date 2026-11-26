@@ -208,3 +208,44 @@ def test_real_timeline_smoke():
     raw = json.loads((p / "timeline.json").read_text(encoding="utf-8"))
     got = owner_purchases(raw, tl.owner_pid, tl.offset_s)
     assert got and all(isinstance(x, Purchase) for x in got)
+
+
+# --- first-back main item (owner 2026-11-26: "get the item i bought") ---
+
+
+def _info(iid, gold, consumable=False, from_ids=()):
+    return ItemInfo(
+        id=iid,
+        name=f"i{iid}",
+        icon_path=Path(f"{iid}.png"),
+        gold_total=gold,
+        consumable=consumable,
+        from_ids=list(from_ids),
+    )
+
+
+def test_first_back_main_item_is_the_priciest_of_that_shop_visit():
+    from ai_video_editor.league.items import first_back_main_item
+
+    items = {1036: _info(1036, 350), 1038: _info(1038, 1300), 2003: _info(2003, 50, True),
+             3031: _info(3031, 3450, from_ids=[1038])}  # fmt: skip
+    buys = [
+        Purchase(item_id=1036, t_rec_s=300.0),
+        Purchase(item_id=1038, t_rec_s=305.0),
+        Purchase(item_id=2003, t_rec_s=309.0),
+        Purchase(item_id=3031, t_rec_s=320.0),  # 20 s later: a different visit
+    ]
+    assert first_back_main_item(buys, items, first_back_rec_s=300.0) == buys[1]
+
+
+def test_first_back_main_item_skips_consumables_unknown_and_earlier_buys():
+    from ai_video_editor.league.items import first_back_main_item
+
+    items = {1055: _info(1055, 450), 2003: _info(2003, 50, True)}
+    buys = [
+        Purchase(item_id=1055, t_rec_s=20.0),  # starting items
+        Purchase(item_id=2003, t_rec_s=300.0),
+        Purchase(item_id=9999, t_rec_s=301.0),  # not in the catalogue
+    ]
+    assert first_back_main_item(buys, items, first_back_rec_s=300.0) is None
+    assert first_back_main_item([], items, first_back_rec_s=300.0) is None

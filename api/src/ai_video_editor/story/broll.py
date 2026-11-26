@@ -29,6 +29,7 @@ BROLL_MATCH_S = 6 * 60.0  # a purchase further than this from the line is not it
 BROLL_LEAD_S = 2.0  # footage starts this long before the purchase
 BROLL_MIN_S = 3.0
 BROLL_MAX_S = 8.0
+FIRST_BACK_INSERT_S = 4.5  # the first-back item overlay (owner 2026-11-26)
 
 
 class BRollInsert(BaseModel):
@@ -93,6 +94,39 @@ def plan_broll(
             continue
         kept.append(ins)
     return kept
+
+
+def first_back_insert(purchase: Purchase, item: ItemInfo) -> BRollInsert:
+    """The first back's main item over its own purchase footage (owner
+    2026-11-26: "once we recall get the item i bought"): the cutaway starts
+    BROLL_LEAD_S before the purchase at the same moment, so the viewer sees
+    the shop footage itself with the icon and build path on top. Needs no
+    mic line."""
+    start = round(max(0.0, purchase.t_rec_s - BROLL_LEAD_S), 3)
+    end = round(start + FIRST_BACK_INSERT_S, 3)
+    return BRollInsert(
+        item_id=item.id,
+        mic_start_s=start,
+        mic_end_s=end,
+        src_start_s=start,
+        src_end_s=end,
+        build_path=bool(item.from_ids),
+    )
+
+
+def with_first_back(
+    plan: StoryPlan, first_back: list[BRollInsert], inserts: list[BRollInsert]
+) -> list[BRollInsert]:
+    """`inserts` plus each first-back insert that sits inside a chapter (it
+    never adds footage of its own) and overlaps no other insert, by time."""
+    kept = [
+        fb
+        for fb in first_back
+        if any(c.start_s <= fb.mic_start_s and fb.window_end_s <= c.end_s for c in plan.chapters)
+        and not any(fb.mic_start_s < i.window_end_s and i.mic_start_s < fb.window_end_s
+                    for i in inserts)
+    ]  # fmt: skip
+    return sorted(inserts + kept, key=lambda i: i.mic_start_s)
 
 
 def place_broll(
