@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from _play_factory import make_play
 
 from ai_video_editor.league.play_models import GameModel
@@ -185,7 +186,8 @@ def test_late_lead_in_only_after_20_minutes_game_time(monkeypatch):
 def test_late_lead_in_uses_offset_for_game_time(monkeypatch):
     monkeypatch.setattr(settings, "story_late_lead_in_s", 5.0)
     tl = RiotTimeline("m", "high", 100.0, 3000.0, [], [])
-    g = _game(make_play("a", approach=1250, outcome=1260))  # game 1150 s: no lead-in
+    # recorded with offset 100 too: game 1150 s, no lead-in
+    g = _game(make_play("a", approach=1250, outcome=1260, rec_minus_game=100.0))
     assert _plan(g, tl).chapters[0].start_s == 1250
 
 
@@ -201,3 +203,160 @@ def test_late_lead_in_never_before_previous_chapter_end(monkeypatch):
 def test_kill_times_kept_in_early_chapter():
     plan = _plan(_game(), _tl([50.0, 500.0]), early=[_seg("opening", 30, 100)])
     assert plan.chapters[0].kill_times_s == [50.0]
+
+
+# --- AVE-62: rebase on the current offset, HUD wins, death times, outnumbered win ---
+
+
+def _ev(kind, t):
+    return TimelineEvent(kind, t, t, [], {})
+
+
+def _tl_events(events, offset=0.0, source=None, end=3000.0):
+    tl = RiotTimeline("m", "high", offset, end, events, [])
+    tl.offset_source = source
+    return tl
+
+
+def test_rebase_moves_window_by_offset_change():
+    g = _game(make_play("a", approach=100, outcome=120))  # written with offset 0
+    c = _plan(g, _tl_events([_ev("kill", 115.0)], offset=10.0)).chapters[0]
+    assert (c.start_s, c.end_s) == (110, 130)
+    assert c.kill_times_s == [115.0]
+
+
+def test_rebase_moves_fallback_window():
+    g = _game(make_play("a", approach=None, outcome=None, first_kill=200, last_kill=210))
+    c = _plan(g, _tl_events([], offset=-5.0)).chapters[0]
+    assert (c.start_s, c.end_s) == (187.0, 208.0)
+
+
+def test_rebase_zero_when_offset_unchanged():
+    g = _game(make_play("a", approach=100, outcome=120, rec_minus_game=7.0))
+    c = _plan(g, _tl_events([], offset=7.0)).chapters[0]
+    assert (c.start_s, c.end_s) == (100, 120)
+
+
+def test_hud_offset_ignores_offset_correction():
+    g = _game(make_play("a", approach=100, outcome=120, offset_correction=1.5))
+    tl = _tl_events([_ev("kill", 105.0), _ev("kill", 119.0)], source="hud")
+    assert _plan(g, tl).chapters[0].kill_times_s == [105.0, 119.0]
+
+
+def test_non_hud_offset_still_applies_correction():
+    g = _game(make_play("a", approach=100, outcome=120, offset_correction=1.5))
+    tl = _tl_events([_ev("kill", 105.0), _ev("kill", 119.0)], source="audio")
+    assert _plan(g, tl).chapters[0].kill_times_s == [106.5]
+
+
+def test_death_times_filled_like_kill_times():
+    g = _game(make_play("a", approach=100, outcome=120, offset_correction=1.5))
+    tl = _tl_events([_ev("death", 110.0), _ev("death", 119.0), _ev("death", 300.0)])
+    assert _plan(g, tl).chapters[0].death_times_s == [111.5]
+
+
+def test_death_times_hud_ignores_correction():
+    g = _game(make_play("a", approach=100, outcome=120, offset_correction=1.5))
+    tl = _tl_events([_ev("death", 119.0)], source="hud")
+    assert _plan(g, tl).chapters[0].death_times_s == [119.0]
+
+
+def test_early_chapter_gets_death_times():
+    plan = _plan(
+        _game(),
+        _tl_events([_ev("death", 50.0), _ev("death", 500.0)]),
+        early=[_seg("opening", 30, 100)],
+    )
+    assert plan.chapters[0].death_times_s == [50.0]
+
+
+def test_no_overlap_trims_death_times():
+    g = _game(
+        make_play("a", approach=100, outcome=130),
+        make_play("b", approach=115, outcome=150),
+    )
+    tl = _tl_events([_ev("death", 120.0), _ev("death", 140.0)])
+    a, b = _plan(g, tl).chapters
+    assert a.death_times_s == [120.0]
+    assert b.start_s == 130
+    assert b.death_times_s == [140.0]
+
+
+# Zeri-shaped: recording = game - 17 s. Urgot (ally) dies game 33:49.3 (rec 2012.3),
+# the next kills are game 34:24-34:44 (rec 2047-2067), closeout approach rec 2042.
+@pytest.fixture(autouse=True)
+def _no_late_lead(monkeypatch):
+    monkeypatch.setattr(settings, "story_late_lead_in_s", 0.0)
+
+
+def _zeri(outcome="won", approach=2042.0, end=2068.0, **ev_kw):
+    play = make_play(
+        "p43",
+        type="closeout",
+        approach=approach,
+        engage=2046.0,
+        outcome=end,
+        first_kill=2064.0,
+        last_kill=2084.0,
+        rec_minus_game=-17.0,
+        outcome_result=outcome,
+    )
+    events = [_ev("ally_death", 2012.3), _ev("kill", 2047.0), _ev("kill", 2067.0)]
+    events += ev_kw.get("extra", [])
+    return _game(play), _tl_events(events, offset=-17.0, source="hud", end=2100.0)
+
+
+def test_outnumbered_win_starts_at_ally_death_minus_lead():
+    g, tl = _zeri()
+    c = _plan(g, tl).chapters[0]
+    assert c.kind == "close"
+    assert c.start_s == 2009.3
+    assert c.kill_times_s == [2047.0, 2067.0]
+
+
+def test_outnumbered_enemy_died_between_unchanged():
+    g, tl = _zeri(extra=[_ev("enemy_death", 2030.0)])
+    assert _plan(g, tl).chapters[0].start_s == 2042.0
+
+
+def test_outnumbered_owner_assist_between_unchanged():
+    g, tl = _zeri(extra=[_ev("assist", 2030.0)])
+    assert _plan(g, tl).chapters[0].start_s == 2042.0
+
+
+def test_outnumbered_ally_died_90s_before_unchanged():
+    g, tl = _zeri(approach=2092.0, end=2110.0)  # death is 79.7 s before approach
+    tl.game_end_s = 3000.0
+    assert _plan(g, tl).chapters[0].start_s == 2092.0
+
+
+def test_outnumbered_lost_fight_unchanged():
+    g, tl = _zeri(outcome="lost")
+    assert _plan(g, tl).chapters[0].start_s == 2042.0
+
+
+def test_outnumbered_picks_earliest_ally_death():
+    g, tl = _zeri()
+    tl.events.insert(0, _ev("ally_death", 1990.0))  # 52 s before approach
+    tl.events.append(_ev("ally_death", 2020.0))
+    assert _plan(g, tl).chapters[0].start_s == 1987.0
+
+
+def test_outnumbered_applies_to_fight_chapter_and_clamps_at_zero():
+    play = make_play("f", approach=20, outcome=60, first_kill=40, last_kill=55)
+    tl = _tl_events([_ev("ally_death", 1.0), _ev("kill", 40.0)])
+    assert _plan(_game(play), tl).chapters[0].start_s == 0.0
+
+
+def test_outnumbered_not_for_lane_chapter():
+    play = make_play("e", phase="early", approach=100, outcome=130)
+    tl = _tl_events([_ev("ally_death", 80.0)])
+    assert _plan(_game(play), tl).chapters[0].start_s == 100
+
+
+def test_outnumbered_start_after_previous_chapter():
+    prev = make_play("a", approach=1990, outcome=2030, rec_minus_game=-17.0)
+    g, tl = _zeri()
+    plan = _plan(_game(prev, g.plays[0]), tl)
+    assert [c.play_id for c in plan.chapters] == ["a", "p43"]
+    assert plan.chapters[1].start_s == 2030

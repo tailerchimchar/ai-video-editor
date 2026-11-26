@@ -51,6 +51,10 @@ _EVENT_KINDS = ("kill", "assist", "death")
 LANE_BEFORE_S = 14 * 60.0
 LANE_EVENTS = 2
 GAME_END_TAIL_S = 1.0
+# A won fight the team entered a player down opens at the ally death that did it.
+OUTNUMBERED_LOOKBACK_S = 60.0
+ALLY_DEATH_LEAD_S = 3.0
+_ENEMY_DEATH_KINDS = ("kill", "assist", "enemy_death")
 CLOSE_TITLE = "The close"
 _PROTECTED = ("lane", "close")
 _KIND_RANK = {"close": 3, "lane": 2, "fight": 1, "commentary": 0}
@@ -371,12 +375,12 @@ def _early_chapters(early: list[EarlySegment], timeline: RiotTimeline) -> list[C
                 )
             )
     for i, c in enumerate(out):
-        kills = [
-            e.t_rec_s
-            for e in timeline.events
-            if e.kind == "kill" and e.t_rec_s is not None and c.start_s <= e.t_rec_s <= c.end_s
-        ]
-        out[i] = c.model_copy(update={"kill_times_s": kills})
+        out[i] = c.model_copy(
+            update={
+                "kill_times_s": _times_in(timeline, "kill", c.start_s, c.end_s, 0.0),
+                "death_times_s": _times_in(timeline, "death", c.start_s, c.end_s, 0.0),
+            }
+        )
     return [c for c in out if c.end_s > c.start_s]
 
 
@@ -386,31 +390,70 @@ def _play_kind(p: Play) -> str:
     return "close" if p.type == "closeout" else "fight"
 
 
+def _times_in(tl: RiotTimeline, kind: str, start: float, end: float, shift: float) -> list[float]:
+    """Recording times of `kind` events (plus `shift`) inside [start, end]."""
+    return [
+        e.t_rec_s + shift
+        for e in tl.events
+        if e.kind == kind and e.t_rec_s is not None and start <= e.t_rec_s + shift <= end
+    ]
+
+
+def _outnumbered_start(
+    p: Play, tl: RiotTimeline, start: float, shift: float, kind: str
+) -> float | None:
+    """Start of a won fight / close entered a player down: the earliest ally
+    death within OUTNUMBERED_LOOKBACK_S before `start` with no enemy death
+    between it and `start`, less ALLY_DEATH_LEAD_S. None when it does not apply."""
+    if kind == "lane" or p.result.outcome != "won":
+        return None
+    timed = [(e.t_rec_s + shift, e.kind) for e in tl.events if e.t_rec_s is not None]
+    enemy = [t for t, k in timed if k in _ENEMY_DEATH_KINDS]
+    ally = [
+        t
+        for t, k in timed
+        if k == "ally_death"
+        and start - OUTNUMBERED_LOOKBACK_S <= t < start
+        and not any(t < x < start for x in enemy)
+    ]
+    return min(ally) - ALLY_DEATH_LEAD_S if ally else None
+
+
 def _play_chapter(p: Play, timeline: RiotTimeline, lead_in_s: float = 0.0) -> Chapter | None:
     w = p.window
-    start = w.approach_s if w.approach_s is not None else p.recording_time.first_kill_s - 8.0
-    if w.approach_s is not None and w.approach_s - timeline.offset_s > LATE_GAME_S:
-        start -= lead_in_s  # late fights read better with a longer run-up
-    end = w.outcome_s if w.outcome_s is not None else p.recording_time.last_kill_s + 3.0
+    # The plays file holds recording seconds from the offset in force when it was
+    # written; move every window time onto the timeline's current offset.
+    delta = timeline.offset_s - (p.recording_time.first_kill_s - p.game_time.first_kill_s)
+    if w.approach_s is not None:
+        start = w.approach_s + delta
+        if start - timeline.offset_s > LATE_GAME_S:
+            start -= lead_in_s  # late fights read better with a longer run-up
+    else:
+        start = p.recording_time.first_kill_s + delta - 8.0
+    if w.outcome_s is not None:
+        end = w.outcome_s + delta
+    else:
+        end = p.recording_time.last_kill_s + delta + 3.0
+    # A HUD-measured offset is already exact; the banner correction applies otherwise.
+    shift = 0.0 if timeline.offset_source == "hud" else (w.offset_correction_s or 0.0)
+    kind = _play_kind(p)
+    ally_start = _outnumbered_start(p, timeline, start, shift, kind)
+    if ally_start is not None:
+        start = min(start, ally_start)
     start = max(0.0, start)
     if timeline.game_end_s is not None:
         end = min(end, timeline.game_end_s + GAME_END_TAIL_S)
     if end <= start:
         _log.warning("story: dropping play %s, empty window after clamp", p.id)
         return None
-    shift = w.offset_correction_s or 0.0  # banner-measured Riot offset error (D17)
-    kills = [
-        e.t_rec_s + shift
-        for e in timeline.events
-        if e.kind == "kill" and e.t_rec_s is not None and start <= e.t_rec_s + shift <= end
-    ]
     return Chapter(
         title=p.text,
         start_s=round(start, 2),
         end_s=round(end, 2),
-        kind=_play_kind(p),
+        kind=kind,
         play_id=p.id,
-        kill_times_s=kills,
+        kill_times_s=_times_in(timeline, "kill", start, end, shift),
+        death_times_s=_times_in(timeline, "death", start, end, shift),
     )
 
 
@@ -424,8 +467,13 @@ def _no_overlap(chapters: list[Chapter]) -> list[Chapter]:
             if c.end_s <= start:
                 _log.info("story: play %s lies inside the previous chapter; dropped", c.play_id)
                 continue
-            kills = [t for t in c.kill_times_s if t >= start]
-            c = c.model_copy(update={"start_s": start, "kill_times_s": kills})
+            c = c.model_copy(
+                update={
+                    "start_s": start,
+                    "kill_times_s": [t for t in c.kill_times_s if t >= start],
+                    "death_times_s": [t for t in c.death_times_s if t >= start],
+                }
+            )
         out.append(c)
     return out
 
