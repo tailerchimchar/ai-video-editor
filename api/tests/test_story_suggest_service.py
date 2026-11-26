@@ -54,7 +54,7 @@ def test_run_writes_ready_set(tmp_path, monkeypatch):
 
 
 def test_missing_story_json(tmp_path):
-    with pytest.raises(service.SuggestInputError, match="story.json"):
+    with pytest.raises(service.SuggestInputError, match=r"story\.json"):
         service.run_suggestions("r1", tmp_path, engine=FakeEngine())
 
 

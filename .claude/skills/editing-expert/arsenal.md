@@ -60,6 +60,7 @@ to list the folder before naming one.
 | undo | `list_compilation_history`, `revert_compilation` |
 | finalize / clean up | `finalize_compilation`, `cleanup_compilation`, `set_compilation_labels` |
 | split a long VOD into games | `split_vod_into_games` |
+| story video: editor suggestions (Jev panel) → tick → apply | `story_suggest_edits`, `story_list_suggestions`, `story_accept_suggestion`, `story_apply_suggestions` |
 
 ## Review (not effects, but the panel uses them)
 

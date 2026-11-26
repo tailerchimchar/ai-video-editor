@@ -274,6 +274,15 @@ STRUCTURE = (
         ("finalize_compilation", "cleanup_compilation", "set_compilation_labels"),
     ),
     ToolGroup("split a long VOD into games", ("split_vod_into_games",)),
+    ToolGroup(
+        "story video: editor suggestions (Jev panel) → tick → apply",
+        (
+            "story_suggest_edits",
+            "story_list_suggestions",
+            "story_accept_suggestion",
+            "story_apply_suggestions",
+        ),
+    ),
 )
 
 REVIEW = (

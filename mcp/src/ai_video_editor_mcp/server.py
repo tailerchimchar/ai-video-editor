@@ -2411,6 +2411,65 @@ def story_render(round: str, asset_id: str, plays: bool = True) -> dict:
 
 
 @mcp.tool()
+def story_suggest_edits(round: str) -> dict:
+    """Get editor suggestions for a rendered story: 3-6 effects
+    (letterbox_focus, slowmo, zoom) on its best moments. The gaming, viewer
+    and editing voices are asked as typed questions through Jev (free rules
+    when Jev is not configured); no Anthropic call. Needs the round's story
+    rendered first (`story_render`). Replaces earlier suggestions.
+
+    Job-based; this tool waits, then returns the suggestions:
+    `{status, items: [{id, kind, chapter_index, start_s, end_s, params,
+    reason, play_score, pop_p, backend, accepted}]}` with game-clock times.
+    Next: show them to the owner, `story_accept_suggestion` the ones they
+    want, then `story_apply_suggestions`."""
+    with _client() as c:
+        r = c.post(f"{API}/story/{round}/suggestions")
+        if r.status_code != 200:
+            return {"status": "failed", "error": r.text}
+        job = _wait_for_job(c, r.json()["job_id"], timeout_s=600)
+        if job.get("status") != "completed":
+            return job
+        return c.get(f"{API}/story/{round}/suggestions").json()
+
+
+@mcp.tool()
+def story_list_suggestions(round: str) -> dict:
+    """Show a round's editor suggestions and which the owner accepted
+    (`accepted`: true / false / null = undecided). `status` is pending
+    (job running), ready, applied or failed (`error` says why). Read-only."""
+    with _client() as c:
+        return c.get(f"{API}/story/{round}/suggestions").json()
+
+
+@mcp.tool()
+def story_accept_suggestion(round: str, item_id: str, accepted: bool | None) -> dict:
+    """Tick (`accepted=True`), reject (`False`) or clear (`None`) one
+    suggestion by its `id` from `story_list_suggestions`. Nothing renders
+    here. Returns the updated suggestions."""
+    with _client() as c:
+        return c.put(
+            f"{API}/story/{round}/suggestions/{item_id}", json={"accepted": accepted}
+        ).json()
+
+
+@mcp.tool()
+def story_apply_suggestions(round: str) -> dict:
+    """Apply the accepted suggestions: each becomes `effect` request(s) in the
+    round's requests (letterbox_focus = letterbox + focus over the same span;
+    re-applying never duplicates), then the story re-renders. Heavy ffmpeg
+    work: one at a time. Narration takes recorded before this go stale.
+
+    Job-based; this tool waits for the render. On success `output_path` is
+    the story video. On timeout the job continues in the background."""
+    with _client() as c:
+        r = c.post(f"{API}/story/{round}/suggestions/apply")
+        if r.status_code != 200:
+            return {"status": "failed", "error": r.text}
+        return _wait_for_job(c, r.json()["job_id"], timeout_s=1800)
+
+
+@mcp.tool()
 def narration_status(kind: str, key: str) -> dict:
     """Show a video's narration: takes (id, start_s, duration_s, has_camera),
     camera box, `stale` (the video changed after the takes were recorded) and
