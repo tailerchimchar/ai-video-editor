@@ -203,3 +203,16 @@ def test_cli_missing_timeline_or_video():
     cli, deps, _written = _cli_fakes(None)
     assert cli.main(["--asset", "a1"], **{**deps, "load": lambda a: None}) == 2
     assert cli.main(["--asset", "a1"], **{**deps, "path": lambda a: None}) == 2
+
+
+def test_cli_guess_searches_around_the_given_offset(capsys):
+    # Yunara 2026-11-26: stored -17 was ~26 s off, outside the +-8 s window.
+    cli, deps, written = _cli_fakes(HudSync(9.1, 5, 0.1, [(100.0, 9.1)]))
+    seen = []
+    deps["calibrate"] = lambda src, tl: (
+        seen.append(tl.offset_s) or HudSync(9.1, 5, 0.1, [(100.0, 9.1)])
+    )
+    assert cli.main(["--asset", "a1", "--guess", "9", "--write"], **deps) == 0
+    assert seen == [9.0]
+    assert "searching around 9.00" in capsys.readouterr().out
+    assert written == [("a1", 9.1, "hud")]

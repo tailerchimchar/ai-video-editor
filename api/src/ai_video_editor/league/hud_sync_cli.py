@@ -6,6 +6,7 @@ Dry run by default; `--write` stores it with offset_source="hud".
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import sys
 
 from .hud_sync import calibrate_from_hud
@@ -36,6 +37,13 @@ def main(
     ap.add_argument("--asset", required=True, help="asset id")
     ap.add_argument("--source", help="video to read (default: the asset's path)")
     ap.add_argument("--write", action="store_true", help="store the result (offset_source=hud)")
+    ap.add_argument(
+        "--guess",
+        type=float,
+        help="search around this offset instead of the stored one (the search "
+        "window is +-8 s, so a stored offset far off finds nothing); read it "
+        "off one frame: recording second minus the HUD game clock",
+    )
     args = ap.parse_args(argv)
 
     timeline = load(args.asset)
@@ -47,8 +55,11 @@ def main(
         print(f"no video path for {args.asset}; pass --source", file=sys.stderr)
         return 2
 
-    result = calibrate(src, timeline)
     print(f"old offset: {timeline.offset_s:.2f} s ({timeline.offset_source})")
+    if args.guess is not None:
+        timeline = dataclasses.replace(timeline, offset_s=args.guess)
+        print(f"searching around {args.guess:.2f} s")
+    result = calibrate(src, timeline)
     if result is None:
         print("no reliable HUD measurement (fewer than 3 clean samples or spread > 0.5 s)")
         return 1
