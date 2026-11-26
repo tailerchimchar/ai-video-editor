@@ -187,7 +187,12 @@ function NarrationWorkspace({ target }: { target: TargetRef }) {
             />
           </section>
 
-          <SuggestionsPanel target={target} />
+          <SuggestionsPanel
+            target={target}
+            onSeek={(s) => {
+              if (video) video.currentTime = s;
+            }}
+          />
 
           <ExportPanel
             stale={view.stale}

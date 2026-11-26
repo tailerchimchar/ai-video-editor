@@ -33,16 +33,21 @@ function gameClock(s: number): string {
  * checkbox each, and "Apply & re-render" for the ticked ones. Story only
  * (the round is the target key); other kinds render nothing.
  *
- * No "jump there" button: the web is not sent where a chapter sits in the
- * cut video (only game-clock times), so a seek would land on the wrong
- * moment. Each row shows its game time and chapter instead.
+ * "Jump there" seeks the player to the suggestion's `video_s` (sent by the
+ * API for the render the suggestions came from; hidden once applied, when
+ * the video has changed).
  */
-export function SuggestionsPanel({ target }: { target: TargetRef }) {
-  if (target.kind !== "story") return null;
-  return <StorySuggestions target={target} />;
+interface SuggestionsPanelProps {
+  target: TargetRef;
+  onSeek: (seconds: number) => void;
 }
 
-function StorySuggestions({ target }: { target: TargetRef }) {
+export function SuggestionsPanel({ target, onSeek }: SuggestionsPanelProps) {
+  if (target.kind !== "story") return null;
+  return <StorySuggestions target={target} onSeek={onSeek} />;
+}
+
+function StorySuggestions({ target, onSeek }: SuggestionsPanelProps) {
   const round = target.key;
   const qc = useQueryClient();
   const { set, start, tick, apply } = useSuggestions(round);
@@ -119,6 +124,11 @@ function StorySuggestions({ target }: { target: TargetRef }) {
               item={item}
               disabled={data?.status !== "ready" || rendering || apply.isPending}
               onTick={(accepted) => tick.mutate({ itemId: item.id, accepted })}
+              onJump={
+                data?.status === "ready" && item.video_s !== null
+                  ? () => onSeek(item.video_s as number)
+                  : undefined
+              }
             />
           ))}
         </ul>
@@ -169,10 +179,13 @@ function SuggestionRow({
   item,
   disabled,
   onTick,
+  onJump,
 }: {
   item: SuggestionItem;
   disabled: boolean;
   onTick: (accepted: boolean) => void;
+  /** Absent when the suggestion can't be placed in the current video. */
+  onJump?: () => void;
 }) {
   return (
     <li className="rounded border border-border bg-bg-overlay p-2">
@@ -202,6 +215,13 @@ function SuggestionRow({
           </span>
         </span>
       </label>
+      {onJump && (
+        <div className="mt-1 pl-6">
+          <Button size="sm" variant="ghost" onClick={onJump}>
+            jump there ↗
+          </Button>
+        </div>
+      )}
     </li>
   );
 }

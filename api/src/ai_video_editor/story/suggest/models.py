@@ -51,6 +51,9 @@ class SuggestionItem(BaseModel):
     pop_p: float | None = None
     backend: Literal["jev", "rules"]
     accepted: bool | None = None
+    # Second in the rendered story.mp4 where the effect starts (for "jump
+    # there"); valid for the render the suggestions were made from.
+    video_s: float | None = None
 
 
 class SuggestionSet(BaseModel):

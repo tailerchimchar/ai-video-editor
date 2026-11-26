@@ -48,7 +48,9 @@ def test_run_writes_ready_set(tmp_path, monkeypatch):
     monkeypatch.setattr(service, "load_timeline", lambda asset_id: TL)
     engine = FakeEngine()
     out = service.run_suggestions("r1", tmp_path, engine=engine)
-    assert out.status == "ready" and out.items == [ITEM] and out.round == "r1"
+    # Card (settings.story_card_seconds) + 0 s into the chapter: start_s 10 + offset 0.
+    placed = ITEM.model_copy(update={"video_s": service.settings.story_card_seconds})
+    assert out.status == "ready" and out.items == [placed] and out.round == "r1"
     assert engine.calls == [(PLAN, TL, "league")]
     assert FileSuggestionStore(tmp_path).load() == out
 

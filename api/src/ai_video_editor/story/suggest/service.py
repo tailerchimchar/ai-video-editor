@@ -7,10 +7,12 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
+from ...config import settings
 from ..cli import load_timeline
 from ..planner import StoryPlan
 from .engine import JevPanelEngine, SuggestionEngine
 from .models import SuggestionSet
+from .placement import video_second
 from .store import FileSuggestionStore
 
 STORY_FILE = "story.json"
@@ -55,6 +57,17 @@ def run_suggestions(
     if timeline is None:
         raise SuggestInputError(f"no usable Riot timeline cached for asset {plan.asset_id}")
     items = (engine or JevPanelEngine()).suggest(plan, timeline, game)
+    card_s = settings.story_card_seconds
+    items = [
+        item.model_copy(
+            update={
+                "video_s": video_second(
+                    plan, item.chapter_index, item.start_s + timeline.offset_s, card_s
+                )
+            }
+        )
+        for item in items
+    ]
     result = SuggestionSet(round=round_name, created_at=now_iso(), status="ready", items=items)
     FileSuggestionStore(story_dir).save(result)
     return result

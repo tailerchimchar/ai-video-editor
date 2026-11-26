@@ -1,7 +1,8 @@
 /**
  * Editor suggestions: hand-mirrored from
  * `api/src/ai_video_editor/story/suggest/models.py` (names identical).
- * Times are game-clock seconds (what the HUD shows), not video seconds.
+ * `start_s`/`end_s` are game-clock seconds (what the HUD shows); `video_s`
+ * is the matching second in the cut video.
  */
 
 export type SuggestionKind = "letterbox_focus" | "slowmo" | "zoom";
@@ -20,6 +21,9 @@ export interface SuggestionItem {
   backend: "jev" | "rules";
   /** null = not decided yet. */
   accepted: boolean | null;
+  /** Second in the rendered story.mp4 where it starts ("jump there"), for
+   * the render the suggestions were made from. */
+  video_s: number | null;
 }
 
 /** `WORKSPACE/story/<round>/suggestions.json`. */
