@@ -88,12 +88,13 @@ def test_first_get_creates_session(client, video):
     r = client.get(BASE)
     assert r.status_code == 200
     body = r.json()
-    assert body["target"] == {"kind": "fake", "key": "r1"}
-    assert body["takes"] == []
+    assert body["session"]["target"] == {"kind": "fake", "key": "r1"}
+    assert body["session"]["takes"] == []
+    assert body["export_url"] is None
     assert body["video_url"] == "/workspace/fake/r1/video.mp4"
     assert body["game"] == "league"
     assert body["stale"] is False
-    assert body["video_fingerprint"]
+    assert body["session"]["video_fingerprint"]
     assert set(body["camera_px"]) == {"x", "y", "w", "h"}
     assert body["default_camera_px"] == body["camera_px"]  # no owner override yet
     assert (video.parent / "narration" / "session.json").is_file()
@@ -109,7 +110,7 @@ def test_upload_take(client, video):
     assert take["media"] == f"{take['id']}.webm"
     saved = video.parent / "narration" / "takes" / take["media"]
     assert saved.read_bytes() == b"abc"
-    assert [t["id"] for t in client.get(BASE).json()["takes"]] == [take["id"]]
+    assert [t["id"] for t in client.get(BASE).json()["session"]["takes"]] == [take["id"]]
 
 
 def test_upload_accepts_audio_webm_with_codecs(client, video):
@@ -137,7 +138,7 @@ def test_delete_take(client, video):
     take = _take(client).json()
     r = client.delete(f"{BASE}/takes/{take['id']}")
     assert r.status_code == 200
-    assert r.json()["takes"] == []
+    assert r.json()["session"]["takes"] == []
     assert not (video.parent / "narration" / "takes" / take["media"]).exists()
     assert client.delete(f"{BASE}/takes/{take['id']}").status_code == 404
 
@@ -147,10 +148,10 @@ def test_put_camera(client, video):
     r = client.put(f"{BASE}/camera", json={"enabled": True, "width_frac": 0.25, "x": 0.5, "y": 0.5})
     assert r.status_code == 200
     body = r.json()
-    assert body["camera"]["enabled"] is True
+    assert body["session"]["camera"]["enabled"] is True
     assert body["camera_px"]["w"] == 480
     assert body["camera_px"] != body["default_camera_px"]
-    assert client.get(BASE).json()["camera"]["width_frac"] == 0.25
+    assert client.get(BASE).json()["session"]["camera"]["width_frac"] == 0.25
     assert client.put(f"{BASE}/camera", json={"width_frac": 0.9}).status_code == 422
 
 
@@ -180,6 +181,7 @@ def test_export_creates_job(client, video, exporter):
     job = _wait(client, r.json()["job_id"])
     assert job["status"] == "completed"
     assert job["output_path"].endswith("narrated.mp4")
+    assert client.get(BASE).json()["export_url"] == "/workspace/fake/r1/narration/narrated.mp4"
     assert exporter == [{"ref": TargetRef(kind="fake", key="r1"), "force": False}]
 
 

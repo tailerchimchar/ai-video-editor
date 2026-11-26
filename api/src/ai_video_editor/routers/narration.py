@@ -32,7 +32,7 @@ from ..jobs import finish_job
 from ..models import RankResponse
 from ..narration import service, targets
 from ..narration.export import export_narration
-from ..narration.models import KEY_PATTERN, CameraBox, Take, TargetRef
+from ..narration.models import KEY_PATTERN, CameraBox, NarrationSession, Take, TargetRef
 from ..narration.service import SessionView
 from ..narration.store import NarrationStore, store_for
 from ..narration.targets import NarrationTarget
@@ -91,8 +91,10 @@ def get_exporter() -> Exporter:
 ExporterDep = Annotated[Exporter, Depends(get_exporter)]
 
 
-def _view(ref: TargetRef, target: NarrationTarget, session) -> SessionView:
-    return service.build_view(ref, target, session)
+def _view(
+    ref: TargetRef, target: NarrationTarget, store: NarrationStore, session: NarrationSession
+) -> SessionView:
+    return service.build_view(ref, target, store, session)
 
 
 # -- session ------------------------------------------------------------
@@ -102,7 +104,7 @@ async def get_session(
     target: TargetDep,
     store: StoreDep,
 ) -> SessionView:
-    return _view(ref, target, service.load_or_create(ref, target, store))
+    return _view(ref, target, store, service.load_or_create(ref, target, store))
 
 
 @router.put("/{kind}/{key}/camera", response_model=SessionView)
@@ -112,7 +114,7 @@ async def put_camera(
     target: TargetDep,
     store: StoreDep,
 ) -> SessionView:
-    return _view(ref, target, service.set_camera(ref, target, store, body))
+    return _view(ref, target, store, service.set_camera(ref, target, store, body))
 
 
 @router.post("/{kind}/{key}/relock", response_model=SessionView)
@@ -121,7 +123,7 @@ async def relock(
     target: TargetDep,
     store: StoreDep,
 ) -> SessionView:
-    return _view(ref, target, service.relock(ref, target, store))
+    return _view(ref, target, store, service.relock(ref, target, store))
 
 
 # -- takes --------------------------------------------------------------
@@ -167,7 +169,7 @@ async def delete_take(
         session = service.remove_take(ref, target, store, take_id)
     except service.TakeNotFoundError as exc:
         raise HTTPException(404, f"no take {take_id!r}") from exc
-    return _view(ref, target, session)
+    return _view(ref, target, store, session)
 
 
 # -- export -------------------------------------------------------------

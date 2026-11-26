@@ -10,6 +10,8 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
+from pydantic import BaseModel
+
 from . import targets
 from .layout import camera_box
 from .models import CameraBox, NarrationSession, PixelBox, Take, TargetRef
@@ -24,13 +26,16 @@ class TakeNotFoundError(LookupError):
     """No take with that id in the session."""
 
 
-class SessionView(NarrationSession):
+class SessionView(BaseModel):
     """The session plus what the page needs to draw it."""
 
+    session: NarrationSession
     video_url: str
+    game: str
     stale: bool
     camera_px: PixelBox  # the owner's box resolved for a 1920x1080 frame
     default_camera_px: PixelBox  # the game profile's box, ignoring overrides
+    export_url: str | None = None  # narrated.mp4, once an export exists
 
 
 def _current_fingerprint(ref: TargetRef, target: NarrationTarget) -> str:
@@ -57,15 +62,27 @@ def is_stale(ref: TargetRef, target: NarrationTarget, session: NarrationSession)
     return session.video_fingerprint != _current_fingerprint(ref, target)
 
 
-def build_view(ref: TargetRef, target: NarrationTarget, session: NarrationSession) -> SessionView:
+def _export_url(ref: TargetRef, target: NarrationTarget, store: NarrationStore) -> str | None:
+    """URL of `narrated.mp4` (next to the video's `narration/` folder) if it exists."""
+    if not store.export_path(ref).is_file():
+        return None
+    folder = target.video_url(ref.key).rsplit("/", 1)[0]
+    return f"{folder}/narration/narrated.mp4"
+
+
+def build_view(
+    ref: TargetRef, target: NarrationTarget, store: NarrationStore, session: NarrationSession
+) -> SessionView:
     w, h = REFERENCE_FRAME
     game = target.game(ref.key)
     return SessionView(
-        **session.model_dump(),
+        session=session,
         video_url=target.video_url(ref.key),
+        game=game,
         stale=is_stale(ref, target, session),
         camera_px=camera_box(session.camera, game, w, h),
         default_camera_px=camera_box(CameraBox(), game, w, h),
+        export_url=_export_url(ref, target, store),
     )
 
 
