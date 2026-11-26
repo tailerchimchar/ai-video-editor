@@ -105,7 +105,7 @@ def test_default_params_and_slowmo_span():
     # near the candidate's end the window shifts but never leaves the candidate
     late = _cand("b", 100, 111, anchor=110.5)
     s2, e2, _ = effect_span(EffectChoice.slowmo, late)
-    assert 100 <= s2 and e2 <= 111 and e2 - s2 <= 2.5
+    assert s2 >= 100 and e2 <= 111 and e2 - s2 <= 2.5
 
 
 def test_reason_reads_the_answers():
