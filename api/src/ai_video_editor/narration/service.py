@@ -1,0 +1,126 @@
+"""Session use-cases: what the HTTP API (and any future surface) asks for.
+
+SRP: no HTTP and no file paths here. Everything goes through the
+`NarrationTarget` / `NarrationStore` protocols, so a new kind of video or a
+new store needs no edit.
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime, timezone
+
+from . import targets
+from .layout import camera_box
+from .models import CameraBox, NarrationSession, PixelBox, Take, TargetRef
+from .store import NarrationStore
+from .targets import NarrationTarget
+
+# Frame the browser lays the camera box out against; the page scales it.
+REFERENCE_FRAME = (1920, 1080)
+
+
+class TakeNotFoundError(LookupError):
+    """No take with that id in the session."""
+
+
+class SessionView(NarrationSession):
+    """The session plus what the page needs to draw it."""
+
+    video_url: str
+    stale: bool
+    camera_px: PixelBox  # the owner's box resolved for a 1920x1080 frame
+    default_camera_px: PixelBox  # the game profile's box, ignoring overrides
+
+
+def _current_fingerprint(ref: TargetRef, target: NarrationTarget) -> str:
+    return targets.fingerprint(target.video_path(ref.key))
+
+
+def load_or_create(
+    ref: TargetRef, target: NarrationTarget, store: NarrationStore
+) -> NarrationSession:
+    """The saved session; the first call saves an empty one pinned to the
+    video as it is now."""
+    session = store.load(ref)
+    if session is None:
+        session = NarrationSession(
+            target=ref,
+            game=target.game(ref.key),
+            video_fingerprint=_current_fingerprint(ref, target),
+        )
+        store.save(session)
+    return session
+
+
+def is_stale(ref: TargetRef, target: NarrationTarget, session: NarrationSession) -> bool:
+    return session.video_fingerprint != _current_fingerprint(ref, target)
+
+
+def build_view(ref: TargetRef, target: NarrationTarget, session: NarrationSession) -> SessionView:
+    w, h = REFERENCE_FRAME
+    game = target.game(ref.key)
+    return SessionView(
+        **session.model_dump(),
+        video_url=target.video_url(ref.key),
+        stale=is_stale(ref, target, session),
+        camera_px=camera_box(session.camera, game, w, h),
+        default_camera_px=camera_box(CameraBox(), game, w, h),
+    )
+
+
+def add_take(
+    ref: TargetRef,
+    target: NarrationTarget,
+    store: NarrationStore,
+    *,
+    data: bytes,
+    suffix: str,
+    start_s: float,
+    duration_s: float,
+    has_camera: bool,
+) -> Take:
+    session = load_or_create(ref, target, store)
+    take_id = uuid.uuid4().hex[:12]
+    media = store.write_take(ref, take_id, data, suffix)
+    take = Take(
+        id=take_id,
+        start_s=start_s,
+        duration_s=duration_s,
+        media=media,
+        has_camera=has_camera,
+        created_at=datetime.now(timezone.utc).isoformat(),
+    )
+    session.takes.append(take)
+    store.save(session)
+    return take
+
+
+def remove_take(
+    ref: TargetRef, target: NarrationTarget, store: NarrationStore, take_id: str
+) -> NarrationSession:
+    session = load_or_create(ref, target, store)
+    take = next((t for t in session.takes if t.id == take_id), None)
+    if take is None:
+        raise TakeNotFoundError(take_id)
+    session.takes.remove(take)
+    store.save(session)  # forget the take first; a leftover file is harmless
+    store.delete_take(ref, take.media)
+    return session
+
+
+def set_camera(
+    ref: TargetRef, target: NarrationTarget, store: NarrationStore, camera: CameraBox
+) -> NarrationSession:
+    session = load_or_create(ref, target, store)
+    session.camera = camera
+    store.save(session)
+    return session
+
+
+def relock(ref: TargetRef, target: NarrationTarget, store: NarrationStore) -> NarrationSession:
+    """Keep the takes as they are and pin them to the video as it is now."""
+    session = load_or_create(ref, target, store)
+    session.video_fingerprint = _current_fingerprint(ref, target)
+    store.save(session)
+    return session

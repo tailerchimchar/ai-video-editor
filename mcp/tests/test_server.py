@@ -236,3 +236,63 @@ def test_story_render_polls_the_job():
     with _patch_client(handler):
         out = server.story_render("r1", "a1")
     assert out["output_path"] == "story.mp4"
+
+
+def test_narration_status_and_remove_take():
+    seen: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path))
+        return httpx.Response(200, json={"takes": []})
+
+    with _patch_client(handler):
+        server.narration_status("story", "r1")
+        server.narration_remove_take("story", "r1", "abc123")
+
+    assert seen == [
+        ("GET", "/api/v1/narration/story/r1"),
+        ("DELETE", "/api/v1/narration/story/r1/takes/abc123"),
+    ]
+
+
+def test_narration_set_camera_sends_only_set_fields():
+    import json as _json
+
+    bodies: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert (request.method, request.url.path) == ("PUT", "/api/v1/narration/story/r1/camera")
+        bodies.append(_json.loads(request.content))
+        return httpx.Response(200, json={"camera": {}})
+
+    with _patch_client(handler):
+        server.narration_set_camera("story", "r1", True)
+        server.narration_set_camera("story", "r1", False, width_frac=0.2, x=0.7, y=0.6)
+
+    assert bodies[0] == {"enabled": True}
+    assert bodies[1] == {"enabled": False, "width_frac": 0.2, "x": 0.7, "y": 0.6}
+
+
+def test_narration_export_polls_the_job():
+    import json as _json
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            assert request.url.path == "/api/v1/narration/story/r1/export"
+            assert _json.loads(request.content) == {"force": True}
+            return httpx.Response(200, json={"job_id": "j1"})
+        assert request.url.path == "/api/v1/jobs/j1"
+        return httpx.Response(200, json={"status": "completed", "output_path": "narrated.mp4"})
+
+    with _patch_client(handler):
+        out = server.narration_export("story", "r1", force=True)
+    assert out["output_path"] == "narrated.mp4"
+
+
+def test_narration_export_stale_returns_the_409_text():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(409, json={"detail": "the video changed"})
+
+    with _patch_client(handler):
+        out = server.narration_export("story", "r1")
+    assert out["status"] == "failed" and "video changed" in out["error"]
