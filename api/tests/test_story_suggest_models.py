@@ -55,7 +55,9 @@ def test_item_kind_and_backend_are_pinned():
 
 
 def test_set_defaults_and_round_trip():
-    s = SuggestionSet(round="r1", created_at="2026-11-25T00:00:00Z", status="ready", items=[_item()])
+    s = SuggestionSet(
+        round="r1", created_at="2026-11-25T00:00:00Z", status="ready", items=[_item()]
+    )
     assert s.error is None
     assert SuggestionSet.model_validate_json(s.model_dump_json()) == s
     with pytest.raises(ValidationError):
