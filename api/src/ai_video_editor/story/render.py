@@ -23,7 +23,7 @@ from ..edits import apply_sfx, focus_filter, resolve_roi
 from ..intros.config import IntroConfig, _TextLogoConfig
 from ..intros.render import render_intro
 from ..league.items import ItemInfo
-from ..sfx_library import death_path, kaching_path, sfx_onset_s
+from ..sfx_library import death_path, kaching_path, sfx_hit_s
 from ..vlm.watch_montage import WatchResult, save_critique, watch_montage
 from .broll import BRollInsert
 from .planner import Chapter, ChapterEffect, StoryPlan
@@ -548,7 +548,7 @@ def _with_sfx(part: Path, ch: Chapter, i: int) -> Path:
     sfx = [
         {
             "sfx_path": str(path),
-            "at_seconds": max(0.0, round(tmap(t) - sfx_onset_s(path), 3)),
+            "at_seconds": max(0.0, round(tmap(t) - sfx_hit_s(path), 3)),
             "volume": vol,
         }
         for path, t, vol in entries

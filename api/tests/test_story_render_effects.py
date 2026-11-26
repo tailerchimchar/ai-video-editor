@@ -236,7 +236,7 @@ def fake_ffmpeg(monkeypatch, tmp_path):
     monkeypatch.setattr(render, "apply_sfx", sfx)
     monkeypatch.setattr(render, "_probe_audio_count", lambda p: 3)
     monkeypatch.setattr(render, "kaching_path", lambda: Path("k.wav"))
-    monkeypatch.setattr(render, "sfx_onset_s", lambda p: 0.0)
+    monkeypatch.setattr(render, "sfx_hit_s", lambda p: 0.0)
     monkeypatch.setattr(settings, "story_transition_s", 0.25)
     return calls
 

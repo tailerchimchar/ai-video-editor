@@ -121,3 +121,25 @@ def test_death_path_synthesised_once_and_keeps_existing(tmp_path, monkeypatch):
     assert len(calls) == 1
     p.write_bytes(b"mine")
     assert sfx_library.death_path(run=fake_run).read_bytes() == b"mine"
+
+
+def test_sfx_hit_uses_sidecar_hit_point(tmp_path):
+    p = tmp_path / "kaching.wav"
+    _write_wav(p, 0.05)
+    (tmp_path / "kaching.json").write_text('{"hit_s": 0.43}', encoding="utf-8")
+    assert sfx_library.sfx_hit_s(p) == 0.43
+
+
+def test_sfx_hit_falls_back_to_onset(tmp_path):
+    p = tmp_path / "death.wav"
+    _write_wav(p, 0.25)
+    assert abs(sfx_library.sfx_hit_s(p) - 0.25) < 0.02
+
+
+def test_sfx_hit_ignores_bad_sidecar(tmp_path):
+    p = tmp_path / "k.wav"
+    _write_wav(p, 0.25)
+    (tmp_path / "k.json").write_text('{"hit_s": -1}', encoding="utf-8")
+    assert abs(sfx_library.sfx_hit_s(p) - 0.25) < 0.02
+    (tmp_path / "k.json").write_text("not json", encoding="utf-8")
+    assert abs(sfx_library.sfx_hit_s(p) - 0.25) < 0.02

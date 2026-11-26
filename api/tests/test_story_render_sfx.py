@@ -16,7 +16,7 @@ def sfx_seams(monkeypatch):
     calls = []
     monkeypatch.setattr(render, "kaching_path", lambda: Path("k.wav"))
     monkeypatch.setattr(render, "death_path", lambda: Path("d.wav"))
-    monkeypatch.setattr(render, "sfx_onset_s", lambda p: 0.0)
+    monkeypatch.setattr(render, "sfx_hit_s", lambda p: 0.0)
 
     def fake_sfx(src, out, *, sfx):
         calls.append((src, out, sfx))
@@ -60,7 +60,7 @@ def test_kill_gated_off_by_config(sfx_seams, monkeypatch, tmp_path):
 
 
 def test_onset_subtracted_and_clamped(sfx_seams, monkeypatch, tmp_path):
-    monkeypatch.setattr(render, "sfx_onset_s", lambda p: 0.25 if p.name == "k.wav" else 0.0)
+    monkeypatch.setattr(render, "sfx_hit_s", lambda p: 0.25 if p.name == "k.wav" else 0.0)
     render._with_sfx(tmp_path / "chapter_01.mp4", _ch([110.0, 100.1], []), 1)
     assert [s["at_seconds"] for s in sfx_seams[0][2]] == [9.75, 0.0]
 

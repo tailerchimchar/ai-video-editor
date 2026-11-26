@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import subprocess
 from collections.abc import Callable
@@ -95,6 +96,21 @@ def death_path(*, run: Callable = subprocess.run) -> Path:
 
 
 _onset_cache: dict[tuple[str, float], float] = {}
+
+
+def sfx_hit_s(path: Path, *, run: Callable = subprocess.run) -> float:
+    """Seconds into the file where the sound should land on its moment.
+    A sidecar `<stem>.json` with `hit_s` wins (e.g. a "cha-ching" whose bell,
+    not the lead-in click, belongs on the kill); otherwise the leading silence
+    (`sfx_onset_s`)."""
+    side = Path(path).with_suffix(".json")
+    try:
+        hit = json.loads(side.read_text(encoding="utf-8")).get("hit_s")
+        if isinstance(hit, int | float) and hit >= 0:
+            return float(hit)
+    except (OSError, ValueError, AttributeError):
+        pass
+    return sfx_onset_s(path, run=run)
 
 
 def sfx_onset_s(path: Path, *, run: Callable = subprocess.run) -> float:
