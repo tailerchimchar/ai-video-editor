@@ -1,5 +1,4 @@
 import subprocess
-
 from types import SimpleNamespace
 
 from ai_video_editor import sfx_library
