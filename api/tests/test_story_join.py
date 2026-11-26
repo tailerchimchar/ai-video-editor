@@ -149,3 +149,7 @@ def test_overlay_cmd_copies_audio_and_reencodes_video():
     graph = cmd[cmd.index("-filter_complex") + 1]
     assert "overlay=" in graph and "scale2ref" in graph and "eof_action=pass" in graph
     assert cmd[cmd.index("-c:a") + 1] == "copy" and cmd[-1] == "o.mp4"
+
+
+def test_round_label_uses_real_champion_spelling():
+    assert join.round_label("2026-11-26_0033_kaisa_7-1-3") == "Kai'sa 7/1/3"

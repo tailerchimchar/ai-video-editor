@@ -23,6 +23,20 @@ from .planner import StoryPlan
 from .render import StoryRenderError, _concat, _encode_opts, _render_card, _run_ffmpeg
 
 _ROUND_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})_\d{4}_([^_]+)_(\d+)-(\d+)-(\d+)$")
+# Round folders use plain ASCII champion names; show the real spelling.
+_CHAMP_DISPLAY = {
+    "kaisa": "Kai'sa",
+    "khazix": "Kha'Zix",
+    "chogath": "Cho'Gath",
+    "velkoz": "Vel'Koz",
+    "kogmaw": "Kog'Maw",
+    "reksai": "Rek'Sai",
+    "belveth": "Bel'Veth",
+    "ksante": "K'Sante",
+    "missfortune": "Miss Fortune",
+    "drmundo": "Dr. Mundo",
+    "masteryi": "Master Yi",
+}
 
 SUBSCRIBE_ASSET = ("assets", "subscribe_animation", "subscribe_alpha.mov")
 SUBSCRIBE_WIDTH_FRAC = 0.30  # of the frame width
@@ -35,7 +49,8 @@ def round_label(round_name: str) -> str:
     if not m:
         return round_name
     _, champ, k, d, a = m.groups()
-    return f"{champ.capitalize()} {k}/{d}/{a}"
+    name = _CHAMP_DISPLAY.get(champ.lower(), champ.capitalize())
+    return f"{name} {k}/{d}/{a}"
 
 
 def story_path(round_name: str) -> Path:

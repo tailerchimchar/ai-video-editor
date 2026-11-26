@@ -81,3 +81,19 @@ def test_youtube_chapters_start_at_zero_and_skip_short_entries():
     assert "1:42 Fight" in lines  # 102.5 s
     assert "2:12 Kai'sa 7/1/3: The opening" in lines  # game card at 132.5 s
     assert all(len(line.split(" ", 1)) == 2 for line in lines)
+
+
+def test_chapter_name_cleans_planner_play_titles():
+    from ai_video_editor.story.join_map import chapter_name
+
+    assert (
+        chapter_name(
+            "4v3 objective_fight in top_lane, owner follow_up, won 2-for-1, then DRAGON/AIR_DRAGON"
+        )
+        == "4v3 objective fight · won 2-for-1 · air dragon"
+    )
+    assert (
+        chapter_name("2v2 skirmish in bot_lane, owner initiator_kill, won 2-for-0")
+        == "2v2 skirmish · won 2-for-0"
+    )
+    assert chapter_name("First back") == "First back"

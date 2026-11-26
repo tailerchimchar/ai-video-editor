@@ -10,6 +10,7 @@ chapter list from the map.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -131,6 +132,28 @@ def build_join_map(
     )
 
 
+_PLAY_TITLE = re.compile(
+    r"^(?P<numbers>\d+v\d+) (?P<kind>[a-z_]+) in [a-z_]+,.*?,\s*"
+    r"(?P<result>won|lost|even) (?P<score>\d+-for-\d+)(?P<rest>.*)$"
+)
+_OBJECTIVE = re.compile(r"then ([A-Z_/]+)")
+
+
+def chapter_name(title: str) -> str:
+    """A viewer-facing chapter name. Planner play titles such as
+    "4v3 objective_fight in top_lane, owner follow_up, won 2-for-1, then
+    DRAGON/AIR_DRAGON" become "4v3 objective fight · won 2-for-1 · air dragon";
+    other titles are kept."""
+    m = _PLAY_TITLE.match(title)
+    if not m:
+        return title
+    parts = [f"{m['numbers']} {m['kind'].replace('_', ' ')}", f"{m['result']} {m['score']}"]
+    obj = _OBJECTIVE.search(m["rest"])
+    if obj:
+        parts.append(obj.group(1).split("/")[-1].replace("_", " ").lower())
+    return " · ".join(parts)
+
+
 def _clock(s: float) -> str:
     s = int(s)
     h, m, sec = s // 3600, s % 3600 // 60, s % 60
@@ -146,7 +169,8 @@ def youtube_chapters(jm: JoinMap, *, intro_s: float = 0.0) -> str:
         entries.append((0.0, "Intro"))
     for g in jm.games:
         for n, c in enumerate(g.chapters):
-            name = c.title if n else f"{g.label}: {c.title}"
+            name = chapter_name(c.title)
+            name = name if n else f"{g.label}: {name}"
             entries.append((g.video_start_s if n == 0 else c.video_start_s, name))
     if not entries:
         return ""
