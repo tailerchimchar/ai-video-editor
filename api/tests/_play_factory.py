@@ -25,6 +25,7 @@ def make_play(
     offset_correction: float | None = None,
     rec_minus_game: float = 0.0,
     outcome_result: str = "won",
+    numbers: str = "5v4",
 ) -> Play:
     return Play.model_validate(
         {
@@ -44,7 +45,7 @@ def make_play(
                 "offset_correction_s": offset_correction,
             },
             "zone": "mid",
-            "sides": {"allies": ["A"], "enemies": ["B"], "numbers": "5v4"},
+            "sides": {"allies": ["A"], "enemies": ["B"], "numbers": numbers},
             "owner": {
                 "involved": involved,
                 "role": "initiator_kill",

@@ -7,7 +7,7 @@ from _play_factory import make_play
 
 from ai_video_editor.league.play_models import GameModel
 from ai_video_editor.league.riot_timeline import RiotTimeline, TimelineEvent
-from ai_video_editor.story.planner import plan_story_from_plays
+from ai_video_editor.story.planner import EVENT_POST_S, GAME_END_TAIL_S, plan_story_from_plays
 
 
 def _tl(kills: list[float] | None = None, end: float | None = 2000.0) -> RiotTimeline:
@@ -99,7 +99,9 @@ def test_titles_are_play_text_and_cards_false():
 def test_banner_offset_correction_shifts_kill_times():
     g = _game(make_play("a", approach=100, outcome=120, offset_correction=1.5))
     plan = _plan(g, _tl([105.0, 119.0]))
-    assert plan.chapters[0].kill_times_s == [106.5]  # 119 + 1.5 falls past the outcome
+    # 119 + 1.5 lands 0.5 s past the outcome: pulled in, with EVENT_POST_S after it.
+    assert plan.chapters[0].kill_times_s == [106.5, 120.5]
+    assert plan.chapters[0].end_s == 120.5 + EVENT_POST_S
 
 
 def test_chapters_15s_apart_never_repeat_footage():
@@ -246,13 +248,13 @@ def test_hud_offset_ignores_offset_correction():
 def test_non_hud_offset_still_applies_correction():
     g = _game(make_play("a", approach=100, outcome=120, offset_correction=1.5))
     tl = _tl_events([_ev("kill", 105.0), _ev("kill", 119.0)], source="audio")
-    assert _plan(g, tl).chapters[0].kill_times_s == [106.5]
+    assert _plan(g, tl).chapters[0].kill_times_s == [106.5, 120.5]
 
 
 def test_death_times_filled_like_kill_times():
     g = _game(make_play("a", approach=100, outcome=120, offset_correction=1.5))
     tl = _tl_events([_ev("death", 110.0), _ev("death", 119.0), _ev("death", 300.0)])
-    assert _plan(g, tl).chapters[0].death_times_s == [111.5]
+    assert _plan(g, tl).chapters[0].death_times_s == [111.5, 120.5]
 
 
 def test_death_times_hud_ignores_correction():
@@ -289,7 +291,7 @@ def _no_late_lead(monkeypatch):
     monkeypatch.setattr(settings, "story_late_lead_in_s", 0.0)
 
 
-def _zeri(outcome="won", approach=2042.0, end=2068.0, **ev_kw):
+def _zeri(outcome="won", approach=2042.0, end=2068.0, numbers="4v5", **ev_kw):
     play = make_play(
         "p43",
         type="closeout",
@@ -300,6 +302,7 @@ def _zeri(outcome="won", approach=2042.0, end=2068.0, **ev_kw):
         last_kill=2084.0,
         rec_minus_game=-17.0,
         outcome_result=outcome,
+        numbers=numbers,
     )
     events = [_ev("ally_death", 2012.3), _ev("kill", 2047.0), _ev("kill", 2067.0)]
     events += ev_kw.get("extra", [])
@@ -343,7 +346,7 @@ def test_outnumbered_picks_earliest_ally_death():
 
 
 def test_outnumbered_applies_to_fight_chapter_and_clamps_at_zero():
-    play = make_play("f", approach=20, outcome=60, first_kill=40, last_kill=55)
+    play = make_play("f", approach=20, outcome=60, first_kill=40, last_kill=55, numbers="4v5")
     tl = _tl_events([_ev("ally_death", 1.0), _ev("kill", 40.0)])
     assert _plan(_game(play), tl).chapters[0].start_s == 0.0
 
@@ -360,3 +363,37 @@ def test_outnumbered_start_after_previous_chapter():
     plan = _plan(_game(prev, g.plays[0]), tl)
     assert [c.play_id for c in plan.chapters] == ["a", "p43"]
     assert plan.chapters[1].start_s == 2030
+
+
+def test_outnumbered_needs_fewer_allies_than_enemies():
+    # A won 2v1 is not a comeback: an earlier ally death elsewhere doesn't pull it back.
+    g, tl = _zeri(numbers="2v1")
+    assert _plan(g, tl).chapters[0].start_s == 2042.0
+
+
+def test_outnumbered_even_numbers_unchanged():
+    g, tl = _zeri(numbers="4v4")
+    assert _plan(g, tl).chapters[0].start_s == 2042.0
+
+
+def test_kill_on_window_end_keeps_post_buffer():
+    play = make_play("k", approach=100, outcome=120, first_kill=110, last_kill=120)
+    tl = _tl_events([_ev("kill", 120.0)])
+    c = _plan(_game(play), tl).chapters[0]
+    assert c.kill_times_s == [120.0]
+    assert c.end_s == 120.0 + EVENT_POST_S
+
+
+def test_kill_just_past_window_end_is_pulled_in():
+    play = make_play("k", approach=100, outcome=120, first_kill=110, last_kill=120)
+    tl = _tl_events([_ev("death", 121.5)])
+    c = _plan(_game(play), tl).chapters[0]
+    assert c.death_times_s == [121.5]
+    assert c.end_s == 121.5 + EVENT_POST_S
+
+
+def test_post_buffer_never_past_game_end():
+    play = make_play("k", type="closeout", approach=100, outcome=120, first_kill=110, last_kill=120)
+    tl = _tl_events([_ev("kill", 120.0)], end=120.5)
+    c = _plan(_game(play), tl).chapters[0]
+    assert c.end_s == 120.5 + GAME_END_TAIL_S

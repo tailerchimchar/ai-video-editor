@@ -55,6 +55,10 @@ GAME_END_TAIL_S = 1.0
 OUTNUMBERED_LOOKBACK_S = 60.0
 ALLY_DEATH_LEAD_S = 3.0
 _ENEMY_DEATH_KINDS = ("kill", "assist", "enemy_death")
+_NUMBERS = re.compile(r"^\s*(\d+)\s*v\s*(\d+)\s*$")
+# Every owner kill/death in a chapter keeps this much footage after it (kill
+# feed pop, the sound's tail); a window ending on or just after one grows to it.
+EVENT_POST_S = 2.0
 CLOSE_TITLE = "The close"
 _PROTECTED = ("lane", "close")
 _KIND_RANK = {"close": 3, "lane": 2, "fight": 1, "commentary": 0}
@@ -405,7 +409,7 @@ def _outnumbered_start(
     """Start of a won fight / close entered a player down: the earliest ally
     death within OUTNUMBERED_LOOKBACK_S before `start` with no enemy death
     between it and `start`, less ALLY_DEATH_LEAD_S. None when it does not apply."""
-    if kind == "lane" or p.result.outcome != "won":
+    if kind == "lane" or p.result.outcome != "won" or not _outnumbered(p.sides.numbers):
         return None
     timed = [(e.t_rec_s + shift, e.kind) for e in tl.events if e.t_rec_s is not None]
     enemy = [t for t, k in timed if k in _ENEMY_DEATH_KINDS]
@@ -417,6 +421,12 @@ def _outnumbered_start(
         and not any(t < x < start for x in enemy)
     ]
     return min(ally) - ALLY_DEATH_LEAD_S if ally else None
+
+
+def _outnumbered(numbers: str) -> bool:
+    """True for "4v5"-style Riot side counts where the owner's side is smaller."""
+    m = _NUMBERS.match(numbers or "")
+    return bool(m) and int(m.group(1)) < int(m.group(2))
 
 
 def _play_chapter(p: Play, timeline: RiotTimeline, lead_in_s: float = 0.0) -> Chapter | None:
@@ -441,6 +451,13 @@ def _play_chapter(p: Play, timeline: RiotTimeline, lead_in_s: float = 0.0) -> Ch
     if ally_start is not None:
         start = min(start, ally_start)
     start = max(0.0, start)
+    # An owner kill/death on (or up to EVENT_POST_S past) the window's end keeps
+    # EVENT_POST_S of footage after it.
+    tail = _times_in(timeline, "kill", start, end + EVENT_POST_S, shift) + _times_in(
+        timeline, "death", start, end + EVENT_POST_S, shift
+    )
+    if tail:
+        end = max(end, max(tail) + EVENT_POST_S)
     if timeline.game_end_s is not None:
         end = min(end, timeline.game_end_s + GAME_END_TAIL_S)
     if end <= start:
