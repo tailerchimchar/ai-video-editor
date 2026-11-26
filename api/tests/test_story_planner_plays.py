@@ -157,6 +157,18 @@ def test_early_chapters_first_with_templated_titles():
     assert plan.chapters[2].play_id == "a"
 
 
+def test_late_back_chapters_skip_the_lane_and_title_heavy_trades():
+    # Owner 2026-11-26: a late first back keeps the opening, heavy trades and
+    # the recall lead-up as separate chapters; the quiet lane between is cut.
+    early = [_seg("opening", 30, 130), _seg("heavy_trade", 200, 218), _seg("first_back", 362, 408)]
+    plan = _plan(_game(), early=early)
+    assert [(c.title, c.start_s, c.end_s) for c in plan.chapters if c.kind == "early"] == [
+        ("The opening", 30, 130),
+        ("Heavy trade", 200, 218),
+        ("First back", 362, 408),
+    ]
+
+
 def test_early_gaps_under_4s_merge():
     plan = _plan(_game(), early=[_seg("opening", 30, 100), _seg("level3_trade", 102, 130)])
     assert [(c.start_s, c.end_s) for c in plan.chapters] == [(30, 130)]

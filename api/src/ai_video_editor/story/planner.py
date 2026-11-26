@@ -386,6 +386,7 @@ _EARLY_TITLES = {
     "level3_trade": "Level 3 trade",
     "jungle_move": "Jungle move",
     "low_hp": "Close call",
+    "heavy_trade": "Heavy trade",
     "give_recall": "Giving up a recall",
     "first_back": "First back",
 }
