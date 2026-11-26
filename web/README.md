@@ -92,6 +92,8 @@ CORS to think about.
     descriptive journal + per-version revert
   - [design-system.md](docs/features/design-system.md) — fonts,
     colour tokens, motion, the "refined cinematic minimalism" brief
+  - [narration.md](docs/features/narration.md) — record voice /
+    camera takes over a video at `/narrate/:kind/:key`, export
 
 ## Layout
 
