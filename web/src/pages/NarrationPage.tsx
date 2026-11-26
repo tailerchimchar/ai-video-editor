@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { narratedVideoUrl, takeMediaUrl } from "@/api/narration";
 import { CameraBoxEditor } from "@/components/narration/CameraBoxEditor";
@@ -45,7 +45,16 @@ function NarrationWorkspace({ target }: { target: TargetRef }) {
   const [cameraOn, setCameraOn] = useState(false);
   const [microphoneId, setMicrophoneId] = useState("");
   const [cameraId, setCameraId] = useState("");
-  const media = useMediaStream({ camera: cameraOn, microphoneId, cameraId });
+  // The mic/camera are held only while checking the mic or recording a take,
+  // never just because the page is open.
+  const [checkingMic, setCheckingMic] = useState(false);
+  const [armed, setArmed] = useState(false); // Record pressed, until the take ends
+  const media = useMediaStream({
+    enabled: checkingMic || armed,
+    camera: cameraOn,
+    microphoneId,
+    cameraId,
+  });
   const devices = useMediaDevices(media.stream);
   const level = useAudioLevel(media.stream);
 
@@ -58,6 +67,28 @@ function NarrationWorkspace({ target }: { target: TargetRef }) {
     onTake: (take) => narration.addTake.mutate(take),
   });
   const playTake = useTakePlayback(video);
+
+  // Record = arm the devices, start the take once the stream is live; the
+  // devices are released when the take ends (or permission is refused).
+  const startedRef = useRef(false);
+  const startCapture = capture.start;
+  useEffect(() => {
+    if (!armed) {
+      startedRef.current = false;
+      return;
+    }
+    if (media.error) {
+      setArmed(false);
+      return;
+    }
+    if (media.stream && !startedRef.current) {
+      startedRef.current = true;
+      startCapture();
+    }
+  }, [armed, media.stream, media.error, startCapture]);
+  useEffect(() => {
+    if (startedRef.current && !capture.recording) setArmed(false);
+  }, [capture.recording]);
 
   // Export
   const [jobId, setJobId] = useState<string | null>(null);
@@ -156,8 +187,11 @@ function NarrationWorkspace({ target }: { target: TargetRef }) {
         <aside className="space-y-6 lg:col-span-4">
           <RecordControls
             recording={capture.recording}
-            canRecord={capture.canRecord}
-            onRecord={capture.start}
+            starting={armed && !capture.recording}
+            canRecord={!!video && !armed}
+            onRecord={() => setArmed(true)}
+            checkingMic={checkingMic}
+            onCheckMic={setCheckingMic}
             onStop={capture.stop}
             cameraOn={cameraOn}
             onCameraToggle={setCameraOn}

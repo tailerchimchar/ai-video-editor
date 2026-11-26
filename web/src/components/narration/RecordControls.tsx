@@ -3,7 +3,12 @@ import { cn } from "@/lib/cn";
 
 interface RecordControlsProps {
   recording: boolean;
+  /** Record was pressed; waiting for the mic (and camera) to come on. */
+  starting: boolean;
   canRecord: boolean;
+  /** The mic is held only to show the level meter; off by default. */
+  checkingMic: boolean;
+  onCheckMic: (on: boolean) => void;
   onRecord: () => void;
   onStop: () => void;
 
@@ -27,7 +32,8 @@ interface RecordControlsProps {
 
 /**
  * Record / Stop, the camera toggle, device pickers and the mic level
- * meter. Pure presentation: every action is a callback.
+ * meter. Pure presentation: every action is a callback. The mic is only
+ * on while recording or while "check mic" is ticked.
  */
 export function RecordControls(props: RecordControlsProps) {
   const { recording, canRecord, onRecord, onStop, cameraOn, onCameraToggle } = props;
@@ -40,8 +46,12 @@ export function RecordControls(props: RecordControlsProps) {
             ■ Stop
           </Button>
         ) : (
-          <Button variant="primary" onClick={onRecord} disabled={!canRecord || props.uploading}>
-            ● Record
+          <Button
+            variant="primary"
+            onClick={onRecord}
+            disabled={!canRecord || props.starting || props.uploading}
+          >
+            {props.starting ? "starting mic…" : "● Record"}
           </Button>
         )}
 
@@ -53,6 +63,16 @@ export function RecordControls(props: RecordControlsProps) {
             onChange={(e) => onCameraToggle(e.target.checked)}
           />
           record camera
+        </label>
+
+        <label className="flex items-center gap-2 font-mono text-xs text-text-muted">
+          <input
+            type="checkbox"
+            checked={props.checkingMic}
+            disabled={recording}
+            onChange={(e) => props.onCheckMic(e.target.checked)}
+          />
+          check mic
         </label>
 
         {recording && <span className="font-mono text-xs text-danger">recording…</span>}
@@ -82,8 +102,12 @@ export function RecordControls(props: RecordControlsProps) {
         <p className="font-mono text-xs text-danger">
           mic/camera unavailable · {props.streamError}
         </p>
-      ) : (
+      ) : props.checkingMic || recording ? (
         <LevelMeter level={props.level} />
+      ) : (
+        <p className="font-mono text-xs text-text-dim">
+          The mic is off until you press Record (tick "check mic" to test your level).
+        </p>
       )}
 
       {props.uploadError && (

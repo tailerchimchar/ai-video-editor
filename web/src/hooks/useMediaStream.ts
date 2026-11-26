@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
 
 export interface MediaStreamOptions {
+  /** Hold the devices at all. Off = no stream, so the browser shows no
+   * "recording" indicator and Windows doesn't duck other audio. */
+  enabled: boolean;
   /** Include the camera. Off = microphone only. */
   camera: boolean;
   /** Empty / undefined = the browser's default device. */
@@ -17,9 +20,11 @@ export interface MediaStreamState {
  * Owns one live `getUserMedia` stream: the microphone (echo
  * cancellation + noise suppression on) plus the camera when asked.
  * Re-acquires when the options change and stops every track on
- * change/unmount so the camera light goes off.
+ * change/unmount/disable so the mic is released and the camera light goes
+ * off. Nothing is acquired while `enabled` is false.
  */
 export function useMediaStream({
+  enabled,
   camera,
   microphoneId,
   cameraId,
@@ -27,6 +32,10 @@ export function useMediaStream({
   const [state, setState] = useState<MediaStreamState>({ stream: null, error: null });
 
   useEffect(() => {
+    if (!enabled) {
+      setState({ stream: null, error: null });
+      return;
+    }
     if (!navigator.mediaDevices?.getUserMedia) {
       setState({ stream: null, error: "This browser cannot record (no getUserMedia)." });
       return;
@@ -66,7 +75,7 @@ export function useMediaStream({
       cancelled = true;
       if (acquired) stopTracks(acquired);
     };
-  }, [camera, microphoneId, cameraId]);
+  }, [enabled, camera, microphoneId, cameraId]);
 
   return state;
 }
