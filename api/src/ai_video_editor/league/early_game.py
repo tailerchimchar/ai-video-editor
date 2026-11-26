@@ -30,7 +30,14 @@ SAME_TRIP_S = 20.0
 # 0:30-0:40 and 0:50 only caught its end, so an early brawl opens at 0:20 to
 # show the approach and the whole fight.
 BRAWL_START_S = 20.0
-DEFAULT_START_S = 60.0
+# Owner 2026-11-26: start at the bot-bush trade / approach / ward fight when
+# one happens, at 0:50 when nothing does. Riot data cannot prove "nothing
+# happened" (no damage events, positions once a minute), and when unsure the
+# owner chose "never miss a fight": the opening starts at BRAWL_START_S.
+# QUIET_START_S is for a future vision check that confirms a quiet opening.
+QUIET_START_S = 50.0
+DEFAULT_START_S = BRAWL_START_S
+WARD_FIGHT_CHECK_S = 75.0
 BRAWL_CHECK_S = 65.0
 OPENING_END_S = 120.0
 OPENING_END_CAP_S = 150.0
@@ -110,6 +117,9 @@ def _brawl_before_1_05(timeline: RiotTimeline, raw: dict, *, team_game: bool) ->
     (Yunara, Kai'sa), so the bush alone does not count there."""
     if any(e.kind in FIGHT_KINDS and e.t_game_s < BRAWL_CHECK_S for e in timeline.events):
         return "champion kill before 1:05"
+    ward = _first_ward_kill_s(raw)
+    if ward is not None and ward < WARD_FIGHT_CHECK_S:
+        return f"ward kill at {_mmss(ward)}"
     if not team_game:
         return None
     owner = timeline.owner_pid
@@ -126,6 +136,15 @@ def _brawl_before_1_05(timeline: RiotTimeline, raw: dict, *, team_game: bool) ->
     return None
 
 
+def _first_ward_kill_s(raw: dict) -> float | None:
+    """Game second of the first WARD_KILL (a level-1 ward fight), or None."""
+    for fr in _frames(raw):
+        for ev in fr.get("events", []):
+            if ev.get("type") == "WARD_KILL":
+                return float(ev["timestamp"]) / 1000.0
+    return None
+
+
 def _opening(timeline: RiotTimeline, raw: dict, *, team_game: bool) -> EarlySegment:
     why = _brawl_before_1_05(timeline, raw, team_game=team_game)
     start = BRAWL_START_S if why else DEFAULT_START_S
@@ -134,7 +153,7 @@ def _opening(timeline: RiotTimeline, raw: dict, *, team_game: bool) -> EarlySegm
     if lvl2 is not None:
         end = min(max(end, lvl2 + LEVEL2_PAD_S), OPENING_END_CAP_S)
     reason = f"opening from {int(start) // 60}:{int(start) % 60:02d}"
-    reason += f" ({why})" if why else " (no early brawl)"
+    reason += f" ({why})" if why else " (no Riot evidence either way; never miss a level-1 trade)"
     return _seg("opening", timeline, start, end, reason)
 
 

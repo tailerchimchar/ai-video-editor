@@ -124,7 +124,10 @@ def test_no_early_events_is_opening_plus_first_back_only():
     # back (wave crash + recall), so the back is no longer a separate window.
     assert kinds(segs) == ["opening"]
     (op,) = segs
-    assert (op.start_s, op.end_s) == (160.0, 308.0)  # 1:00 .. 200+8 + offset
+    # No Riot evidence either way: open at 0:20 so a level-1 trade is never
+    # missed (owner 2026-11-26, "never miss a fight").
+    assert (op.start_s, op.end_s) == (120.0, 308.0)  # 0:20 .. 200+8 + offset
+    assert "no Riot evidence" in op.reason
     assert op.confirmed is False
 
 
@@ -148,13 +151,16 @@ def test_opening_starts_at_0_20_when_both_laners_in_bush_in_a_team_game():
     assert early_segments(tl, r, team_game=True)[0].start_s == 120.0  # 0:20 + offset 100
 
 
-def test_bush_standoff_alone_is_not_a_brawl_in_solo_queue():
-    # Owner 2026-11-26: solo-queue laners sit in the bush without fighting.
+def test_bush_standoff_alone_is_not_evidence_in_solo_queue():
+    # Owner 2026-11-26: solo-queue laners can sit in the bush without
+    # fighting, so the standoff is not evidence; the start is still 0:20
+    # because Riot data cannot prove nothing happened.
     frames = quiet()
     frames[1] = frame(1, pos=BUSH, enemy_pos=BUSH)
     tl, r = build(frames)
-    assert early_segments(tl, r, team_game=False)[0].start_s == 160.0  # default 1:00
-    assert early_segments(tl, r)[0].start_s == 160.0  # team_game defaults to False
+    op = early_segments(tl, r, team_game=False)[0]
+    assert op.start_s == 120.0 and "no Riot evidence" in op.reason
+    assert "bush" in early_segments(tl, r, team_game=True)[0].reason
 
 
 def test_kill_before_1_05_pulls_start_in_solo_queue_too():
@@ -168,14 +174,32 @@ def test_opening_one_laner_in_bush_is_not_enough():
     frames = quiet()
     frames[1] = frame(1, pos=BUSH)
     tl, r = build(frames)
-    assert early_segments(tl, r)[0].start_s == 160.0
+    op = early_segments(tl, r, team_game=True)[0]
+    assert op.start_s == 120.0 and "no Riot evidence" in op.reason
 
 
 def test_opening_kill_after_1_05_does_not_pull_start_earlier():
     frames = quiet()
     frames[1]["events"] = [kill(70.0)]
     tl, r = build(frames)
-    assert early_segments(tl, r)[0].start_s == 160.0
+    op = early_segments(tl, r)[0]
+    assert op.start_s == 120.0 and "no Riot evidence" in op.reason
+
+
+def test_ward_kill_before_1_15_is_level1_evidence():
+    # Owner 2026-11-26: a fight over a ward in the bot bush starts the video.
+    frames = quiet()
+    frames[1]["events"] = [{"type": "WARD_KILL", "timestamp": 68_000, "killerId": 1}]
+    tl, r = build(frames)
+    op = early_segments(tl, r)[0]
+    assert op.start_s == 120.0 and "ward kill at 1:08" in op.reason
+
+
+def test_ward_kill_after_1_15_is_not_level1_evidence():
+    frames = quiet()
+    frames[1]["events"] = [{"type": "WARD_KILL", "timestamp": 80_000, "killerId": 1}]
+    tl, r = build(frames)
+    assert "no Riot evidence" in early_segments(tl, r)[0].reason
 
 
 def test_opening_end_extends_to_level2_plus_10_capped_at_2_30():
