@@ -296,3 +296,91 @@ def test_narration_export_stale_returns_the_409_text():
     with _patch_client(handler):
         out = server.narration_export("story", "r1")
     assert out["status"] == "failed" and "video changed" in out["error"]
+
+
+def test_story_suggestion_tools_are_registered():
+    import asyncio
+
+    names = {t.name for t in asyncio.run(server.mcp.list_tools())}
+    assert {
+        "story_suggest_edits",
+        "story_list_suggestions",
+        "story_accept_suggestion",
+        "story_apply_suggestions",
+    } <= names
+
+
+def test_story_suggest_edits_polls_the_job_then_lists():
+    seen: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path))
+        if request.method == "POST":
+            return httpx.Response(200, json={"job_id": "j1"})
+        if request.url.path == "/api/v1/jobs/j1":
+            return httpx.Response(200, json={"status": "completed"})
+        return httpx.Response(200, json={"status": "ready", "items": [{"id": "s1"}]})
+
+    with _patch_client(handler):
+        out = server.story_suggest_edits("r1")
+    assert seen == [
+        ("POST", "/api/v1/story/r1/suggestions"),
+        ("GET", "/api/v1/jobs/j1"),
+        ("GET", "/api/v1/story/r1/suggestions"),
+    ]
+    assert out["items"] == [{"id": "s1"}]
+
+
+def test_story_suggest_edits_returns_a_failed_job():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(200, json={"job_id": "j1"})
+        return httpx.Response(200, json={"status": "failed", "error": "no timeline"})
+
+    with _patch_client(handler):
+        out = server.story_suggest_edits("r1")
+    assert out["status"] == "failed" and out["error"] == "no timeline"
+
+
+def test_story_list_and_accept_suggestion():
+    import json as _json
+
+    seen: list = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = _json.loads(request.content) if request.content else None
+        seen.append((request.method, request.url.path, body))
+        return httpx.Response(200, json={"status": "ready", "items": []})
+
+    with _patch_client(handler):
+        server.story_list_suggestions("r1")
+        server.story_accept_suggestion("r1", "s-c1-slowmo", True)
+        server.story_accept_suggestion("r1", "s-c1-slowmo", None)
+
+    assert seen == [
+        ("GET", "/api/v1/story/r1/suggestions", None),
+        ("PUT", "/api/v1/story/r1/suggestions/s-c1-slowmo", {"accepted": True}),
+        ("PUT", "/api/v1/story/r1/suggestions/s-c1-slowmo", {"accepted": None}),
+    ]
+
+
+def test_story_apply_suggestions_polls_the_render_job():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            assert request.url.path == "/api/v1/story/r1/suggestions/apply"
+            return httpx.Response(200, json={"job_id": "j2"})
+        assert request.url.path == "/api/v1/jobs/j2"
+        return httpx.Response(200, json={"status": "completed", "output_path": "story.mp4"})
+
+    with _patch_client(handler):
+        out = server.story_apply_suggestions("r1")
+    assert out["output_path"] == "story.mp4"
+
+
+def test_story_apply_suggestions_error_text():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"detail": "no suggestions"})
+
+    with _patch_client(handler):
+        out = server.story_apply_suggestions("r1")
+    assert out["status"] == "failed" and "no suggestions" in out["error"]

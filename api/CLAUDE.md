@@ -260,6 +260,7 @@ free with the owner's apps open) and log a memory audit under
    gaming/viewer/editing experts in parallel → mentor chairs →
    `clips.json` + `panel-decision.md`.
 6. `story-render --asset <id> --round <round> --plays`.
+6a. Optional, before narrating: `story_suggest_edits` → owner ticks → `story_apply_suggestions` (Jev, no Anthropic; `docs/story-suggestions.md`).
 6b. Narrate in the web page (`/narrate/story/<round>`); export → `narrated.mp4`.
 7. Owner watches the story; fixes are recorded with `mentor_record_correction`.
 8. Drive: `grokbot-publish-round <round> --game league --asset-id <id>

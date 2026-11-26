@@ -282,6 +282,15 @@ STRUCTURE = (
         "narration over a finished video (takes, camera box, export narrated.mp4)",
         ("narration_status", "narration_set_camera", "narration_remove_take", "narration_export"),
     ),
+    ToolGroup(
+        "story video: editor suggestions (Jev panel) → tick → apply",
+        (
+            "story_suggest_edits",
+            "story_list_suggestions",
+            "story_accept_suggestion",
+            "story_apply_suggestions",
+        ),
+    ),
 )
 
 REVIEW = (
