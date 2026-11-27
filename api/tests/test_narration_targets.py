@@ -130,3 +130,27 @@ def test_story_list_keys_no_story_folder(ws):
 def test_registered_targets_lists_registry(clean_registry):
     register_target(FakeTarget())
     assert "fake" in [t.kind for t in targets.registered_targets()]
+
+
+def test_joined_target_keys_paths_and_backups(ws):
+    from ai_video_editor.narration.targets import JoinedStoryTarget
+
+    story = ws / "story"
+    story.mkdir()
+    for name in [
+        "joined_2026-11-26_xayah-kaisa-yunara.mp4",
+        "joined_2026-11-26_xayah-kaisa-yunara.v1.mp4",  # backup: not a key
+        "joined_2026-11-20_jhin-zeri.mp4",
+    ]:
+        (story / name).write_bytes(b"x")
+    t = get_target("joined")
+    assert isinstance(t, JoinedStoryTarget)
+    key = "joined_2026-11-26_xayah-kaisa-yunara"
+    assert t.list_keys() == [key, "joined_2026-11-20_jhin-zeri"]
+    assert t.video_path(key) == story / f"{key}.mp4"
+    assert t.work_dir(key) == story / "_joined" / key
+    assert t.video_url(key) == f"/workspace/story/{key}.mp4"
+    with pytest.raises(UnknownTargetError):
+        t.video_path("joined_missing")
+    with pytest.raises(UnknownTargetError):
+        t.video_path("../etc")

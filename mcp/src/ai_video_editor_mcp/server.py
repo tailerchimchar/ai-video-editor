@@ -2389,6 +2389,49 @@ def story_render(round: str, asset_id: str, plays: bool = True) -> dict:
 
 
 @mcp.tool()
+def story_join(
+    rounds: list[str],
+    hook: list[str] | None = None,
+    hook_title: str | None = None,
+    outro: bool = False,
+    music_start_s: float = 0.0,
+    subscribe_after: int = 1,
+    title: str | None = None,
+) -> dict:
+    """Join several rendered stories (round folder names, in game order) into
+    one video: each game swipes in right-to-left with a whoosh, and the like &
+    subscribe overlay plays early in the game after `subscribe_after` (0 =
+    none). Same as the `story-join` CLI; the output is
+    WORKSPACE/story/joined_<date>_<champs>.mp4 plus .join.json / .chapters.txt.
+
+    Cold open: `hook` lists clips as "GAME:CHAPTER" or "GAME:CHAPTER:TEXT"
+    (1-based game in `rounds`, 1-based chapter of that story). Each clip is
+    cut just before the play's outcome, freezes, blurs, and pops TEXT
+    (default "???"). `hook_title` pops over the first clip, e.g. "Want to
+    know the trick to laning?". `outro=True` adds an end card (thanks for
+    watching + subscribe) over WORKSPACE/music/outro.* when the owner put
+    one there (`music_start_s` skips into it); silent otherwise.
+
+    Never mix solo-queue and team (ACL) games in one join. Heavy ffmpeg
+    work: one at a time. Job-based; waits for completion.
+    """
+    body = {
+        "rounds": rounds,
+        "hook": hook or [],
+        "hook_title": hook_title,
+        "outro": outro,
+        "music_start_s": music_start_s,
+        "subscribe_after": subscribe_after,
+        "title": title,
+    }
+    with _client() as c:
+        r = c.post(f"{API}/story/join", json=body)
+        if r.status_code != 200:
+            return {"status": "failed", "error": r.text}
+        return _wait_for_job(c, r.json()["job_id"], timeout_s=3600)
+
+
+@mcp.tool()
 def story_suggest_edits(round: str) -> dict:
     """Get editor suggestions for a rendered story: 3-6 effects
     (letterbox_focus, slowmo, zoom) on its best moments. The gaming, viewer

@@ -8,6 +8,7 @@
     POST   /story/{round}/suggestions       background job `editor_suggest` (Jev panel)
     PUT    /story/{round}/suggestions/{id}  {accepted: true|false|null}
     POST   /story/{round}/suggestions/apply accepted -> effect requests, then a story_render job
+    POST   /story/join                      background job: same path as `story-join`
 
 Requests live in `WORKSPACE/story/<round>/requests.json` (story/requests.py).
 The render job emits `job.done` through `finish_job` like every job.
@@ -29,7 +30,9 @@ from ..config import settings
 from ..database import get_db
 from ..jobs import finish_job
 from ..models import RankResponse
+from ..story.bookends import parse_pick
 from ..story.cli import render_round
+from ..story.join import default_out, join_stories
 from ..story.requests import OwnerRequest, StoryRequests, load_requests, save_requests
 from ..story.suggest.apply import apply_accepted
 from ..story.suggest.models import SuggestionSet
@@ -151,6 +154,58 @@ async def render(round: str, body: RenderBody) -> RankResponse:
     """Re-render the round's story with its current requests. Job-based."""
     _story_dir(round)
     return await _start_render(body.asset_id, round, body.plays)
+
+
+class JoinBody(BaseModel):
+    rounds: list[str]
+    title: str | None = None
+    subscribe_after: int | None = 1
+    hook: list[str] = []  # "GAME:CHAPTER[:TEXT]", 1-based
+    hook_title: str | None = None
+    outro: bool = False
+    music_start_s: float = 0.0
+
+
+async def _run_join_job(job_id: str, body: JoinBody) -> None:
+    db = await get_db()
+    try:
+        await db.execute("UPDATE jobs SET status = 'running' WHERE id = ?", (job_id,))
+        await db.commit()
+        out = await asyncio.to_thread(
+            join_stories,
+            body.rounds,
+            default_out(body.rounds),
+            subscribe_after=body.subscribe_after or None,
+            title=body.title,
+            hook=[parse_pick(h) for h in body.hook] or None,
+            hook_title=body.hook_title,
+            outro=body.outro,
+            music_start_s=body.music_start_s,
+        )
+        await finish_job(db, job_id, output_path=str(out), job_type="story_join")
+    except Exception as exc:
+        with contextlib.suppress(Exception):
+            await finish_job(db, job_id, error=str(exc)[:1500], job_type="story_join")
+    finally:
+        await db.close()
+
+
+@router.post("/join", response_model=RankResponse)
+async def join(body: JoinBody) -> RankResponse:
+    """Join rendered stories into one video (swipes, optional hook / outro). Job-based."""
+    if len(body.rounds) < 2:
+        raise HTTPException(422, "need at least 2 rounds")
+    for r in body.rounds:
+        if not (_story_dir(r) / "story.mp4").is_file():
+            raise HTTPException(409, f"Round {r} has no rendered story yet")
+    try:
+        for h in body.hook:
+            parse_pick(h)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    job_id = await _insert_job("story_join")
+    _track(_run_join_job(job_id, body))
+    return RankResponse(job_id=job_id)
 
 
 # ---- editor suggestions (story/suggest, docs/story-suggestions.md) -----------

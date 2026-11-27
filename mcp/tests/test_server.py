@@ -273,6 +273,25 @@ def test_story_render_polls_the_job():
     assert out["output_path"] == "story.mp4"
 
 
+def test_story_join_posts_hook_and_outro():
+    import json as _json
+
+    bodies: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            assert request.url.path == "/api/v1/story/join"
+            bodies.append(_json.loads(request.content))
+            return httpx.Response(200, json={"job_id": "j1"})
+        return httpx.Response(200, json={"status": "completed", "output_path": "j.mp4"})
+
+    with _patch_client(handler):
+        out = server.story_join(["a", "b"], hook=["2:2:2v3?"], hook_title="Hi", outro=True)
+    assert out["output_path"] == "j.mp4"
+    assert bodies[0]["hook"] == ["2:2:2v3?"] and bodies[0]["outro"] is True
+    assert bodies[0]["rounds"] == ["a", "b"] and bodies[0]["subscribe_after"] == 1
+
+
 def test_narration_status_and_remove_take():
     seen: list[tuple[str, str]] = []
 

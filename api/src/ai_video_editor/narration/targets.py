@@ -122,10 +122,48 @@ class StoryRoundTarget:
         return sorted(keys, reverse=True)
 
 
+class JoinedStoryTarget:
+    """A story-join video: `WORKSPACE/story/<key>.mp4`, key e.g.
+    `joined_2026-11-26_xayah-kaisa-yunara`. Takes live in
+    `WORKSPACE/story/_joined/<key>/` (story/join.py `parts_dir`, next to the
+    hook / outro parts). Backups such as `<key>.v1.mp4` are not keys."""
+
+    kind: ClassVar[str] = "joined"
+
+    def _root(self) -> Path:
+        return Path(settings.workspace_dir) / "story"
+
+    def work_dir(self, key: str) -> Path:
+        return self._root() / "_joined" / _checked_key(key)
+
+    def video_path(self, key: str) -> Path:
+        path = self._root() / f"{_checked_key(key)}.mp4"
+        if not path.is_file():
+            raise UnknownTargetError(f"no joined video {key!r}")
+        return path
+
+    def game(self, key: str) -> str:
+        return "league"
+
+    def video_url(self, key: str) -> str:
+        return f"/workspace/story/{_checked_key(key)}.mp4"
+
+    def list_keys(self) -> list[str]:
+        root = self._root()
+        if not root.is_dir():
+            return []
+        keys = [
+            p.stem
+            for p in root.glob("joined_*.mp4")
+            if p.is_file() and re.fullmatch(KEY_PATTERN, p.stem)
+        ]
+        return sorted(keys, reverse=True)
+
+
 def default_targets() -> list[NarrationTarget]:
     """The targets shipped with the app; add new kinds here (or register them
     from your own module)."""
-    return [StoryRoundTarget()]
+    return [StoryRoundTarget(), JoinedStoryTarget()]
 
 
 for _target in default_targets():

@@ -4,8 +4,13 @@ Talk (and optionally show your camera) over a finished video, then export
 `narrated.mp4` with your voice mixed in and the game audio ducked under it.
 Spec: [`docs/specs/spec-narration.md`](../../../docs/specs/spec-narration.md).
 
-First kind is `story`, key = the round folder, e.g.
-`/narrate/story/2026-11-23_2056_zeri_8-7-12`.
+Kinds:
+
+- `story`, key = the round folder, e.g.
+  `/narrate/story/2026-11-23_2056_zeri_8-7-12`.
+- `joined`, key = the story-join file name without `.mp4`, e.g.
+  `/narrate/joined/joined_2026-11-26_xayah-kaisa-yunara`. Takes live in
+  `WORKSPACE/story/_joined/<key>/narration/`.
 
 ## How to use
 

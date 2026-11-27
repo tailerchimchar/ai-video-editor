@@ -138,3 +138,41 @@ def test_render_failure_marks_job_failed(client, rnd, monkeypatch):
 
 def test_render_unknown_round_404(client, rnd):
     assert client.post("/api/v1/story/nope/render", json={"asset_id": "a1"}).status_code == 404
+
+
+def test_join_validates_rounds_and_hook_picks(client, sandbox):
+    story = Path(settings.workspace_dir) / "story"
+    for r in ("a", "b"):
+        (story / r).mkdir(parents=True)
+    (story / "a" / "story.mp4").write_bytes(b"x")
+    assert client.post("/api/v1/story/join", json={"rounds": ["a"]}).status_code == 422
+    assert client.post("/api/v1/story/join", json={"rounds": ["a", "b"]}).status_code == 409
+    (story / "b" / "story.mp4").write_bytes(b"x")
+    bad = client.post("/api/v1/story/join", json={"rounds": ["a", "b"], "hook": ["x"]})
+    assert bad.status_code == 422
+
+
+def test_join_runs_the_job(client, sandbox, monkeypatch):
+    story = Path(settings.workspace_dir) / "story"
+    for r in ("a", "b"):
+        (story / r).mkdir(parents=True)
+        (story / r / "story.mp4").write_bytes(b"x")
+    seen: dict = {}
+
+    def fake_join(rounds, out, **kw):
+        seen.update(rounds=rounds, **kw)
+        return out
+
+    monkeypatch.setattr(story_router, "join_stories", fake_join)
+    body = {"rounds": ["a", "b"], "hook": ["2:1:wow"], "hook_title": "Hi", "outro": True}
+    r = client.post("/api/v1/story/join", json=body)
+    assert r.status_code == 200
+    job_id = r.json()["job_id"]
+    for _ in range(50):
+        job = client.get(f"/api/v1/jobs/{job_id}").json()
+        if job["status"] in ("completed", "failed"):
+            break
+        time.sleep(0.05)
+    assert job["status"] == "completed", job
+    assert seen["rounds"] == ["a", "b"] and seen["outro"] is True
+    assert seen["hook"][0].text == "wow" and seen["hook_title"] == "Hi"

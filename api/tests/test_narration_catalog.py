@@ -28,6 +28,13 @@ def test_date_from_key():
     assert catalog.date_from_key(KEY) == "2026-11-20"
     assert catalog.date_from_key("2026-13-45_x") is None
     assert catalog.date_from_key("r1") is None
+    assert catalog.date_from_key("joined_2026-11-26_xayah-kaisa") == "2026-11-26"
+
+
+def test_title_from_joined_key():
+    assert catalog.title_from_key("joined_2026-11-26_xayah-kaisa-yunara") == (
+        "Xayah · Kaisa · Yunara"
+    )
 
 
 def test_suggestion_status(tmp_path):

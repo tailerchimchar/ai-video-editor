@@ -267,6 +267,12 @@ free with the owner's apps open) and log a memory audit under
    (`knowledge/rules/Skip quiet laning, keep heavy trades.md`).
 6a. Optional, before narrating: `story_suggest_edits` → owner ticks → `story_apply_suggestions` (Jev, no Anthropic; `docs/story-suggestions.md`).
 6b. Narrate in the web page (`/narrate/story/<round>`); export → `narrated.mp4`.
+6c. Several games of one series → `story-join <rounds…> [--hook G:C[:TEXT]…]
+    [--hook-title …] [--outro]` (MCP `story_join`): swipes + whoosh, subscribe
+    overlay, cold-open hook, end card. Rendered in segments (≤2 videos per
+    ffmpeg pass; the one-pass xfade chain hit 3.1 GB). Narrate it at
+    `/narrate/joined/<joined file stem>`. Trim Outplayed's "Alt Tabbed" screen
+    off story endings first (a `trim` request with `end`).
 7. Owner watches the story; fixes are recorded with `mentor_record_correction`.
 8. Drive: `grokbot-publish-round <round> --game league --asset-id <id>
    --clips-dir <highlights session>` (clips + digest v3) and the story

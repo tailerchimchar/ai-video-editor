@@ -23,7 +23,9 @@ SuggestionStatus = Literal["none", "pending", "ready", "applied"]
 _STATUSES = ("pending", "ready", "applied")
 
 _TITLE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{4}_([^_]+)_(\d+)-(\d+)-(\d+)$")
-_DATE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})(?:_|$)")
+_DATE_RE = re.compile(r"^(?:joined_)?(\d{4}-\d{2}-\d{2})(?:_|$)")
+# story-join keys: joined_<date>_<champ>-<champ>[-...]
+_JOINED_RE = re.compile(r"^joined_\d{4}-\d{2}-\d{2}_([a-z0-9-]+)$")
 
 # video path -> (fingerprint, duration_s); ffprobe runs once per file version.
 _DURATIONS: dict[str, tuple[str, float | None]] = {}
@@ -44,7 +46,11 @@ class VideoSummary(BaseModel):
 
 
 def title_from_key(key: str) -> str:
-    """`2026-11-20_2001_jhin_8-2-13` -> "Jhin 8/2/13"; anything else -> the key."""
+    """`2026-11-20_2001_jhin_8-2-13` -> "Jhin 8/2/13";
+    `joined_2026-11-26_xayah-kaisa` -> "Xayah · Kaisa"; anything else -> the key."""
+    j = _JOINED_RE.match(key)
+    if j:
+        return " · ".join(c.capitalize() for c in j.group(1).split("-"))
     m = _TITLE_RE.match(key)
     if not m:
         return key

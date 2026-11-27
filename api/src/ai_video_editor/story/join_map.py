@@ -45,7 +45,7 @@ class JoinGame(BaseModel):
 
 
 class JoinInsert(BaseModel):
-    kind: str  # "subscribe"
+    kind: str  # "subscribe" | "hook" | "outro"
     at_s: float  # in the joined video
     dur_s: float
     asset: str
@@ -56,6 +56,8 @@ class JoinMap(BaseModel):
     title: str
     series: str | None = None
     duration_s: float
+    intro_s: float = 0.0  # the hook before game 1 (game 1 starts here)
+    outro_s: float = 0.0  # the end card after the last game
     games: list[JoinGame]
     inserts: list[JoinInsert] = []
 
@@ -76,6 +78,8 @@ def build_join_map(
     series: str | None = None,
     subscribe: tuple[int, float, Path] | None = None,
     transition_s: float = 0.0,
+    lead_s: float = 0.0,
+    outro: tuple[float, Path] | None = None,
 ) -> JoinMap:
     """`transition_s`: each game after the first starts this long before the
     previous one ends (the swipe overlaps them; owner 2026-11-26 dropped the
@@ -83,9 +87,12 @@ def build_join_map(
     `story_card_s`: a story's per-chapter card length (stories with cards=False
     have none). `offsets_s`: each game's recording offset (game clock =
     recording - offset). `subscribe`: (after game n, 1-based; overlay
-    duration; asset path), placed SUBSCRIBE_LEAD_S into game n+1."""
+    duration; asset path), placed SUBSCRIBE_LEAD_S into game n+1. `lead_s`:
+    where game 1 starts (after the hook; the swipe overlap already taken
+    off). `outro`: (duration, file) of the end card, swiped in after the
+    last game."""
     games: list[JoinGame] = []
-    t = 0.0
+    t = lead_s
     for i, r in enumerate(rounds):
         if i:
             t -= transition_s
@@ -127,11 +134,23 @@ def build_join_map(
             inserts.append(
                 JoinInsert(kind="subscribe", at_s=round(at, 2), dur_s=dur, asset=str(asset))
             )
+    if lead_s > 0:
+        inserts.insert(0, JoinInsert(kind="hook", at_s=0.0, dur_s=round(lead_s, 2), asset=""))
+    outro_s = 0.0
+    if outro is not None:
+        outro_s, outro_file = outro
+        start = t - transition_s
+        inserts.append(
+            JoinInsert(kind="outro", at_s=round(start, 2), dur_s=outro_s, asset=str(outro_file))
+        )
+        t = start + outro_s
     return JoinMap(
         video=str(video),
         title=title,
         series=series,
         duration_s=round(t, 2),
+        intro_s=round(lead_s, 2),
+        outro_s=round(outro_s, 2),
         games=games,
         inserts=inserts,
     )
@@ -170,13 +189,16 @@ def youtube_chapters(jm: JoinMap, *, intro_s: float = 0.0) -> str:
     0:00, every entry at least YOUTUBE_MIN_CHAPTER_S long (shorter ones fold
     into the previous entry)."""
     entries: list[tuple[float, str]] = []
-    if intro_s > 0:
+    if max(intro_s, jm.intro_s) > 0:
         entries.append((0.0, "Intro"))
     for g in jm.games:
         for n, c in enumerate(g.chapters):
             name = chapter_name(c.title)
             name = name if n else f"{g.label}: {name}"
             entries.append((g.video_start_s if n == 0 else c.video_start_s, name))
+    for ins in jm.inserts:
+        if ins.kind == "outro":
+            entries.append((ins.at_s, "Outro"))
     if not entries:
         return ""
     entries[0] = (0.0, entries[0][1])

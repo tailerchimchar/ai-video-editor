@@ -6,7 +6,20 @@ tools/brand/make_whoosh.py). No title cards (owner 2026-11-26). The like &
 subscribe overlay (WORKSPACE/assets/subscribe_animation/subscribe_alpha.mov)
 plays once, bottom centre just above the ability bar, SUBSCRIBE_LEAD_S into
 the game after game `subscribe_after`. The default is 1: the midpoint of a
-2-game video, the 1/3 point of a 3-game one. Everything is one ffmpeg pass.
+2-game video, the 1/3 point of a 3-game one.
+
+Rendering is segmented so no ffmpeg pass holds more than two videos (one pass
+with xfade chained over 6 inputs peaked at 3.1 GB on the 16 GB laptop,
+2026-11-27): each piece's body and each swipe (with SEG_PAD_S either side,
+so the whoosh fits) is encoded on its own, video only; one audio-only pass
+builds the whole soundtrack (crossfades + whooshes); the video segments are
+then concatenated without re-encoding and muxed with that soundtrack. Piece
+lengths are snapped to whole frames so video and audio stay in sync.
+
+Optional bookends (story/bookends.py, owner 2026-11-27): a hook (cold open
+of picked chapters, cut before their outcome, opening line on top) swiped
+into game 1, and an outro end card swiped in after the last game. Their
+parts render to WORKSPACE/story/_joined/<out stem>/ first.
 
 Also writes `<out>.join.json`, the map of the joined video (see join_map.py),
 and `<out>.chapters.txt`, the YouTube description chapters.
@@ -16,12 +29,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
+import shutil
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from ..config import settings
+from . import bookends
+from .bookends import HookClip, HookPick
 from .join_map import SUBSCRIBE_LEAD_S, build_join_map, youtube_chapters
 from .planner import StoryPlan
 from .render import FPS, StoryRenderError, _encode_opts, _run_ffmpeg
@@ -50,6 +69,7 @@ SUBSCRIBE_BOTTOM_FRAC = 0.84
 WHOOSH_ASSET = ("sfx", "whoosh.wav")
 WHOOSH_DEFAULT_PEAK_S = 0.3
 SWIPE_S = 0.5
+SEG_PAD_S = 0.5  # plain footage either side of a swipe inside its segment
 
 
 def round_label(round_name: str) -> str:
@@ -75,6 +95,12 @@ def default_out(rounds: list[str]) -> Path:
         champs.append(mm.group(2) if mm else r)
     name = f"joined_{date}_{'-'.join(champs)}.mp4"
     return Path(settings.workspace_dir) / "story" / name
+
+
+def parts_dir(out: Path) -> Path:
+    """Where a join's hook / outro parts render (also the joined video's
+    narration work dir: the `_` keeps story listings from showing it)."""
+    return Path(settings.workspace_dir) / "story" / "_joined" / Path(out).stem
 
 
 def subscribe_asset() -> Path:
@@ -103,60 +129,104 @@ def swipe_offsets(durations: list[float], swipe_s: float = SWIPE_S) -> list[floa
     return out
 
 
-def join_cmd(
-    stories: list[str],
-    durations: list[float],
+def frames_s(d: float) -> float:
+    """`d` snapped down to whole frames (pieces are cut on the frame grid)."""
+    return math.floor(round(d * FPS, 6)) / FPS
+
+
+@dataclass(frozen=True)
+class Segment:
+    """One separately encoded stretch of the joined video. A body plays
+    piece `piece` from `start_s`; a swipe plays the tail of piece `piece`
+    from `start_s` and slides piece `piece + 1` in after SEG_PAD_S."""
+
+    kind: Literal["body", "swipe"]
+    piece: int
+    start_s: float  # in the piece
+    dur_s: float
+    at_s: float  # in the joined video
+
+    @property
+    def frames(self) -> int:
+        return round(self.dur_s * FPS)
+
+
+def plan_segments(
+    durations: list[float], swipe_s: float = SWIPE_S, pad_s: float = SEG_PAD_S
+) -> list[Segment]:
+    """Bodies and swipes in order. `durations` are frame-snapped; the joined
+    length is sum(durations) - swipes * swipe_s, as in swipe_offsets."""
+    segs: list[Segment] = []
+    t = 0.0
+    n = len(durations)
+    edge = swipe_s + pad_s
+    for k, d in enumerate(durations):
+        b0 = 0.0 if k == 0 else edge
+        b1 = d if k == n - 1 else d - edge
+        if b1 - b0 < 1 / FPS:
+            raise StoryRenderError(f"piece {k + 1} is too short to join ({d:.2f} s)")
+        segs.append(Segment("body", k, round(b0, 4), round(b1 - b0, 4), round(t, 4)))
+        t += b1 - b0
+        if k < n - 1:
+            length = swipe_s + 2 * pad_s
+            segs.append(Segment("swipe", k, round(d - edge, 4), length, round(t, 4)))
+            t += length
+    return segs
+
+
+def _video_opts() -> list[str]:
+    opts = _encode_opts()
+    return opts[: opts.index("-c:a")]
+
+
+def _audio_opts() -> list[str]:
+    opts = _encode_opts()
+    return opts[opts.index("-c:a") :]
+
+
+def _norm(i: int, label: str, *, dur: float) -> str:
+    """Input `i` on the story settings, padded and cut to exactly `dur`."""
+    return (
+        f"[{i}:v]fps={FPS},settb=AVTB,format=yuv420p,setsar=1,"
+        f"tpad=stop_mode=clone:stop_duration=1,trim=duration={dur},setpts=PTS-STARTPTS[{label}]"
+    )
+
+
+def segment_cmd(
+    seg: Segment,
+    pieces: list[str],
     out: str,
     *,
     swipe_s: float = SWIPE_S,
-    whoosh: tuple[str, float] | None = None,
+    pad_s: float = SEG_PAD_S,
     subscribe: tuple[str, float] | None = None,
 ) -> list[str]:
-    """One ffmpeg pass: games chained with xfade slideleft + acrossfade;
-    `whoosh` (path, peak_s) mixed so its peak lands mid-swipe; `subscribe`
-    (path, at_s) overlaid bottom centre. Every input is normalised to the
-    story settings so xfade accepts it."""
-    n = len(stories)
-    offs = swipe_offsets(durations, swipe_s)
-    inputs: list[str] = []
-    for s in stories:
-        inputs += ["-i", s]
-    g: list[str] = []
-    for i in range(n):
-        g.append(f"[{i}:v]fps={FPS},settb=AVTB,format=yuv420p,setsar=1[v{i}]")
-        g.append(f"[{i}:a]aresample=48000,aformat=channel_layouts=stereo[a{i}]")
-    v, a = "[v0]", "[a0]"
-    for i in range(1, n):
-        g.append(
-            f"{v}[v{i}]xfade=transition=slideleft:duration={swipe_s}:offset={offs[i - 1]}[x{i}]"
-        )
-        g.append(f"{a}[a{i}]acrossfade=d={swipe_s}[c{i}]")
-        v, a = f"[x{i}]", f"[c{i}]"
-    nxt = n
-    if whoosh is not None and n > 1:
-        path, peak = whoosh
-        inputs += ["-i", path]
-        w, nxt = nxt, nxt + 1
-        labels = "".join(f"[w{i}]" for i in range(n - 1))
-        g.append(f"[{w}:a]aresample=48000,aformat=channel_layouts=stereo,asplit={n - 1}{labels}")
-        for i, o in enumerate(offs):
-            ms = max(0, round((o + swipe_s / 2 - peak) * 1000))
-            g.append(f"[w{i}]adelay={ms}|{ms}[wd{i}]")
-        mix = "".join(f"[wd{i}]" for i in range(n - 1))
-        g.append(f"{a}{mix}amix=inputs={n}:duration=first:normalize=0[am]")
-        a = "[am]"
+    """Video-only encode of one segment. `subscribe` (path, at_s in the
+    segment) overlays the like & subscribe animation bottom centre."""
+    g: list[str]
+    if seg.kind == "body":
+        inputs = ["-ss", f"{seg.start_s}", "-i", pieces[seg.piece]]
+        g = [_norm(0, "v", dur=seg.dur_s)]
+    else:
+        edge = swipe_s + pad_s
+        inputs = ["-ss", f"{seg.start_s}", "-i", pieces[seg.piece], "-i", pieces[seg.piece + 1]]
+        g = [
+            _norm(0, "a0", dur=edge),
+            _norm(1, "b0", dur=edge),
+            f"[a0][b0]xfade=transition=slideleft:duration={swipe_s}:offset={pad_s}[v]",
+        ]
     if subscribe is not None:
         path, at = subscribe
+        sidx = inputs.count("-i")
         inputs += ["-i", path]
-        sidx = nxt
         wf, bf = SUBSCRIBE_WIDTH_FRAC, SUBSCRIBE_BOTTOM_FRAC
+        g[-1] = g[-1].removesuffix("[v]") + "[pre]"
         g.append(f"[{sidx}:v]setpts=PTS-STARTPTS+{at}/TB[s0]")
-        g.append(f"[s0]{v}scale2ref=w=main_w*{wf}:h=ow/mdar[s][base]")
+        g.append(f"[s0][pre]scale2ref=w=main_w*{wf}:h=ow/mdar[s][base]")
         g.append(
             f"[base][s]overlay=x=(main_w-overlay_w)/2:y=main_h*{bf}-overlay_h"
-            f":eof_action=pass,format=yuv420p[vs]"
+            f":eof_action=pass,format=yuv420p[v]"
         )
-        v = "[vs]"
     return [
         settings.ffmpeg_path,
         "-y",
@@ -164,12 +234,148 @@ def join_cmd(
         "-filter_complex",
         ";".join(g),
         "-map",
-        v,
-        "-map",
-        a,
-        *_encode_opts(),
+        "[v]",
+        "-an",
+        "-frames:v",
+        str(seg.frames),
+        *_video_opts(),
         out,
     ]
+
+
+def audio_cmd(
+    pieces: list[str],
+    durations: list[float],
+    out: str,
+    *,
+    swipe_s: float = SWIPE_S,
+    whoosh: tuple[str, float] | None = None,
+) -> list[str]:
+    """The whole soundtrack in one audio-only pass: each piece cut to its
+    frame-snapped length, faded over its swipes and delayed to where its
+    video starts (sample-exact; acrossfade lost 0.06-0.28 s per long pair,
+    2026-11-27), `whoosh` (path, peak_s) delayed so its peak lands
+    mid-swipe, all summed."""
+    n = len(pieces)
+    starts = [0.0, *swipe_offsets(durations, swipe_s)]
+    total = round(starts[-1] + durations[-1], 4)
+    inputs: list[str] = []
+    g: list[str] = []
+    mix: list[str] = []
+    for i, (p, d) in enumerate(zip(pieces, durations, strict=True)):
+        inputs += ["-i", p]
+        fades = ""
+        if i:
+            fades += f",afade=t=in:d={swipe_s}"
+        if i < n - 1:
+            fades += f",afade=t=out:st={round(d - swipe_s, 4)}:d={swipe_s}"
+        ns = round(starts[i] * 48000)  # samples: exact on the frame grid
+        g.append(
+            f"[{i}:a]aresample=48000,aformat=channel_layouts=stereo,"
+            f"apad=whole_dur={d},atrim=duration={d},asetpts=N/SR/TB{fades},"
+            f"adelay={ns}S|{ns}S[a{i}]"
+        )
+        mix.append(f"[a{i}]")
+    if whoosh is not None and n > 1:
+        path, peak = whoosh
+        inputs += ["-i", path]
+        labels = "".join(f"[w{i}]" for i in range(n - 1))
+        g.append(f"[{n}:a]aresample=48000,aformat=channel_layouts=stereo,asplit={n - 1}{labels}")
+        for i, o in enumerate(starts[1:]):
+            ms = max(0, round((o + swipe_s / 2 - peak) * 1000))
+            g.append(f"[w{i}]adelay={ms}|{ms}[wd{i}]")
+            mix.append(f"[wd{i}]")
+    g.append(
+        f"{''.join(mix)}amix=inputs={len(mix)}:duration=longest:normalize=0,"
+        f"apad=whole_dur={total},atrim=duration={total}[am]"
+    )
+    return [
+        settings.ffmpeg_path,
+        "-y",
+        *inputs,
+        "-filter_complex",
+        ";".join(g),
+        "-map",
+        "[am]",
+        "-vn",
+        *_audio_opts(),
+        out,
+    ]
+
+
+def concat_cmd(list_file: str, audio: str, out: str) -> list[str]:
+    """Stitch the video segments (same encoder settings, so no re-encode)
+    and mux the soundtrack."""
+    return [
+        settings.ffmpeg_path,
+        "-y",
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        list_file,
+        "-i",
+        audio,
+        "-map",
+        "0:v",
+        "-map",
+        "1:a",
+        "-c",
+        "copy",
+        "-movflags",
+        "+faststart",
+        out,
+    ]
+
+
+def _subscribe_in(segs: list[Segment], at: float) -> tuple[int, float] | None:
+    """(segment index, at in that segment) of the body holding `at`."""
+    for i, s in enumerate(segs):
+        if s.kind == "body" and s.at_s <= at < s.at_s + s.dur_s:
+            return i, round(at - s.at_s, 3)
+    return None
+
+
+def render_joined(
+    pieces: list[str],
+    durations: list[float],
+    out: Path,
+    work: Path,
+    *,
+    swipe_s: float = SWIPE_S,
+    whoosh: tuple[str, float] | None = None,
+    subscribe: tuple[str, float] | None = None,
+) -> None:
+    """Segments -> soundtrack -> concat (see the module doc). `durations`
+    must be frame-snapped. Segment files are deleted afterwards."""
+    segs = plan_segments(durations, swipe_s)
+    seg_dir = work / "segments"
+    seg_dir.mkdir(parents=True, exist_ok=True)
+    sub = _subscribe_in(segs, subscribe[1]) if subscribe is not None else None
+    files: list[Path] = []
+    for i, seg in enumerate(segs):
+        f = seg_dir / f"seg_{i:03d}.mp4"
+        overlay = (subscribe[0], sub[1]) if subscribe is not None and sub and sub[0] == i else None
+        cmd = segment_cmd(seg, pieces, f.as_posix(), swipe_s=swipe_s, subscribe=overlay)
+        ok, err = _run_ffmpeg(cmd, 120 + 3 * seg.dur_s)
+        if not ok:
+            raise StoryRenderError(f"join segment {i + 1}/{len(segs)} ({seg.kind}) failed: {err}")
+        files.append(f)
+    audio = seg_dir / "audio.m4a"
+    total = sum(durations)
+    ok, err = _run_ffmpeg(
+        audio_cmd(pieces, durations, audio.as_posix(), swipe_s=swipe_s, whoosh=whoosh),
+        120 + total,
+    )
+    if not ok:
+        raise StoryRenderError(f"join soundtrack failed: {err}")
+    listing = seg_dir / "segments.txt"
+    listing.write_text("".join(f"file '{f.as_posix()}'\n" for f in files), encoding="utf-8")
+    ok, err = _run_ffmpeg(concat_cmd(listing.as_posix(), audio.as_posix(), out.as_posix()), 600)
+    if not ok:
+        raise StoryRenderError(f"join concat failed: {err}")
+    shutil.rmtree(seg_dir, ignore_errors=True)
 
 
 def _duration(path: Path) -> float:
@@ -205,6 +411,29 @@ def _offset(plan: StoryPlan) -> float:
     return tl.offset_s if tl is not None else 0.0
 
 
+def _load_plan(round_name: str) -> StoryPlan:
+    return StoryPlan.model_validate_json(
+        (story_path(round_name).parent / "story.json").read_text(encoding="utf-8")
+    )
+
+
+def hook_clips(rounds: list[str], picks: list[HookPick]) -> list[HookClip]:
+    """Resolve each pick (1-based game and chapter) to a window of that
+    game's story.mp4, ending before the play's outcome."""
+    clips: list[HookClip] = []
+    for p in picks:
+        if not 1 <= p.game <= len(rounds):
+            raise StoryRenderError(f"hook pick game {p.game} is not 1..{len(rounds)}")
+        plan = _load_plan(rounds[p.game - 1])
+        if not 1 <= p.chapter <= len(plan.chapters):
+            raise StoryRenderError(
+                f"hook pick game {p.game} has chapters 1..{len(plan.chapters)}, not {p.chapter}"
+            )
+        start, end = bookends.hook_window(plan, p.chapter - 1, settings.story_card_seconds)
+        clips.append(HookClip(story_path(rounds[p.game - 1]), start, end, p.text))
+    return clips
+
+
 def join_stories(
     rounds: list[str],
     out: Path,
@@ -212,38 +441,65 @@ def join_stories(
     subscribe_after: int | None = 1,
     title: str | None = None,
     swipe_s: float = SWIPE_S,
+    hook: list[HookPick] | None = None,
+    hook_title: str | None = None,
+    outro: bool = False,
+    music: Path | None = None,
+    music_start_s: float = 0.0,
 ) -> Path:
     """Join each round's story.mp4 with a right-to-left swipe and a whoosh
     (when WORKSPACE/sfx/whoosh.wav exists) between games. Overlay the
     subscribe animation in the game after `subscribe_after` (None, an
-    out-of-range value or a missing asset: no overlay). Write the join map
-    and chapter list next to the mp4."""
+    out-of-range value or a missing asset: no overlay). `hook`: chapters
+    for the cold open (`hook_title` pops over the first); `outro`: add the
+    end card, over `music` (default WORKSPACE/music/outro.*, if any). Write
+    the join map and chapter list next to the mp4."""
     out = Path(out)
     stories = [story_path(r) for r in rounds]
     for r, s in zip(rounds, stories, strict=True):
         if not s.is_file():
             raise StoryRenderError(f"story video missing for round {r}: {s}")
     out.parent.mkdir(parents=True, exist_ok=True)
-    durations = [_duration(s) for s in stories]
+    work = parts_dir(out)
     asset = subscribe_asset()
+    hooks = bookends.render_hook(hook_clips(rounds, hook), work, title=hook_title) if hook else []
+    outro_file: Path | None = None
+    if outro:
+        outro_file = bookends.render_outro(
+            stories[-1],
+            work,
+            subscribe=asset if asset.is_file() else None,
+            music=music if music is not None else bookends.music_asset(),
+            music_start_s=music_start_s,
+        )
+    pieces = [*hooks, *stories, *([outro_file] if outro_file else [])]
+    durations = [frames_s(_duration(p)) for p in pieces]
+    offs = swipe_offsets(durations, swipe_s)
+    starts = [0.0, *offs]  # where each piece starts in the joined video
+    first = len(hooks)  # piece index of game 1
     sub_at: float | None = None
     if subscribe_after is not None and 1 <= subscribe_after < len(rounds) and asset.is_file():
-        game_start = sum(durations[:subscribe_after]) - subscribe_after * swipe_s
-        sub_at = round(game_start + SUBSCRIBE_LEAD_S, 3)
+        sub_at = round(starts[first + subscribe_after] + SUBSCRIBE_LEAD_S, 3)
     wh = whoosh_asset()
-    cmd = join_cmd(
-        [s.as_posix() for s in stories],
+    render_joined(
+        [p.as_posix() for p in pieces],
         durations,
-        out.as_posix(),
+        out,
+        work,
         swipe_s=swipe_s,
         whoosh=(wh.as_posix(), _whoosh_peak(wh)) if wh.is_file() else None,
         subscribe=(asset.as_posix(), sub_at) if sub_at is not None else None,
     )
-    ok, err = _run_ffmpeg(cmd, 120 + 3 * sum(durations))
-    if not ok:
-        raise StoryRenderError(f"join failed: {err}")
     sub = (subscribe_after, _asset_duration(asset), asset) if sub_at is not None else None
-    write_join_files(rounds, out, transition_s=swipe_s, title=title, subscribe=sub)
+    write_join_files(
+        rounds,
+        out,
+        transition_s=swipe_s,
+        title=title,
+        subscribe=sub,
+        lead_s=starts[first],
+        outro=(durations[-1], outro_file) if outro_file else None,
+    )
     return out
 
 
@@ -254,14 +510,11 @@ def write_join_files(
     transition_s: float = SWIPE_S,
     title: str | None = None,
     subscribe: tuple[int, float, Path] | None = None,
+    lead_s: float = 0.0,
+    outro: tuple[float, Path] | None = None,
 ) -> Path:
     """`<out>.join.json` and `<out>.chapters.txt` next to the joined mp4."""
-    plans = [
-        StoryPlan.model_validate_json(
-            (story_path(r).parent / "story.json").read_text(encoding="utf-8")
-        )
-        for r in rounds
-    ]
+    plans = [_load_plan(r) for r in rounds]
     digests = [Path(settings.workspace_dir) / "panel" / r / "digest.json" for r in rounds]
     jm = build_join_map(
         video=out,
@@ -277,6 +530,8 @@ def write_join_files(
         digest_jsons=[d if d.is_file() else None for d in digests],
         subscribe=subscribe,
         transition_s=transition_s,
+        lead_s=lead_s,
+        outro=outro,
     )
     map_path = out.with_suffix(".join.json")
     map_path.write_text(jm.model_dump_json(indent=2), encoding="utf-8")
@@ -295,6 +550,18 @@ def main(argv: list[str] | None = None) -> int:
         default=1,
         help="play the subscribe overlay in the game after this one (default 1; 0 = none)",
     )
+    ap.add_argument(
+        "--hook",
+        action="append",
+        default=[],
+        metavar="GAME:CHAPTER[:TEXT]",
+        help="a cold-open clip: game n's chapter m (1-based), cut before its outcome; "
+        "TEXT pops on the frozen frame (default ???). Repeat for more clips.",
+    )
+    ap.add_argument("--hook-title", help="opening line over the first hook clip")
+    ap.add_argument("--outro", action="store_true", help="add the end card after the last game")
+    ap.add_argument("--music", help="outro music file (default WORKSPACE/music/outro.*)")
+    ap.add_argument("--music-start", type=float, default=0.0, help="seconds into the music")
     args = ap.parse_args(argv)
     if len(args.rounds) < 2:
         ap.error("need at least 2 rounds")
@@ -305,8 +572,13 @@ def main(argv: list[str] | None = None) -> int:
             out,
             subscribe_after=args.subscribe_after or None,
             title=args.title,
+            hook=[bookends.parse_pick(h) for h in args.hook] or None,
+            hook_title=args.hook_title,
+            outro=args.outro,
+            music=Path(args.music) if args.music else None,
+            music_start_s=args.music_start,
         )
-    except StoryRenderError as e:
+    except (StoryRenderError, ValueError) as e:
         print(f"story-join: {e}", file=sys.stderr)
         return 1
     print(res)
