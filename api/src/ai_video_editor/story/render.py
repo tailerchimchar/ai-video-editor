@@ -152,10 +152,14 @@ def chapter_cmd(
 LETTERBOX_BAR = 0.12  # fraction of the height per bar
 SLOWMO_FACTOR, SLOWMO_MIN = 0.5, 0.25
 ZOOM_FACTOR, ZOOM_ROI = 1.3, "center"
+# Comic zoom-out (owner 2026-11-27, Isab style): the picture shrinks to this
+# fraction of the frame inside black borders.
+ZOOM_OUT_FACTOR, ZOOM_OUT_MIN = 0.6, 0.2
 # Same defaults as the /edit/focus endpoint (routers/edits.FocusRequest).
 FOCUS_DEFAULTS = {"x": 0.5, "y": 0.5, "radius": 0.2, "dim": 0.3}
-# Spatial effects stack in this order: zoom, then the spotlight, bars on top.
-_SPATIAL_ORDER = ("zoom", "focus", "letterbox")
+# Spatial effects stack in this order: zoom, the spotlight, the zoom-out
+# (so the spotlight shrinks with the picture), bars on top.
+_SPATIAL_ORDER = ("zoom", "focus", "zoom_out", "letterbox")
 
 
 def _num(fx: ChapterEffect, key: str, default: float) -> float:
@@ -174,6 +178,13 @@ def _spatial_filter(fx: ChapterEffect) -> str:
     if fx.kind == "focus":
         p = {k: _num(fx, k, v) for k, v in FOCUS_DEFAULTS.items()}
         return focus_filter(p["x"], p["y"], p["radius"], p["dim"])
+    if fx.kind == "zoom_out":
+        f = _num(fx, "factor", ZOOM_OUT_FACTOR)
+        s = min(1.0, max(ZOOM_OUT_MIN, f))
+        if s != f:
+            _log.warning("story: zoom_out factor %s clamped to %s", f, s)
+        w, h = (round(WIDTH * s / 2) * 2, round(HEIGHT * s / 2) * 2)  # even for yuv420p
+        return f"scale={w}:{h},pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2:black,setsar=1"
     return ""
 
 

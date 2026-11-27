@@ -2330,9 +2330,10 @@ def story_add_request(
     - `mute`: silence only the owner's mic over `start`..`end` (default the
       whole chapter at `at`), e.g. off-game talk to narrate over later. Game
       audio keeps playing.
-    - `effect`: `effect` is letterbox | slowmo | zoom | focus, over
+    - `effect`: `effect` is letterbox | slowmo | zoom | zoom_out | focus, over
       `start`..`end` (game clock; default the chapter around `at`),
-      optional numeric/str `params`.
+      optional numeric/str `params`. zoom_out = the comic Isab-style zoom-out:
+      the picture shrinks (`factor`, default 0.6) inside black borders.
 
     Examples. "walk out of base at 20:05":
       story_add_request(round, "add_chapter", "20:05", title="Walking out of base")
@@ -2340,6 +2341,9 @@ def story_add_request(
       story_add_request(round, "effect", "31:10", effect="letterbox", start="31:05", end="31:20")
       story_add_request(round, "effect", "31:10", effect="slowmo", start="31:08", end="31:14")
       story_add_request(round, "effect", "31:10", effect="focus", start="31:05", end="31:20")
+
+    "zoom out when I say that, 14:02-14:05":
+      story_add_request(round, "effect", "14:02", effect="zoom_out", start="14:02", end="14:05")
 
     "cut the first 10 s of the chapter at 31:10" / "mute my mic 12:00-12:30":
       story_add_request(round, "trim", "31:10", start="31:20")

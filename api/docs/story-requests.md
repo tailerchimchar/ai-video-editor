@@ -26,7 +26,7 @@ seconds as a number. Recording seconds = game clock + the timeline offset.
 | `drop` | `at` | Removes the chapter containing `at`. |
 | `trim` | `at`, `start?`, `end?` (game clock) | Shrinks the chapter containing `at` to `start`..`end` (never grows it). Kill/death times outside go; effects, mic mutes and b-roll outside are dropped or clamped. Warns when no chapter or the window is empty. |
 | `mute` | `at`, `start?`, `end?` (game clock) | Silences only the owner's mic over the range (default the whole chapter, clamped to it); game audio keeps playing. For off-game talk he will narrate over later. Several mutes add up. |
-| `effect` | `effect` (`letterbox`, `slowmo`, `zoom`, `focus`), `at`, `start?`, `end?`, `params={}` | Effect on the chapter containing `at`; range defaults to the whole chapter and is clamped to it. |
+| `effect` | `effect` (`letterbox`, `slowmo`, `zoom`, `zoom_out`, `focus`), `at`, `start?`, `end?`, `params={}` | Effect on the chapter containing `at`; range defaults to the whole chapter and is clamped to it. `zoom_out` is the comic Isab-style zoom-out: the picture shrinks to `factor` (default 0.6, 0.2 to 1) inside black borders. |
 
 Order of application: drops, adds, extends, trims, mutes, effects. A request that matches
 no chapter prints a warning and is skipped. Request chapters are applied after

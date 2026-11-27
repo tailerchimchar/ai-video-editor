@@ -77,6 +77,31 @@ def test_stacked_filters_zoom_then_focus_then_letterbox():
     assert f.index("crop=") < f.index("geq=") < f.index("drawbox=")
 
 
+def test_zoom_out_shrinks_the_frame_into_black_borders():
+    # Owner 2026-11-27: Isab-style comic zoom-out, black borders all round.
+    f = render.effect_video_filter([_fx("zoom_out", 0, 1)])
+    assert f == "scale=1152:648,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black,setsar=1"
+    assert render.effect_video_filter([_fx("zoom_out", 0, 1, factor=0.5)]).startswith(
+        "scale=960:540,"
+    )
+
+
+def test_zoom_out_factor_is_clamped(caplog):
+    with caplog.at_level(logging.WARNING):
+        f = render.effect_video_filter([_fx("zoom_out", 0, 1, factor=3)])
+    assert f.startswith("scale=1920:1080,") and "clamped" in caplog.text
+    assert render.effect_video_filter([_fx("zoom_out", 0, 1, factor=0.01)]).startswith(
+        "scale=384:216,"
+    )
+
+
+def test_zoom_out_comes_after_focus_and_before_letterbox():
+    f = render.effect_video_filter(
+        [_fx("letterbox", 0, 1), _fx("zoom_out", 0, 1), _fx("focus", 0, 1)]
+    )
+    assert f.index("geq=") < f.index("pad=") < f.index("drawbox=")
+
+
 def test_atempo_chain():
     assert render.atempo_chain(0.5) == "atempo=0.5"
     assert render.atempo_chain(0.25) == "atempo=0.5,atempo=0.5"
@@ -392,6 +417,34 @@ def test_real_ffmpeg_letterbox_and_slowmo(tmp_path, monkeypatch):
     # outside the effect the same pixel is the test pattern, not a bar
     assert max(_pixel(out, 1.0, 960, 20)) > 60
     print(f"real render: duration={dur:.3f}s top={top} bottom={bottom}")
+
+
+@pytest.mark.real_ffmpeg
+@pytest.mark.skipif(
+    shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None, reason="needs ffmpeg"
+)
+def test_real_ffmpeg_zoom_out_has_black_borders(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "ffmpeg_path", "ffmpeg")
+    monkeypatch.setattr(settings, "ffmpeg_video_codec", "libx264")
+    monkeypatch.setattr(settings, "ffmpeg_video_codec_opts", "-preset veryfast -crf 20 -threads 4")
+    src = tmp_path / "src.mp4"
+    subprocess.run(
+        ["ffmpeg", "-y", "-v", "error",
+         "-f", "lavfi", "-i", "color=c=white:size=640x360:rate=30",
+         "-f", "lavfi", "-i", "sine=frequency=440",
+         "-t", "4", "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", src],
+        check=True,
+    )  # fmt: skip
+    ch = Chapter(title="t", start_s=0.0, end_s=4.0, kind="fight", effects=[_fx("zoom_out", 2, 4)])
+    plan = StoryPlan(
+        asset_id="a1", chapters=[ch], total_s=4.0, mic_stream=None, audio="mixed", cards=False
+    )
+    out = render.render_story(str(src), plan, tmp_path / "out", cards=False)
+    # inside the effect: corner is a border, centre is still the picture
+    assert max(_pixel(out, 3.0, 40, 40)) < 24
+    assert min(_pixel(out, 3.0, 960, 540)) > 200
+    # before it the corner is the picture
+    assert min(_pixel(out, 1.0, 40, 40)) > 200
 
 
 def test_segments_drop_slivers_shorter_than_a_frame():

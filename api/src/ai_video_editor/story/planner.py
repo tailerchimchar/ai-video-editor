@@ -77,7 +77,7 @@ class Beat(BaseModel):
         return self
 
 
-EffectKind = Literal["letterbox", "slowmo", "zoom", "focus"]
+EffectKind = Literal["letterbox", "slowmo", "zoom", "zoom_out", "focus"]
 
 
 class ChapterEffect(BaseModel):
@@ -85,7 +85,9 @@ class ChapterEffect(BaseModel):
     inside its chapter). `params` per kind: letterbox `bar` (fraction of the
     height per bar, default 0.12); slowmo `factor` (default 0.5 = half
     speed); zoom `factor` (default 1.3) and `roi` (edits._ROI_PRESETS name,
-    default "center"); focus `x`, `y`, `radius`, `dim` as in edits.apply_focus."""
+    default "center"); zoom_out `factor` (picture size, default 0.6, inside
+    black borders: the comic Isab-style zoom-out); focus `x`, `y`, `radius`,
+    `dim` as in edits.apply_focus."""
 
     kind: EffectKind
     start_s: float
