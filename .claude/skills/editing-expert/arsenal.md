@@ -61,6 +61,7 @@ to list the folder before naming one.
 | finalize / clean up | `finalize_compilation`, `cleanup_compilation`, `set_compilation_labels` |
 | split a long VOD into games | `split_vod_into_games` |
 | story video: owner requests (add chapter / extend / drop / effect) and re-render | `story_list_requests`, `story_add_request`, `story_remove_request`, `story_render` |
+| story-join: several games' stories in one video (swipe, hook cold open, outro) | `story_join` |
 | narration over a finished video (takes, camera box, export narrated.mp4) | `narration_status`, `narration_set_camera`, `narration_remove_take`, `narration_export` |
 | story video: editor suggestions (Jev panel) → tick → apply | `story_suggest_edits`, `story_list_suggestions`, `story_accept_suggestion`, `story_apply_suggestions` |
 

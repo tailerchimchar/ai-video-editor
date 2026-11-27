@@ -279,6 +279,10 @@ STRUCTURE = (
         ("story_list_requests", "story_add_request", "story_remove_request", "story_render"),
     ),
     ToolGroup(
+        "story-join: several games' stories in one video (swipe, hook cold open, outro)",
+        ("story_join",),
+    ),
+    ToolGroup(
         "narration over a finished video (takes, camera box, export narrated.mp4)",
         ("narration_status", "narration_set_camera", "narration_remove_take", "narration_export"),
     ),
