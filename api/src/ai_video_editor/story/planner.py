@@ -23,10 +23,13 @@ from typing import Literal
 
 from pydantic import BaseModel, model_validator
 
+from ..config import settings
 from ..highlights import FIGHT_POST_S, FIGHT_PRE_ALLY_DEATH_S, FIGHT_PRE_S
+from ..league.early_game import EarlySegment
 from ..league.lane_models import LaneSummary
 from ..league.play_models import GameModel, Play
 from ..league.riot_timeline import Fight, RiotTimeline, TimelineEvent, fights
+from .broll import BRollInsert
 
 _log = logging.getLogger(__name__)
 
@@ -48,6 +51,14 @@ _EVENT_KINDS = ("kill", "assist", "death")
 LANE_BEFORE_S = 14 * 60.0
 LANE_EVENTS = 2
 GAME_END_TAIL_S = 1.0
+# A won fight the team entered a player down opens at the ally death that did it.
+OUTNUMBERED_LOOKBACK_S = 60.0
+ALLY_DEATH_LEAD_S = 3.0
+_ENEMY_DEATH_KINDS = ("kill", "assist", "enemy_death")
+_NUMBERS = re.compile(r"^\s*(\d+)\s*v\s*(\d+)\s*$")
+# Every owner kill/death in a chapter keeps this much footage after it (kill
+# feed pop, the sound's tail); a window ending on or just after one grows to it.
+EVENT_POST_S = 2.0
 CLOSE_TITLE = "The close"
 _PROTECTED = ("lane", "close")
 _KIND_RANK = {"close": 3, "lane": 2, "fight": 1, "commentary": 0}
@@ -66,14 +77,40 @@ class Beat(BaseModel):
         return self
 
 
+EffectKind = Literal["letterbox", "slowmo", "zoom", "focus"]
+
+
+class ChapterEffect(BaseModel):
+    """An owner-requested effect over [start_s, end_s] (recording seconds,
+    inside its chapter). `params` per kind: letterbox `bar` (fraction of the
+    height per bar, default 0.12); slowmo `factor` (default 0.5 = half
+    speed); zoom `factor` (default 1.3) and `roi` (edits._ROI_PRESETS name,
+    default "center"); focus `x`, `y`, `radius`, `dim` as in edits.apply_focus."""
+
+    kind: EffectKind
+    start_s: float
+    end_s: float
+    params: dict[str, float | str] = {}
+
+
 class Chapter(BaseModel):
     title: str
     start_s: float
     end_s: float
+    # lane | fight | close | commentary | early | request (owner-added, never dropped)
     kind: str
     beats: list[str] = []
     play_id: str | None = None
     kill_times_s: list[float] = []
+    # Owner deaths (recording seconds), for the death sound; filled like kill_times_s.
+    death_times_s: list[float] = []
+    # Item cutaways inside this chapter (ids and times only, no mic text).
+    broll: list[BRollInsert] = []
+    # Owner-requested effects (story/requests.py), rendered by story/render.py.
+    effects: list[ChapterEffect] = []
+    # Recording-second ranges where the owner's mic is muted (owner request:
+    # off-game talk he will narrate over later). Game audio keeps playing.
+    mic_mutes: list[tuple[float, float]] = []
 
 
 class StoryPlan(BaseModel):
@@ -313,9 +350,72 @@ def plan_story(
     )
 
 
+# Every story ends on the nexus exploding (owner 2026-11-26: Kai'sa and the
+# Yunara surrender both stopped short of it). The last chapter reaches
+# ENDING_TAIL_S past Riot's game end; when it ends more than ENDING_JOIN_S
+# before the end, a short ending chapter is added instead.
+ENDING_TAIL_S = 5.0
+ENDING_JOIN_S = 20.0
+ENDING_PRE_S = 8.0
+ENDING_TITLE = "The end"
+
+
+def _with_ending(chapters: list[Chapter], timeline: RiotTimeline) -> list[Chapter]:
+    """`chapters` (start order) ending on the nexus: the last one stretched to
+    game end + ENDING_TAIL_S, or an ending chapter appended."""
+    if timeline.game_end_s is None:
+        return chapters
+    end = round(timeline.game_end_s + ENDING_TAIL_S, 2)
+    if chapters and chapters[-1].end_s >= end:
+        return chapters
+    if chapters and chapters[-1].end_s >= timeline.game_end_s - ENDING_JOIN_S:
+        return [*chapters[:-1], chapters[-1].model_copy(update={"end_s": end})]
+    start = round(timeline.game_end_s - ENDING_PRE_S, 2)
+    if chapters:
+        start = max(start, chapters[-1].end_s)
+    return [*chapters, Chapter(title=ENDING_TITLE, start_s=start, end_s=end, kind="close")]
+
+
 PLAY_PRE_FALLBACK_S = 8.0
 PLAY_POST_FALLBACK_S = 3.0
 _UNRANKED = 10**6
+LATE_GAME_S = 20 * 60.0
+EARLY_MERGE_GAP_S = 4.0
+_EARLY_TITLES = {
+    "opening": "The opening",
+    "level3_trade": "Level 3 trade",
+    "jungle_move": "Jungle move",
+    "low_hp": "Close call",
+    "heavy_trade": "Heavy trade",
+    "give_recall": "Giving up a recall",
+    "first_back": "First back",
+}
+
+
+def _early_chapters(early: list[EarlySegment], timeline: RiotTimeline) -> list[Chapter]:
+    """One `early` chapter per segment, in order; segments less than
+    EARLY_MERGE_GAP_S apart merge (the first one's title stays)."""
+    out: list[Chapter] = []
+    for s in sorted(early, key=lambda s: (s.start_s, s.end_s)):
+        if out and s.start_s - out[-1].end_s < EARLY_MERGE_GAP_S:
+            out[-1] = out[-1].model_copy(update={"end_s": max(out[-1].end_s, s.end_s)})
+        else:
+            out.append(
+                Chapter(
+                    title=_EARLY_TITLES.get(s.kind, "Early game"),
+                    start_s=round(max(0.0, s.start_s), 2),
+                    end_s=round(s.end_s, 2),
+                    kind="early",
+                )
+            )
+    for i, c in enumerate(out):
+        out[i] = c.model_copy(
+            update={
+                "kill_times_s": _times_in(timeline, "kill", c.start_s, c.end_s, 0.0),
+                "death_times_s": _times_in(timeline, "death", c.start_s, c.end_s, 0.0),
+            }
+        )
+    return [c for c in out if c.end_s > c.start_s]
 
 
 def _play_kind(p: Play) -> str:
@@ -324,29 +424,86 @@ def _play_kind(p: Play) -> str:
     return "close" if p.type == "closeout" else "fight"
 
 
-def _play_chapter(p: Play, timeline: RiotTimeline) -> Chapter | None:
+def _times_in(tl: RiotTimeline, kind: str, start: float, end: float, shift: float) -> list[float]:
+    """Recording times of `kind` events (plus `shift`) inside [start, end]."""
+    return [
+        e.t_rec_s + shift
+        for e in tl.events
+        if e.kind == kind and e.t_rec_s is not None and start <= e.t_rec_s + shift <= end
+    ]
+
+
+def _outnumbered_start(
+    p: Play, tl: RiotTimeline, start: float, shift: float, kind: str
+) -> float | None:
+    """Start of a won fight / close entered a player down: the earliest ally
+    death within OUTNUMBERED_LOOKBACK_S before `start` with no enemy death
+    between it and `start`, less ALLY_DEATH_LEAD_S. None when it does not apply."""
+    if kind == "lane" or p.result.outcome != "won" or not _outnumbered(p.sides.numbers):
+        return None
+    timed = [(e.t_rec_s + shift, e.kind) for e in tl.events if e.t_rec_s is not None]
+    enemy = [t for t, k in timed if k in _ENEMY_DEATH_KINDS]
+    ally = [
+        t
+        for t, k in timed
+        if k == "ally_death"
+        and start - OUTNUMBERED_LOOKBACK_S <= t < start
+        and not any(t < x < start for x in enemy)
+    ]
+    return min(ally) - ALLY_DEATH_LEAD_S if ally else None
+
+
+def _outnumbered(numbers: str) -> bool:
+    """True for "4v5"-style Riot side counts where the owner's side is smaller."""
+    m = _NUMBERS.match(numbers or "")
+    return bool(m) and int(m.group(1)) < int(m.group(2))
+
+
+def _play_chapter(p: Play, timeline: RiotTimeline, lead_in_s: float = 0.0) -> Chapter | None:
     w = p.window
-    start = w.approach_s if w.approach_s is not None else p.recording_time.first_kill_s - 8.0
-    end = w.outcome_s if w.outcome_s is not None else p.recording_time.last_kill_s + 3.0
+    # The plays file holds recording seconds from the offset in force when it was
+    # written; move every window time onto the timeline's current offset.
+    delta = timeline.offset_s - (p.recording_time.first_kill_s - p.game_time.first_kill_s)
+    if w.approach_s is not None:
+        start = w.approach_s + delta
+        if start - timeline.offset_s > LATE_GAME_S:
+            start -= lead_in_s  # late fights read better with a longer run-up
+    else:
+        start = p.recording_time.first_kill_s + delta - 8.0
+    if w.outcome_s is not None:
+        end = w.outcome_s + delta
+    else:
+        end = p.recording_time.last_kill_s + delta + 3.0
+    # A HUD-measured offset is already exact; the banner correction applies otherwise.
+    shift = 0.0 if timeline.offset_source == "hud" else (w.offset_correction_s or 0.0)
+    kind = _play_kind(p)
+    ally_start = _outnumbered_start(p, timeline, start, shift, kind)
+    if ally_start is not None:
+        start = min(start, ally_start)
     start = max(0.0, start)
+    # An owner kill/assist/death on (or up to EVENT_POST_S past) the window's
+    # end keeps EVENT_POST_S of footage after it (assists too: Yunara's Cho'Gath
+    # kill was cut on the frame it died, owner 2026-11-26).
+    tail = [
+        t
+        for k in ("kill", "assist", "death")
+        for t in _times_in(timeline, k, start, end + EVENT_POST_S, shift)
+    ]
+    if tail:
+        end = max(end, max(tail) + EVENT_POST_S)
     if timeline.game_end_s is not None:
         end = min(end, timeline.game_end_s + GAME_END_TAIL_S)
     if end <= start:
         _log.warning("story: dropping play %s, empty window after clamp", p.id)
         return None
-    shift = w.offset_correction_s or 0.0  # banner-measured Riot offset error (D17)
-    kills = [
-        e.t_rec_s + shift
-        for e in timeline.events
-        if e.kind == "kill" and e.t_rec_s is not None and start <= e.t_rec_s + shift <= end
-    ]
     return Chapter(
         title=p.text,
         start_s=round(start, 2),
         end_s=round(end, 2),
-        kind=_play_kind(p),
+        kind=kind,
         play_id=p.id,
-        kill_times_s=kills,
+        kill_times_s=_times_in(timeline, "kill", start, end, shift),
+        death_times_s=_times_in(timeline, "death", start, end, shift),
     )
 
 
@@ -360,8 +517,13 @@ def _no_overlap(chapters: list[Chapter]) -> list[Chapter]:
             if c.end_s <= start:
                 _log.info("story: play %s lies inside the previous chapter; dropped", c.play_id)
                 continue
-            kills = [t for t in c.kill_times_s if t >= start]
-            c = c.model_copy(update={"start_s": start, "kill_times_s": kills})
+            c = c.model_copy(
+                update={
+                    "start_s": start,
+                    "kill_times_s": [t for t in c.kill_times_s if t >= start],
+                    "death_times_s": [t for t in c.death_times_s if t >= start],
+                }
+            )
         out.append(c)
     return out
 
@@ -373,8 +535,14 @@ def plan_story_from_plays(
     mic_stream: int | None,
     max_s: float = 360.0,
     asset_id: str = "",
+    early: list[EarlySegment] | None = None,
 ) -> StoryPlan:
-    """One chapter per owner-involved play (no merging, no cap, no trimming),
+    """Early-game segments (`early`) open the story as `early` chapters and are
+    never dropped; they sit on top of the plays budget (the total may exceed
+    `max_s`; `over_budget` only when the plays alone do). Plays with an
+    approach after game 20:00 start `settings.story_late_lead_in_s` earlier.
+
+    One chapter per owner-involved play (no merging, no cap, no trimming),
     in recording order; a chapter starts no earlier than the previous one's
     end (repeated footage reads as a defect). Over `max_s` whole chapters are
     dropped, least impressive first (never a close chapter); `over_budget`
@@ -384,11 +552,18 @@ def plan_story_from_plays(
         _log.warning("story: mic stream 0 is the game audio; using mixed audio")
         mic_stream = None
     rank_of = {p.id: p.impressive.rank for p in game.plays}
+    lead = settings.story_late_lead_in_s
     chapters = [
-        c for p in game.plays if p.owner.involved and (c := _play_chapter(p, timeline)) is not None
+        c
+        for p in game.plays
+        if p.owner.involved and (c := _play_chapter(p, timeline, lead)) is not None
     ]
     chapters.sort(key=lambda c: c.start_s)
+    early_chapters = _early_chapters(early, timeline) if early else []
     kept = list(chapters)
+    # The budget applies to the plays only: the early game rides on top of it,
+    # so adding it never costs a fight (owner 2026-11-25: early game always in,
+    # mid/late "ok for now").
     while _total(_no_overlap(kept)) > max_s:
         droppable = [c for c in kept if c.kind != "close"]
         if not droppable:
@@ -396,7 +571,8 @@ def plan_story_from_plays(
             break
         worst = max(droppable, key=lambda c: rank_of.get(c.play_id) or _UNRANKED)
         kept.remove(worst)
-    kept = _no_overlap(kept)
+    plays_total = _total(_no_overlap(kept))
+    kept = _with_ending(_no_overlap(early_chapters + kept), timeline)
     total = _total(kept)
     return StoryPlan(
         asset_id=asset_id,
@@ -404,6 +580,6 @@ def plan_story_from_plays(
         total_s=total,
         mic_stream=mic_stream,
         audio="mic_over_game" if mic_stream is not None else "mixed",
-        over_budget=total > max_s,
+        over_budget=plays_total > max_s,
         cards=False,
     )

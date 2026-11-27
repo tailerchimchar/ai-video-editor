@@ -38,13 +38,15 @@ import httpx
 
 from ...config import settings
 from ..lane import LANE_FILE, parse_lane_frames, write_lane_summary
-from ..offset import SYNC_ONLY, calibrate_offset, sync_only_offset
+from ..offset import SYNC_ONLY, OffsetResult, calibrate_offset, sync_only_offset
 from ..riot_timeline import (
+    HUD_SOURCE,
     RiotTimeline,
     cache_dir_for,
     fight_containing,
     fights,
     game_window_ms,
+    hud_offset,
     load_cached,
     parse_timeline,
     save_cache,
@@ -537,6 +539,9 @@ def fetch_timeline_inputs(
 def _calibrate_for_asset(asset: dict, duration: float, kills: list[float], energy_fn):
     """Calibrated offset when the recording is readable (or a manual
     override is set); otherwise the sync-only fallback."""
+    stored = hud_offset(cache_dir_for(asset["id"])) if asset.get("id") else None
+    if stored is not None:
+        return OffsetResult(stored, None, HUD_SOURCE)
     if settings.riot_offset_override_seconds is not None:
         return calibrate_offset(kills, None, None)
     path = asset.get("path")

@@ -897,6 +897,16 @@ def apply_caption(
     return _run_ffmpeg(cmd)
 
 
+def focus_filter(x_frac: float, y_frac: float, r_frac: float, dim: float) -> str:
+    """Spotlight filter: luma kept inside a circle at (x_frac, y_frac) of
+    radius `r_frac` x min(W, H), scaled by `dim` outside. Uses geq's own
+    frame-size names (W/H) and per-pixel chroma so it parses on real ffmpeg;
+    `format=yuv420p` first so `lum`/`cb`/`cr` exist for any input."""
+    rr = f"(min(W,H)*{r_frac})"
+    mask = f"if(lt(hypot(X-W*{x_frac},Y-H*{y_frac}),{rr}),lum(X,Y),lum(X,Y)*{dim})"
+    return f"format=yuv420p,geq=lum='{mask}':cb='cb(X,Y)':cr='cr(X,Y)'"
+
+
 def apply_focus(
     asset_path: str,
     out_path: str,

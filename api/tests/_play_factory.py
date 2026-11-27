@@ -23,6 +23,9 @@ def make_play(
     rank: int | None = None,
     text: str = "",
     offset_correction: float | None = None,
+    rec_minus_game: float = 0.0,
+    outcome_result: str = "won",
+    numbers: str = "5v4",
 ) -> Play:
     return Play.model_validate(
         {
@@ -30,7 +33,10 @@ def make_play(
             "type": type,
             "phase": phase,
             "game_time": {"first_kill_s": first_kill, "last_kill_s": last_kill},
-            "recording_time": {"first_kill_s": first_kill, "last_kill_s": last_kill},
+            "recording_time": {
+                "first_kill_s": first_kill + rec_minus_game,
+                "last_kill_s": last_kill + rec_minus_game,
+            },
             "window": {
                 "approach_s": approach,
                 "engage_s": engage,
@@ -39,7 +45,7 @@ def make_play(
                 "offset_correction_s": offset_correction,
             },
             "zone": "mid",
-            "sides": {"allies": ["A"], "enemies": ["B"], "numbers": "5v4"},
+            "sides": {"allies": ["A"], "enemies": ["B"], "numbers": numbers},
             "owner": {
                 "involved": involved,
                 "role": "initiator_kill",
@@ -47,7 +53,7 @@ def make_play(
                 "assists": 0,
                 "died": False,
             },
-            "result": {"enemy_deaths": enemy_deaths, "ally_deaths": 1, "outcome": "won"},
+            "result": {"enemy_deaths": enemy_deaths, "ally_deaths": 1, "outcome": outcome_result},
             "flags": {"help_from_team": True},
             "impressive": {"numbers_faced": numbers_faced, "rank": rank},
             "text": text,

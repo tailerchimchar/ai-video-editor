@@ -15,6 +15,7 @@ export function GalleryTabs() {
     <nav className="flex items-center gap-1 rounded border border-border bg-bg-base p-1">
       <Tab to="/" label="Compilations" />
       <Tab to="/assets" label="Sources" />
+      <Tab to="/videos" label="Videos" />
     </nav>
   );
 }

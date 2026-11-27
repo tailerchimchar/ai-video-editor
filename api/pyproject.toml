@@ -32,6 +32,7 @@ dev-reload = "ai_video_editor.cli:dev_reload"
 drive-auth = "ai_video_editor.grokbot.drive_auth:main"
 jev-scorecard = "ai_video_editor.decisions.scorecard:main"
 league-scorecard = "ai_video_editor.league.scorecard:main"
+riot-hud-sync = "ai_video_editor.league.hud_sync_cli:main"
 league-plays-eval = "ai_video_editor.league.plays_eval_cli:main"
 league-understand = "ai_video_editor.league.understand_cli:main"
 grokbot-runner = "ai_video_editor.grokbot.startup:runner"
@@ -39,6 +40,7 @@ grokbot-publish-round = "ai_video_editor.grokbot.publish:main"
 grokbot-note = "ai_video_editor.grokbot.note:main"
 secret-scan = "ai_video_editor.tools.secret_scan:main"
 story-render = "ai_video_editor.story.cli:main"
+story-join = "ai_video_editor.story.join:main"
 
 [dependency-groups]
 dev = [

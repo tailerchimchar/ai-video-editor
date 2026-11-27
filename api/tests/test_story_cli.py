@@ -89,7 +89,7 @@ def test_main_wires_plan_and_render(ws, tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "asset_path", lambda asset_id: "C:/src.mp4")
     seen = {}
 
-    def fake_render(src, plan, out_dir, *, cards, review):
+    def fake_render(src, plan, out_dir, *, cards, review, **_):
         seen.update(src=src, plan=plan, out_dir=out_dir, cards=cards, review=review)
         return Path(out_dir) / "story.mp4"
 
@@ -264,7 +264,7 @@ def _plays_main(ws, monkeypatch, argv, *, drive: bool, frozen: bool):
         cli, "plan_story_from_plays", lambda *a, **k: seen.update(path="plays") or _empty_plan()
     )
 
-    def fake_render(src, plan, out_dir, *, cards, review):
+    def fake_render(src, plan, out_dir, *, cards, review, **_):
         seen["cards"] = cards
         return Path("story.mp4")
 
@@ -300,3 +300,316 @@ def test_no_plays_flag_forces_beats(ws, monkeypatch):
 def test_plays_flag_without_file_fails(ws, monkeypatch):
     seen = _plays_main(ws, monkeypatch, ["--plays"], drive=False, frozen=False)
     assert seen["rc"] == 2 and seen["path"] is None
+
+
+# --- early game (AVE-57) ---
+
+
+def _early_main(ws, monkeypatch, argv=(), *, setting=True, cache=True, confirm=None, want=None):
+    import sys
+    import types
+
+    from ai_video_editor.league.early_game import EarlySegment
+    from ai_video_editor.league.play_models import GameModel
+
+    seg = EarlySegment(kind="opening", start_s=30, end_s=100, reason="r")
+    monkeypatch.setattr(settings, "story_early_game", setting)
+    wants = want if want is not None else confirm is not None
+    monkeypatch.setattr(settings, "story_early_confirm", wants)
+    if cache:
+        _write(ws / "riot" / "a1" / "timeline.json", {"info": {"frames": []}})
+    monkeypatch.setattr(cli, "early_segments", lambda tl, raw, **kw: [seg])
+    monkeypatch.setattr(cli, "first_back_s", lambda raw, pid, off: 200.0)
+    monkeypatch.setattr(cli, "load_items", dict)  # the first-back item must not hit Data Dragon
+    seen: dict = {}
+    if confirm is not None:
+        mod = types.ModuleType("ai_video_editor.vlm.early_confirm")
+
+        def fake_confirm(video, segs, *, first_back_s, backend, fps=0.5, start_s=45.0):
+            seen["confirm"] = (video, first_back_s)
+            seen["start_s"] = start_s
+            return confirm(segs)
+
+        mod.confirm_early = fake_confirm
+        monkeypatch.setitem(sys.modules, "ai_video_editor.vlm.early_confirm", mod)
+        monkeypatch.setattr(cli, "_early_backend", lambda asset_id: object())
+    else:
+        monkeypatch.setitem(sys.modules, "ai_video_editor.vlm.early_confirm", None)
+    _write(ws / "panel" / "r1" / "gaming-expert.json", [])
+    path = ws / "plays" / "a1.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(GameModel().model_dump_json(), encoding="utf-8")
+    tl = _one_kill_timeline()
+    tl.owner_pid = 3
+    tl.offset_s = -17.0
+    monkeypatch.setattr(cli, "load_timeline", lambda a: tl)
+
+    def fake_plan(*a, **k):
+        seen["early"] = k.get("early")
+        return _empty_plan()
+
+    monkeypatch.setattr(cli, "plan_story_from_plays", fake_plan)
+    monkeypatch.setattr(cli, "render_story", lambda *a, **k: Path("story.mp4"))
+    argv = ["--asset", "a1", "--round", "r1", "--source", "C:/x.mp4", "--plays", *argv]
+    seen["rc"] = cli.main(argv)
+    return seen
+
+
+def test_early_segments_passed_to_planner(ws, monkeypatch):
+    seen = _early_main(ws, monkeypatch)
+    assert seen["rc"] == 0 and [s.kind for s in seen["early"]] == ["opening"]
+
+
+def test_no_early_flag_and_setting_disable(ws, monkeypatch):
+    assert _early_main(ws, monkeypatch, ["--no-early"])["early"] is None
+    assert _early_main(ws, monkeypatch, setting=False)["early"] is None
+
+
+def test_early_skipped_without_raw_timeline(ws, monkeypatch):
+    assert _early_main(ws, monkeypatch, cache=False)["early"] is None
+
+
+def test_early_confirm_refines_when_available(ws, monkeypatch):
+    from ai_video_editor.league.early_game import EarlySegment
+
+    def refine(segs):
+        return [EarlySegment(kind="opening", start_s=40, end_s=90, reason="r", confirmed=True)]
+
+    seen = _early_main(ws, monkeypatch, confirm=refine)
+    assert seen["confirm"] == ("C:/x.mp4", 200.0)
+    assert seen["start_s"] == 28.0  # 45 + offset -17
+    assert seen["early"][0].confirmed and seen["early"][0].start_s == 40
+
+
+def test_early_confirm_missing_module_is_skipped(ws, monkeypatch):
+    seen = _early_main(ws, monkeypatch, want=True)
+    assert seen["rc"] == 0 and seen["early"][0].start_s == 30
+
+
+def test_load_early_reads_hud_bars_when_the_video_exists(ws, monkeypatch, tmp_path):
+    from ai_video_editor.league.hud_bars import BarSample
+
+    video = tmp_path / "v.mp4"
+    video.write_bytes(b"x")
+    _write(ws / "riot" / "a1" / "timeline.json", {"info": {"frames": []}})
+    monkeypatch.setattr(settings, "story_early_confirm", False)
+    monkeypatch.setattr(cli, "bar_times", lambda tl, raw: ([1.0, 2.0], [9.0]))
+    asked = []
+
+    def fake_sample(path, times):
+        asked.append((path, list(times)))
+        return [BarSample(t_rec_s=t, hp=1.0, mana=1.0) for t in times]
+
+    monkeypatch.setattr(cli, "sample_bars", fake_sample)
+    got = {}
+
+    def fake_segments(tl, raw, **kw):
+        got.update(kw)
+        return []
+
+    monkeypatch.setattr(cli, "early_segments", fake_segments)
+    tl = _one_kill_timeline()
+    tl.owner_pid = 3
+    cli.load_early("a1", tl, str(video))
+    assert asked == [(str(video), [1.0, 2.0, 9.0])]  # one pass, opening then lane
+    assert [b.t_rec_s for b in got["opening_bars"]] == [1.0, 2.0]
+    assert [b.t_rec_s for b in got["lane_bars"]] == [9.0]
+    got.clear()
+    cli.load_early("a1", tl, str(tmp_path / "missing.mp4"))
+    assert got["opening_bars"] is None and got["lane_bars"] is None  # 0:20, never miss a fight
+
+
+# --- item B-roll (AVE-58) ---
+
+
+def _broll_main(
+    ws, monkeypatch, argv=(), *, setting=True, mic=True, span=(590.0, 620.0), items=None
+):
+    from ai_video_editor.league.items import ItemInfo
+    from ai_video_editor.story.planner import Chapter, StoryPlan
+
+    monkeypatch.setattr(settings, "story_broll", setting)
+    _write(ws / "panel" / "r1" / "gaming-expert.json", [])
+    purchase = {"type": "ITEM_PURCHASED", "participantId": 3, "itemId": 3032, "timestamp": 500000}
+    _write(ws / "riot" / "a1" / "timeline.json", {"info": {"frames": [{"events": [purchase]}]}})
+    tl = _one_kill_timeline()
+    tl.owner_pid = 3
+    tl.offset_s = -17.0
+    monkeypatch.setattr(cli, "load_timeline", lambda a: tl)
+    monkeypatch.setattr(cli, "load_lane", lambda a: None)
+    seen: dict = {"rows": 0}
+
+    def rows(db, asset_id):
+        seen["rows"] += 1
+        return [{"text": "yun tal", "start_seconds": 600.0, "end_seconds": 604.0}] if mic else []
+
+    if items is None:
+        icon = ws / "ddragon" / "3032.png"
+        icon.parent.mkdir(parents=True, exist_ok=True)
+        icon.write_bytes(b"png")
+        items = {3032: ItemInfo(id=3032, name="Yun Tal Wildarrows", icon_path=icon)}
+    seen["load_items"] = 0
+
+    def fake_items():
+        seen["load_items"] += 1
+        return items
+
+    monkeypatch.setattr(cli, "owner_rows", rows)
+    monkeypatch.setattr(cli, "load_items", fake_items)
+    chapter = Chapter(title="a", start_s=span[0], end_s=span[1], kind="fight")
+    plan = StoryPlan(chapters=[chapter], total_s=30.0, mic_stream=2, audio="mic_over_game")
+    monkeypatch.setattr(cli, "plan_story", lambda *a, **k: plan)
+
+    def fake_render(src, plan, out_dir, **k):
+        seen["plan"], seen["items"] = plan, k.get("items")
+        return Path("story.mp4")
+
+    monkeypatch.setattr(cli, "render_story", fake_render)
+    seen["rc"] = cli.main(["--asset", "a1", "--round", "r1", "--source", "C:/x.mp4", *argv])
+    return seen
+
+
+def test_broll_inserts_reach_the_render(ws, monkeypatch):
+    seen = _broll_main(ws, monkeypatch)
+    assert seen["rc"] == 0
+    (ins,) = seen["plan"].chapters[0].broll
+    assert (ins.item_id, ins.mic_start_s, ins.src_start_s) == (3032, 600.0, 481.0)  # 500-17-2
+    assert 3032 in seen["items"]
+
+
+def test_broll_off_by_setting_or_flag(ws, monkeypatch):
+    seen = _broll_main(ws, monkeypatch, setting=False)
+    assert seen["rows"] == 0 and seen["plan"].chapters[0].broll == []
+    seen = _broll_main(ws, monkeypatch, ["--no-broll"])
+    assert seen["rows"] == 0 and seen["plan"].chapters[0].broll == []
+
+
+def test_first_back_item_shown_without_any_mic_line(ws, monkeypatch):
+    # Owner 2026-11-26: "once we recall get the item i bought".
+    seen = _broll_main(ws, monkeypatch, mic=False, span=(470.0, 520.0))
+    assert seen["rc"] == 0
+    (ins,) = seen["plan"].chapters[0].broll
+    # bought at game 500 - 17 = 483; the cutaway is the purchase footage itself
+    assert (ins.item_id, ins.mic_start_s, ins.src_start_s) == (3032, 481.0, 481.0)
+    assert 4.0 <= ins.dur_s <= 5.0
+    assert [c.kind for c in seen["plan"].chapters] == ["fight"]
+
+
+def test_first_back_item_outside_every_chapter_adds_nothing(ws, monkeypatch):
+    seen = _broll_main(ws, monkeypatch, mic=False)  # chapter 590-620, buy at 483
+    assert [c.kind for c in seen["plan"].chapters] == ["fight"]
+    assert seen["plan"].chapters[0].broll == []
+
+
+def test_first_back_item_skipped_without_icon(ws, monkeypatch):
+    from ai_video_editor.league.items import ItemInfo
+
+    items = {3032: ItemInfo(id=3032, name="x", icon_path=Path("missing.png"))}
+    seen = _broll_main(ws, monkeypatch, mic=False, span=(470.0, 520.0), items=items)
+    assert seen["rc"] == 0 and seen["plan"].chapters[0].broll == []
+
+
+def test_first_back_item_skipped_without_item_data_or_with_no_broll(ws, monkeypatch):
+    seen = _broll_main(ws, monkeypatch, mic=False, span=(470.0, 520.0), items={})
+    assert seen["rc"] == 0 and seen["plan"].chapters[0].broll == []
+    seen = _broll_main(ws, monkeypatch, ["--no-broll"], mic=False, span=(470.0, 520.0))
+    assert seen["load_items"] == 0 and seen["plan"].chapters[0].broll == []
+
+
+def test_mic_and_first_back_inserts_both_land(ws, monkeypatch):
+    seen = _broll_main(ws, monkeypatch, span=(470.0, 620.0))
+    assert [(i.mic_start_s, i.src_start_s) for i in seen["plan"].chapters[0].broll] == [
+        (481.0, 481.0),
+        (600.0, 481.0),
+    ]
+
+
+def _requests_main(ws, monkeypatch, argv=(), *, requests=None):
+    rnd = ws / "panel" / "r1"
+    _write(rnd / "gaming-expert.json", [{"clip_ref": "23m15s", "story_beats": [
+        {"t_start": 1395.0, "t_end": 1410.0, "beat": "Neeko pick"}]}])  # fmt: skip
+    if requests is not None:
+        _write(ws / "story" / "r1" / "requests.json", requests)
+    monkeypatch.setattr(cli, "load_timeline", lambda a: _one_kill_timeline())
+    monkeypatch.setattr(cli, "load_lane", lambda a: None)
+    seen = {}
+
+    def fake_render(src, plan, out_dir, **_):
+        seen["plan"] = plan
+        return Path(out_dir) / "story.mp4"
+
+    monkeypatch.setattr(cli, "render_story", fake_render)
+    seen["rc"] = cli.main(
+        ["--asset", "a1", "--round", "r1", "--source", "C:/x.mp4", "--no-cards", *argv]
+    )
+    return seen
+
+
+_ADD = {"requests": [{"kind": "add_chapter", "at": 100, "title": "Walk out"}]}
+
+
+def test_requests_file_changes_the_rendered_plan(ws, monkeypatch):
+    seen = _requests_main(ws, monkeypatch, requests=_ADD)
+    assert seen["rc"] == 0
+    assert [c.title for c in seen["plan"].chapters] == ["Walk out", "Neeko pick"]
+    # the render never rewrites the owner's file
+    assert json.loads((ws / "story" / "r1" / "requests.json").read_text()) == _ADD
+
+
+def test_unmatched_request_warning_is_printed(ws, monkeypatch, capsys):
+    _requests_main(ws, monkeypatch, requests={"requests": [{"kind": "drop", "at": 9000}]})
+    assert "drop at 9000" in capsys.readouterr().out
+
+
+def test_no_requests_flag_ignores_the_file(ws, monkeypatch):
+    seen = _requests_main(ws, monkeypatch, ["--no-requests"], requests=_ADD)
+    assert [c.title for c in seen["plan"].chapters] == ["Neeko pick"]
+
+
+def test_invalid_requests_file_fails_before_render(ws, monkeypatch, capsys):
+    seen = _requests_main(ws, monkeypatch, requests={"requests": [{"kind": "bogus"}]})
+    assert seen["rc"] == 2
+    assert "plan" not in seen
+    assert "request #1" in capsys.readouterr().err
+
+
+def test_render_round_returns_path_and_raises_typed_errors(ws, monkeypatch):
+    tl = _one_kill_timeline()
+    monkeypatch.setattr(cli, "load_timeline", lambda a: tl)
+    monkeypatch.setattr(cli, "load_lane", lambda a: None)
+    monkeypatch.setattr(cli, "render_story", lambda *a, **k: Path("story.mp4"))
+    lines: list[str] = []
+    out = cli.render_round("a1", "r1", plays=False, source="C:/x.mp4", say=lines.append)
+    assert out == Path("story.mp4")
+    assert lines and "chapters" in lines[-1]
+    with pytest.raises(cli.StoryInputError, match="plays file"):
+        cli.render_round("a1", "r1", plays=True, source="C:/x.mp4")
+    monkeypatch.setattr(cli, "load_timeline", lambda a: None)
+    with pytest.raises(cli.StoryInputError, match="timeline"):
+        cli.render_round("a1", "r1", source="C:/x.mp4")
+
+
+# --- is_team_game ---
+
+
+def _match_cache(tmp_path, monkeypatch, payload):
+    d = tmp_path / "riot"
+    d.mkdir()
+    if payload is not None:
+        (d / "match.json").write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(cli, "cache_dir_for", lambda asset_id: d)
+
+
+def test_is_team_game_true_for_custom_game(tmp_path, monkeypatch):
+    _match_cache(tmp_path, monkeypatch, {"info": {"gameType": "CUSTOM_GAME"}})
+    assert cli.is_team_game("a") is True
+
+
+def test_is_team_game_false_for_matched_game(tmp_path, monkeypatch):
+    _match_cache(tmp_path, monkeypatch, {"info": {"gameType": "MATCHED_GAME"}})
+    assert cli.is_team_game("a") is False
+
+
+def test_is_team_game_false_without_match_json(tmp_path, monkeypatch):
+    _match_cache(tmp_path, monkeypatch, None)
+    assert cli.is_team_game("a") is False

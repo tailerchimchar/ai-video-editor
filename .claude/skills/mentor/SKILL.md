@@ -9,6 +9,11 @@ You are the taste layer for Noodlz's gameplay content pipeline. Your
 job is to prevent the same mistake twice: treating everything as if
 it's the same kind of edit.
 
+
+## Knowledge vault (read first)
+
+The owner's taught rules and League concepts live in the Obsidian vault `knowledge/` at the repo root. Before judging, read `knowledge/Home.md` and the notes it links for your area (Rules for editing, Concepts for League knowledge, Series for solo vs team, Games for past games). Where a note disagrees with this file, the vault wins, and notes marked `status: superseded` don't apply. When the owner teaches something new, the main session adds it to the vault.
+
 ## The four buckets
 
 Every piece of Noodlz's gameplay footage belongs to exactly one bucket.
@@ -127,6 +132,9 @@ Examples the pipeline has already learned (kept as living log):
   `suggested_fix` / `fix_seconds` so the loop can shift/extend, not
   just drop.
 
+- 2026-11-25 (League, story video): Zeri story v3 was "rly rly good" but had NO early game. Rule: a League story video always opens with the early game. Start at ~0:50 if both bot lanes fight over the bush, else 1:00 through ~2:00 (levels 1–2). Also keep any heavy level-3 trade or scuttle fight, a give-and-recall for an item (e.g. Cull), a move into the jungle, and being chunked low from early trades. The owner's **first back** is always in the video. Mid/late game is fine as is; late fights may want more lead-in context.
+- 2026-11-25 (League, narration): when the owner narrates a decision ("went Yun Tal because it scales better than Kraken Slayer"), the matching footage belongs under it: the purchase in the shop / walking out of base, and optionally the build path and an item image on screen.
+
 ## The corrections flywheel — `mentor_record_correction`
 
 When Noodlz corrects the pipeline in chat ("kills off by 1s", "the
@@ -180,3 +188,6 @@ their typed JSON, then loads THIS file and applies it as policy.
 - Round folder name (chair creates it under `WORKSPACE/panel/`): `YYYY-MM-DD_HHMM_<champion>_<K-D-A>`, e.g. `2026-11-19_0145_zeri_9-5-6`. Date and local start time of the recording (from the highlights session folder, `11-19-2026_1h45` -> `2026-11-19_0145`), champion lower-case, KDA at the end. Two games of the same champion on one day never collide. Drive mirrors it: `clips/<round>/`, `digests/<date>/`.
 - When the Grok team is on, publish the round after the chair decides: `uv run grokbot-publish-round <round folder> --game league --clips-dir "<highlights session folder>" [--compilation-id <id>] [--asset-id <id>]` from `api/` (see `docs/grokbot/setup.md` section 10).
 - 2026-11-19 (League, first panel round): the chair held one LoL tie for Noodlz (9m41s "Diana" gripe: gaming-expert 1/5 vs viewer-expert pass). The VLM critic hears nothing, so for voice-comms shorts its dead_air flags on talk-only tails are advisory, not blocking. Panel agents need the Write tool to file their JSON; fixed in .claude/agents.
+- 2026-11-25 (League, story v4 review): when the owner's team wins a fight a player down, start the chapter before the ally death that caused it (the "Ally slain" banner or kill feed is enough when the death is off screen). Context: Zeri closeout was a 4v5 after Urgot died at 33:49; the video skipped it. Record via `mentor_record_correction` when the API is up.
+- 2026-11-25 (League): kill and death sound effects must land within 0.5 s of the HUD KDA change. Calibrate the recording offset from the on-screen game clock or KDA, never a guessed manual offset. Context: Zeri v4 used −17 s, true offset was −21.6 s; ka-chings were 2–4 s off from 22 min on.
+- 2026-11-25 (League): the story format (early game, first back, every fight that moved the score, closeout) is the owner-approved base. Owner edits on top ("make this teamfight cinematic", "show me walking out of base at 20:05") are additions, not a new plan. 2–3 games per video is the goal.

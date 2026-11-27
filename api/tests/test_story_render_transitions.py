@@ -10,6 +10,12 @@ from ai_video_editor.story import render
 from ai_video_editor.story.planner import Chapter, StoryPlan
 
 
+@pytest.fixture(autouse=True)
+def _no_audio_levelling(monkeypatch):
+    """The final loudness pass is tested in test_story_render.py; skip it here."""
+    monkeypatch.setattr(render, "level_audio", lambda story: None)
+
+
 def test_chapter_cmd_has_fades_when_transition_set():
     cmd = render.chapter_cmd("a.mp4", 100.0, 120.0, "o.mp4", mic_stream=2, fade_s=0.25)
     fc = cmd[cmd.index("-filter_complex") + 1]

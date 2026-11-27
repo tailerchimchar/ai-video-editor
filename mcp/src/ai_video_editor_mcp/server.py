@@ -156,9 +156,7 @@ def list_session_buckets(game: str, session: str) -> dict:
     - voice_over list -> hold for VO scripting
     """
     with _client() as c:
-        return c.get(
-            f"{API}/highlights/{game}/{session}/buckets"
-        ).json()
+        return c.get(f"{API}/highlights/{game}/{session}/buckets").json()
 
 
 @mcp.tool()
@@ -429,7 +427,8 @@ def zoom_compilation_clip(
     `clip_ref` accepts a 1-based index ('2'), a UUID prefix, or a time
     string ('0:32' tries reel time first, then source time)."""
     return _compile_edit(
-        compilation_id, "effect",
+        compilation_id,
+        "effect",
         {"clip_ref": clip_ref, "kind": "zoom", "factor": factor, "roi": roi},
     )
 
@@ -446,9 +445,9 @@ def focus_compilation_clip(
     """Add a spotlight (darken-everywhere-except-circle) effect to one
     clip in a compilation. Positions are fractions of frame size."""
     return _compile_edit(
-        compilation_id, "effect",
-        {"clip_ref": clip_ref, "kind": "focus", "x": x, "y": y,
-         "radius": radius, "dim": dim},
+        compilation_id,
+        "effect",
+        {"clip_ref": clip_ref, "kind": "focus", "x": x, "y": y, "radius": radius, "dim": dim},
     )
 
 
@@ -458,7 +457,8 @@ def caption_compilation_clip(compilation_id: str, clip_ref: str, text: str) -> d
     onto one clip in the compilation. Use this to brand/title a moment
     like 'CLUTCH' or 'PENTAKILL'."""
     return _compile_edit(
-        compilation_id, "effect",
+        compilation_id,
+        "effect",
         {"clip_ref": clip_ref, "kind": "caption", "text": text},
     )
 
@@ -471,7 +471,8 @@ def extend_compilation_clip(
     and/or seconds past its current end). The clip gets re-rendered;
     everything else stays cached."""
     return _compile_edit(
-        compilation_id, "extend",
+        compilation_id,
+        "extend",
         {"clip_ref": clip_ref, "before": before, "after": after},
     )
 
@@ -582,9 +583,7 @@ def tiktok_caption_clip(compilation_id: str, clip_ref: str) -> dict:
 
     Only this clip re-renders. Use `segment_caption_clip` to revert.
     """
-    return _compile_edit(
-        compilation_id, "caption_mode", {"clip_ref": clip_ref, "mode": "tiktok"}
-    )
+    return _compile_edit(compilation_id, "caption_mode", {"clip_ref": clip_ref, "mode": "tiktok"})
 
 
 @mcp.tool()
@@ -592,9 +591,7 @@ def segment_caption_clip(compilation_id: str, clip_ref: str) -> dict:
     """Revert a clip's captions back to the default segment style
     (one bottom-center line per Whisper segment). Companion to
     `tiktok_caption_clip`."""
-    return _compile_edit(
-        compilation_id, "caption_mode", {"clip_ref": clip_ref, "mode": "segment"}
-    )
+    return _compile_edit(compilation_id, "caption_mode", {"clip_ref": clip_ref, "mode": "segment"})
 
 
 @mcp.tool()
@@ -851,9 +848,7 @@ def insert_compilation_intro_after(
     if intro_name is not None:
         body["intro_name"] = intro_name
     with _client() as c:
-        return c.post(
-            f"{API}/edit/compile/{compilation_id}/insert_intro", json=body
-        ).json()
+        return c.post(f"{API}/edit/compile/{compilation_id}/insert_intro", json=body).json()
 
 
 @mcp.tool()
@@ -872,9 +867,7 @@ def insert_compilation_intro_at(
     if intro_name is not None:
         body["intro_name"] = intro_name
     with _client() as c:
-        return c.post(
-            f"{API}/edit/compile/{compilation_id}/insert_intro", json=body
-        ).json()
+        return c.post(f"{API}/edit/compile/{compilation_id}/insert_intro", json=body).json()
 
 
 @mcp.tool()
@@ -920,9 +913,7 @@ def remove_clip_caption(compilation_id: str, clip_ref: str, segment_index: int) 
     """
     body = {"clip_ref": clip_ref, "segment_index": segment_index}
     with _client() as c:
-        return c.post(
-            f"{API}/edit/compile/{compilation_id}/clip_captions/remove", json=body
-        ).json()
+        return c.post(f"{API}/edit/compile/{compilation_id}/clip_captions/remove", json=body).json()
 
 
 @mcp.tool()
@@ -975,9 +966,7 @@ def edit_clip_captions(compilation_id: str, clip_ref: str, segments: list[dict])
     """
     body = {"clip_ref": clip_ref, "segments": segments}
     with _client() as c:
-        return c.post(
-            f"{API}/edit/compile/{compilation_id}/clip_captions", json=body
-        ).json()
+        return c.post(f"{API}/edit/compile/{compilation_id}/clip_captions", json=body).json()
 
 
 @mcp.tool()
@@ -1000,9 +989,7 @@ def reorder_compilation_clips(compilation_id: str, mode: str) -> dict:
     `show_clip_numbers` is on.
     """
     with _client() as c:
-        return c.post(
-            f"{API}/edit/compile/{compilation_id}/reorder", json={"mode": mode}
-        ).json()
+        return c.post(f"{API}/edit/compile/{compilation_id}/reorder", json={"mode": mode}).json()
 
 
 @mcp.tool()
@@ -1081,9 +1068,7 @@ def list_compilation_history(compilation_id: str) -> dict:
 
 
 @mcp.tool()
-def revert_compilation(
-    compilation_id: str, steps: int = 1, to_version: int | None = None
-) -> dict:
+def revert_compilation(compilation_id: str, steps: int = 1, to_version: int | None = None) -> dict:
     """Undo edits by restoring an older spec snapshot from the journal.
 
     Two modes (use one):
@@ -1574,9 +1559,7 @@ def compile_cross_asset_montage(
     if beat_flash_source:
         body["beat_flash_source"] = beat_flash_source
     with _client() as c:
-        job_id = c.post(f"{API}/shorts/cross_asset_montage", json=body).json()[
-            "job_id"
-        ]
+        job_id = c.post(f"{API}/shorts/cross_asset_montage", json=body).json()["job_id"]
         return _wait_for_job(c, job_id)
 
 
@@ -1596,9 +1579,7 @@ def preview_cross_asset_montage(game: str, window: str = "week") -> dict:
     if window not in ("day", "week", "all"):
         return {"status": "failed", "error": "window must be 'day', 'week', or 'all'"}
     with _client() as c:
-        return c.get(
-            f"{API}/shorts/cross_asset_montage/preview?game={game}&window={window}"
-        ).json()
+        return c.get(f"{API}/shorts/cross_asset_montage/preview?game={game}&window={window}").json()
 
 
 @mcp.tool()
@@ -1678,9 +1659,7 @@ def compile_outplayed_montage(
     if analyze_pool_size is not None:
         body["analyze_pool_size"] = analyze_pool_size
     with _client() as c:
-        job_id = c.post(f"{API}/shorts/outplayed_montage", json=body).json()[
-            "job_id"
-        ]
+        job_id = c.post(f"{API}/shorts/outplayed_montage", json=body).json()["job_id"]
         return _wait_for_job(c, job_id)
 
 
@@ -1702,9 +1681,7 @@ def preview_outplayed_montage(
     if since_days is not None:
         params.append(f"since_days={since_days}")
     with _client() as c:
-        return c.get(
-            f"{API}/shorts/outplayed_montage/preview?{'&'.join(params)}"
-        ).json()
+        return c.get(f"{API}/shorts/outplayed_montage/preview?{'&'.join(params)}").json()
 
 
 @mcp.tool()
@@ -1746,9 +1723,7 @@ def list_outplayed_clips(
     if limit is not None:
         params.append(f"limit={limit}")
     with _client() as c:
-        return c.get(
-            f"{API}/shorts/browse/outplayed?{'&'.join(params)}"
-        ).json()
+        return c.get(f"{API}/shorts/browse/outplayed?{'&'.join(params)}").json()
 
 
 @mcp.tool()
@@ -1768,9 +1743,7 @@ def list_highlights_sessions(game: str | None = None) -> dict:
 
 
 @mcp.tool()
-def list_highlights_clips(
-    session_folder: str, game: str | None = None
-) -> dict:
+def list_highlights_clips(session_folder: str, game: str | None = None) -> dict:
     """List clips inside one analyzed highlights session folder.
 
     `session_folder` is the folder name (e.g. `07-04-2026_15h15`,
@@ -1781,9 +1754,7 @@ def list_highlights_clips(
     """
     params = f"?game={game}" if game else ""
     with _client() as c:
-        return c.get(
-            f"{API}/shorts/browse/highlights/{session_folder}{params}"
-        ).json()
+        return c.get(f"{API}/shorts/browse/highlights/{session_folder}{params}").json()
 
 
 # ---------------------------------------------------------------------
@@ -1867,9 +1838,7 @@ def compile_custom_montage(
     if burn_title is not None:
         body["burn_title"] = burn_title
     with _client() as c:
-        job_id = c.post(f"{API}/shorts/custom_montage", json=body).json()[
-            "job_id"
-        ]
+        job_id = c.post(f"{API}/shorts/custom_montage", json=body).json()["job_id"]
         return _wait_for_job(c, job_id)
 
 
@@ -2320,6 +2289,267 @@ def get_feedback_summary(compilation_id: str | None = None) -> dict:
         params["compilation_id"] = compilation_id
     with _client() as c:
         return c.get(f"{API}/feedback/summary", params=params).json()
+
+
+@mcp.tool()
+def story_list_requests(round: str) -> dict:
+    """List the owner's story requests for a round (panel folder name).
+
+    Returns `{round, requests: [{index, kind, at, ...}]}`. `index` is
+    0-based and is what `story_remove_request` takes. Read-only.
+    """
+    with _client() as c:
+        return c.get(f"{API}/story/{round}/requests").json()
+
+
+@mcp.tool()
+def story_add_request(
+    round: str,
+    kind: str,
+    at: str,
+    before_s: float | None = None,
+    after_s: float | None = None,
+    title: str | None = None,
+    note: str | None = None,
+    effect: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    params: dict | None = None,
+) -> dict:
+    """Record one owner request for a round's story. It is applied the next
+    time the story renders (`story_render`); nothing renders here.
+
+    `round` = panel folder name. `at` = the GAME clock the owner sees
+    ("20:05", "1:02:05" or seconds), not recording time. `kind`:
+    - `add_chapter`: a new chapter around `at` (`before_s` default 5,
+      `after_s` default 20, optional `title`, `note`).
+    - `extend`: grow the chapter at `at` by `before_s` / `after_s`.
+    - `drop`: remove the chapter at `at`.
+    - `trim`: shrink the chapter at `at` to `start`..`end` (game clock; either
+      may be omitted). Never grows it; kills/effects/b-roll outside go.
+    - `mute`: silence only the owner's mic over `start`..`end` (default the
+      whole chapter at `at`), e.g. off-game talk to narrate over later. Game
+      audio keeps playing.
+    - `effect`: `effect` is letterbox | slowmo | zoom | focus, over
+      `start`..`end` (game clock; default the chapter around `at`),
+      optional numeric/str `params`.
+
+    Examples. "walk out of base at 20:05":
+      story_add_request(round, "add_chapter", "20:05", title="Walking out of base")
+    "make the last teamfight cinematic" (fight at 31:10): three calls, same window:
+      story_add_request(round, "effect", "31:10", effect="letterbox", start="31:05", end="31:20")
+      story_add_request(round, "effect", "31:10", effect="slowmo", start="31:08", end="31:14")
+      story_add_request(round, "effect", "31:10", effect="focus", start="31:05", end="31:20")
+
+    "cut the first 10 s of the chapter at 31:10" / "mute my mic 12:00-12:30":
+      story_add_request(round, "trim", "31:10", start="31:20")
+      story_add_request(round, "mute", "12:10", start="12:00", end="12:30")
+
+    Returns the updated list with indexes. Invalid input comes back as an
+    error detail (nothing is saved).
+    """
+    body: dict = {"kind": kind, "at": at}
+    for key, val in (
+        ("before_s", before_s),
+        ("after_s", after_s),
+        ("title", title),
+        ("note", note),
+        ("effect", effect),
+        ("start", start),
+        ("end", end),
+        ("params", params),
+    ):
+        if val is not None:
+            body[key] = val
+    with _client() as c:
+        return c.post(f"{API}/story/{round}/requests", json=body).json()
+
+
+@mcp.tool()
+def story_remove_request(round: str, index: int) -> dict:
+    """Remove one story request by its 0-based `index` (see
+    `story_list_requests`). Indexes shift after a removal, so list again
+    before removing a second one. Returns the updated list."""
+    with _client() as c:
+        return c.delete(f"{API}/story/{round}/requests/{index}").json()
+
+
+@mcp.tool()
+def story_render(round: str, asset_id: str, plays: bool = True) -> dict:
+    """Re-render a round's story with its current requests applied (same as
+    the `story-render` CLI). `plays=True` builds chapters from the frozen
+    plays file; False uses the panel beats. Heavy ffmpeg work: one at a time.
+
+    Job-based; this tool waits for completion. On success `output_path` is
+    the story video. On timeout the job continues in the background.
+    """
+    with _client() as c:
+        r = c.post(f"{API}/story/{round}/render", json={"asset_id": asset_id, "plays": plays})
+        if r.status_code != 200:
+            return {"status": "failed", "error": r.text}
+        return _wait_for_job(c, r.json()["job_id"], timeout_s=1800)
+
+
+@mcp.tool()
+def story_join(
+    rounds: list[str],
+    hook: list[str] | None = None,
+    hook_title: str | None = None,
+    outro: bool = False,
+    music_start_s: float = 0.0,
+    subscribe_after: int = 1,
+    title: str | None = None,
+) -> dict:
+    """Join several rendered stories (round folder names, in game order) into
+    one video: each game swipes in right-to-left with a whoosh, and the like &
+    subscribe overlay plays early in the game after `subscribe_after` (0 =
+    none). Same as the `story-join` CLI; the output is
+    WORKSPACE/story/joined_<date>_<champs>.mp4 plus .join.json / .chapters.txt.
+
+    Cold open: `hook` lists clips as "GAME:CHAPTER" or "GAME:CHAPTER:TEXT"
+    (1-based game in `rounds`, 1-based chapter of that story). Each clip is
+    cut just before the play's outcome, freezes, blurs, and pops TEXT
+    (none by default). `hook_title` pops over the first clip, e.g. "Want to
+    know the trick to laning?". `outro=True` adds an end card (thanks for
+    watching + subscribe) over WORKSPACE/music/outro.* when the owner put
+    one there (`music_start_s` skips into it); silent otherwise.
+
+    Never mix solo-queue and team (ACL) games in one join. Heavy ffmpeg
+    work: one at a time. Job-based; waits for completion.
+    """
+    body = {
+        "rounds": rounds,
+        "hook": hook or [],
+        "hook_title": hook_title,
+        "outro": outro,
+        "music_start_s": music_start_s,
+        "subscribe_after": subscribe_after,
+        "title": title,
+    }
+    with _client() as c:
+        r = c.post(f"{API}/story/join", json=body)
+        if r.status_code != 200:
+            return {"status": "failed", "error": r.text}
+        return _wait_for_job(c, r.json()["job_id"], timeout_s=3600)
+
+
+@mcp.tool()
+def story_suggest_edits(round: str) -> dict:
+    """Get editor suggestions for a rendered story: 3-6 effects
+    (letterbox_focus, slowmo, zoom) on its best moments. The gaming, viewer
+    and editing voices are asked as typed questions through Jev (free rules
+    when Jev is not configured); no Anthropic call. Needs the round's story
+    rendered first (`story_render`). Replaces earlier suggestions.
+
+    Job-based; this tool waits, then returns the suggestions:
+    `{status, items: [{id, kind, chapter_index, start_s, end_s, params,
+    reason, play_score, pop_p, backend, accepted}]}` with game-clock times.
+    Next: show them to the owner, `story_accept_suggestion` the ones they
+    want, then `story_apply_suggestions`."""
+    with _client() as c:
+        r = c.post(f"{API}/story/{round}/suggestions")
+        if r.status_code != 200:
+            return {"status": "failed", "error": r.text}
+        job = _wait_for_job(c, r.json()["job_id"], timeout_s=600)
+        if job.get("status") != "completed":
+            return job
+        return c.get(f"{API}/story/{round}/suggestions").json()
+
+
+@mcp.tool()
+def story_list_suggestions(round: str) -> dict:
+    """Show a round's editor suggestions and which the owner accepted
+    (`accepted`: true / false / null = undecided). `status` is pending
+    (job running), ready, applied or failed (`error` says why). Read-only."""
+    with _client() as c:
+        return c.get(f"{API}/story/{round}/suggestions").json()
+
+
+@mcp.tool()
+def story_accept_suggestion(round: str, item_id: str, accepted: bool | None) -> dict:
+    """Tick (`accepted=True`), reject (`False`) or clear (`None`) one
+    suggestion by its `id` from `story_list_suggestions`. Nothing renders
+    here. Returns the updated suggestions."""
+    with _client() as c:
+        return c.put(
+            f"{API}/story/{round}/suggestions/{item_id}", json={"accepted": accepted}
+        ).json()
+
+
+@mcp.tool()
+def story_apply_suggestions(round: str) -> dict:
+    """Apply the accepted suggestions: each becomes `effect` request(s) in the
+    round's requests (letterbox_focus = letterbox + focus over the same span;
+    re-applying never duplicates), then the story re-renders. Heavy ffmpeg
+    work: one at a time. Narration takes recorded before this go stale.
+
+    Job-based; this tool waits for the render. On success `output_path` is
+    the story video. On timeout the job continues in the background."""
+    with _client() as c:
+        r = c.post(f"{API}/story/{round}/suggestions/apply")
+        if r.status_code != 200:
+            return {"status": "failed", "error": r.text}
+        return _wait_for_job(c, r.json()["job_id"], timeout_s=1800)
+
+
+@mcp.tool()
+def narration_status(kind: str, key: str) -> dict:
+    """Show a video's narration: takes (id, start_s, duration_s, has_camera),
+    camera box, `stale` (the video changed after the takes were recorded) and
+    the video URL. `kind` is the narratable type ("story"); `key` is its id
+    (for a story, the round folder name). Creates an empty session on first call.
+
+    Recording itself is browser-only: tell the owner to open
+    `/narrate/<kind>/<key>` in the web app, record the takes there, then use
+    `narration_export` here."""
+    with _client() as c:
+        return c.get(f"{API}/narration/{kind}/{key}").json()
+
+
+@mcp.tool()
+def narration_set_camera(
+    kind: str,
+    key: str,
+    enabled: bool,
+    width_frac: float | None = None,
+    x: float | None = None,
+    y: float | None = None,
+) -> dict:
+    """Show or hide the camera box in the narrated export, and optionally
+    move/resize it. `width_frac` is the box width as a fraction of the frame
+    (0.08-0.5); `x`/`y` are the box's top-left corner as frame fractions
+    (0-1). Anything left out keeps the game profile default. Returns the
+    updated session (with the resolved `camera_px`)."""
+    body: dict = {"enabled": enabled}
+    for name, value in (("width_frac", width_frac), ("x", x), ("y", y)):
+        if value is not None:
+            body[name] = value
+    with _client() as c:
+        return c.put(f"{API}/narration/{kind}/{key}/camera", json=body).json()
+
+
+@mcp.tool()
+def narration_remove_take(kind: str, key: str, take_id: str) -> dict:
+    """Delete one recorded take by `take_id` (see `narration_status`).
+    Returns the updated session."""
+    with _client() as c:
+        return c.delete(f"{API}/narration/{kind}/{key}/takes/{take_id}").json()
+
+
+@mcp.tool()
+def narration_export(kind: str, key: str, force: bool = False) -> dict:
+    """Mix the recorded takes over the video into `narrated.mp4` (original
+    audio ducks while the owner talks; camera box only if enabled). Refuses
+    when the video changed after recording (`stale`) unless `force=True`;
+    to keep the takes as they are, ask the owner to re-lock in the web page.
+
+    Job-based; this tool waits for completion. On success `output_path` is the
+    narrated video. On timeout the job continues in the background."""
+    with _client() as c:
+        r = c.post(f"{API}/narration/{kind}/{key}/export", json={"force": force})
+        if r.status_code != 200:
+            return {"status": "failed", "error": r.text}
+        return _wait_for_job(c, r.json()["job_id"], timeout_s=1800)
 
 
 def main() -> None:

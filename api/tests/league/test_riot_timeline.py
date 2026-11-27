@@ -297,6 +297,48 @@ def test_record_offset_noop_without_cache(tmp_path):
     assert not (tmp_path / "missing").exists()
 
 
+def test_hud_offset_survives_record_and_refetch(tmp_path):
+    # Yunara 2026-11-26: a candidates re-run reset the HUD +8.2 s to -17.
+    from ai_video_editor.league.riot_timeline import hud_offset, record_offset, save_cache
+
+    load_or_fetch("asset-1", fetch=_fetcher("high", []), cache_dir=tmp_path)
+    record_offset("asset-1", 8.2, source="hud", cache_dir=tmp_path)
+    record_offset("asset-1", -17.0, source="manual_override", cache_dir=tmp_path)
+    assert hud_offset(tmp_path) == 8.2
+    save_cache(
+        tmp_path,
+        _match(),
+        _timeline(),
+        match_id="NA1_TEST",
+        confidence="high",
+        offset_s=0.0,
+        owner_puuid="ME",
+        offset_source="sync_only",
+    )
+    meta = json.loads((tmp_path / "meta.json").read_text())
+    assert (meta["offset_s"], meta["offset_source"]) == (8.2, "hud")
+    record_offset("asset-1", 8.4, source="hud", cache_dir=tmp_path)
+    assert hud_offset(tmp_path) == 8.4
+
+
+def test_hud_offset_not_kept_for_a_different_match(tmp_path):
+    from ai_video_editor.league.riot_timeline import hud_offset, record_offset, save_cache
+
+    load_or_fetch("asset-1", fetch=_fetcher("high", []), cache_dir=tmp_path)
+    record_offset("asset-1", 8.2, source="hud", cache_dir=tmp_path)
+    save_cache(
+        tmp_path,
+        _match(),
+        _timeline(),
+        match_id="NA1_OTHER",
+        confidence="high",
+        offset_s=1.0,
+        owner_puuid="ME",
+        offset_source="audio",
+    )
+    assert hud_offset(tmp_path) is None
+
+
 # ----- drift -----
 
 

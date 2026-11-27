@@ -26,8 +26,16 @@ from ..config import settings
 from .calibrate import align_offset
 from .candidates.riot import detect_riot_events
 from .ocr import verify_offset
-from .offset import calibrate_offset
-from .riot_timeline import DRIFT_WARN_S, offset_drift_s, pre_pad_for_drift, record_offset
+from .offset import OffsetResult, calibrate_offset
+from .riot_timeline import (
+    DRIFT_WARN_S,
+    HUD_SOURCE,
+    cache_dir_for,
+    hud_offset,
+    offset_drift_s,
+    pre_pad_for_drift,
+    record_offset,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -86,8 +94,15 @@ def gather_lol_candidates(
     # otherwise align the kill comb against this recording's loudness,
     # with an OCR clock read as a tiebreaker if the lock is weak.
     kills = sorted((r["metadata"]["riot_event_ms"]) / 1000.0 for r in riot_rows)
-    cal = calibrate_offset(
-        kills, energy, asset.get("path"), align=align_offset, verify=verify_offset
+    # A HUD measurement (riot-hud-sync) beats every automatic method and the
+    # .env override: re-runs must not move clips off it.
+    hud = hud_offset(cache_dir_for(video_id))
+    cal = (
+        OffsetResult(hud, None, HUD_SOURCE)
+        if hud is not None
+        else calibrate_offset(
+            kills, energy, asset.get("path"), align=align_offset, verify=verify_offset
+        )
     )
     offset, quality, offset_source, ocr_check = (
         cal.offset_s,
@@ -99,10 +114,11 @@ def gather_lol_candidates(
     # riot.py built fight bounds at game clock + sync; move them to the
     # calibrated basis (game clock + calibrated + sync) shared with the anchor.
     fight_shift = offset - settings.riot_sync_offset_seconds
-    # A human-measured override is trusted as-is: no drift second-guessing.
+    # A human-measured override or HUD measurement is trusted as-is: no
+    # drift second-guessing.
     wide_pre_pad = (
         None
-        if offset_source == "manual_override"
+        if offset_source in ("manual_override", HUD_SOURCE)
         else _drift_pre_pad(kills, offset, energy, duration)
     )
     try:

@@ -15,6 +15,11 @@ Folder: `SKILL.md` (this file, under 400 lines) · `dictionary.md` ·
 **Before answering:** read `dictionary.md`, then `log.md` entries tagged
 `analytics:` (what actually worked for Noodlz beats any rule below).
 
+
+## Knowledge vault (read first)
+
+The owner's taught rules and League concepts live in the Obsidian vault `knowledge/` at the repo root. Before judging, read `knowledge/Home.md` and the notes it links for your area (Rules for editing, Concepts for League knowledge, Series for solo vs team, Games for past games). Where a note disagrees with this file, the vault wins, and notes marked `status: superseded` don't apply. When the owner teaches something new, the main session adds it to the vault.
+
 ## Jobs
 
 1. **Hook and retention.** Does t=0-3s earn the next ten seconds? Where

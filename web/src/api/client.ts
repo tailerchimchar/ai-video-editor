@@ -20,7 +20,7 @@ export class ApiError extends Error {
 }
 
 export interface RequestOptions {
-  method?: "GET" | "POST" | "PATCH" | "DELETE";
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: unknown;
   signal?: AbortSignal;
   /** Override the request content-type — defaults to JSON. */
@@ -40,6 +40,10 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
     if (opts.body instanceof FormData) {
       body = opts.body;
       // Browser sets multipart boundary; do not force content-type.
+    } else if (opts.body instanceof Blob) {
+      // Raw binary upload (e.g. a recorded take): send the bytes as-is.
+      headers["content-type"] = opts.contentType ?? opts.body.type;
+      body = opts.body;
     } else {
       headers["content-type"] = opts.contentType ?? "application/json";
       body = JSON.stringify(opts.body);

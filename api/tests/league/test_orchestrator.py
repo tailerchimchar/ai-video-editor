@@ -111,3 +111,25 @@ def test_manual_override_skips_drift_check(cfg, monkeypatch):
     out, _ = orch.gather_lol_candidates(_asset(), 1000.0, np.zeros(1000))
     assert out[0]["metadata"]["offset_source"] == "manual_override"
     assert out[0]["metadata"]["fight_start_s"] == 112.0
+
+
+def test_hud_offset_beats_override_and_calibration(cfg, monkeypatch):
+    # Yunara 2026-11-26: the .env override (-17) re-cut clips 25 s off the
+    # HUD-measured +8.2 s on every candidates run.
+    from ai_video_editor.config import settings
+    from ai_video_editor.league.riot_timeline import cache_dir_for
+
+    monkeypatch.setattr(settings, "riot_offset_override_seconds", -17.0)
+    d = cache_dir_for(_asset()["id"])
+    d.mkdir(parents=True)
+    (d / "meta.json").write_text(
+        json.dumps({"match_id": "M", "offset_s": 8.2, "offset_source": "hud"}), encoding="utf-8"
+    )
+    rows = [_row(t, (t, t)) for t in (100.0, 200.0)]
+    monkeypatch.setattr(orch, "detect_riot_events", lambda a, d: (rows, "ok"))
+    monkeypatch.setattr(orch, "align_offset", lambda *a: pytest.fail("calibration ran"))
+    monkeypatch.setattr(orch, "_drift_pre_pad", lambda *a: pytest.fail("drift ran"))
+    out, _ = orch.gather_lol_candidates(_asset(), 1000.0, np.zeros(1000))
+    meta = out[0]["metadata"]
+    assert (meta["offset_source"], meta["anchor_seconds"]) == ("hud", 108.2)
+    assert json.loads((d / "meta.json").read_text())["offset_s"] == 8.2
