@@ -2407,7 +2407,7 @@ def story_join(
     Cold open: `hook` lists clips as "GAME:CHAPTER" or "GAME:CHAPTER:TEXT"
     (1-based game in `rounds`, 1-based chapter of that story). Each clip is
     cut just before the play's outcome, freezes, blurs, and pops TEXT
-    (default "???"). `hook_title` pops over the first clip, e.g. "Want to
+    (none by default). `hook_title` pops over the first clip, e.g. "Want to
     know the trick to laning?". `outro=True` adds an end card (thanks for
     watching + subscribe) over WORKSPACE/music/outro.* when the owner put
     one there (`music_start_s` skips into it); silent otherwise.

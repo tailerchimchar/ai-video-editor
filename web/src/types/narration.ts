@@ -82,6 +82,11 @@ export interface SessionView {
   camera_px: PixelBox;
   /** Game-profile default box for a 1920x1080 frame. */
   default_camera_px?: PixelBox;
+  /**
+   * The narration folder (`takes/`, `narrated.mp4`) under `/workspace`. Not
+   * always next to the video: joined videos keep theirs in `story/_joined/<key>/`.
+   */
+  narration_url?: string | null;
   /** URL of an existing `narrated.mp4`, or null before the first export. */
   export_url: string | null;
 }

@@ -31,7 +31,7 @@ def _ch(start, end, kills=(), deaths=()) -> Chapter:
 
 
 def test_parse_pick():
-    assert parse_pick("3:2") == HookPick(3, 2, "???")
+    assert parse_pick("3:2") == HookPick(3, 2, "")
     assert parse_pick("3:2:2v3? no way") == HookPick(3, 2, "2v3? no way")
     with pytest.raises(ValueError):
         parse_pick("3")
@@ -72,6 +72,13 @@ def test_hook_cmd_freezes_blurs_and_pops_text():
     assert "text='2v3?'" in g and "text='Want to know?'" in g
     assert "fontfile='C\\:/f.ttf'" in g
     assert f"apad=whole_dur={6.0 + bookends.FREEZE_S}" in g
+
+
+def test_hook_cmd_without_text_has_no_teaser():
+    clip = HookClip(Path("s.mp4"), 10.0, 16.0, "")
+    g = bookends.hook_cmd(clip, "o.mp4", title=None, font="f")
+    g = g[g.index("-filter_complex") + 1]
+    assert "drawtext" not in g and "[f]null[v]" in g and "gblur" in g
 
 
 def test_outro_with_and_without_music():

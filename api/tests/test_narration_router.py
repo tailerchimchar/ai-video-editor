@@ -161,12 +161,24 @@ def test_put_camera(client, video):
 
 
 def test_stale_after_video_changes_and_relock_clears(client, video):
-    client.get(BASE)
+    _take(client)
     video.write_bytes(b"a re-rendered video")
     assert client.get(BASE).json()["stale"] is True
     r = client.post(f"{BASE}/relock")
     assert r.status_code == 200 and r.json()["stale"] is False
     assert client.get(BASE).json()["stale"] is False
+
+
+def test_no_takes_is_never_stale_and_first_take_pins_the_video(client, video):
+    client.get(BASE)
+    video.write_bytes(b"a re-rendered video")
+    assert client.get(BASE).json()["stale"] is False
+    _take(client)  # recorded over the new video
+    assert client.get(BASE).json()["stale"] is False
+
+
+def test_view_sends_the_narration_folder_url(client, video):
+    assert client.get(BASE).json()["narration_url"].endswith("/narration")
 
 
 # -- export ------------------------------------------------------------

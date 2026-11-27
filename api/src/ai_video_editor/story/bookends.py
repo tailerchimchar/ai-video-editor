@@ -2,7 +2,7 @@
 
 Hook: one short clip per pick (a game's chapter), cut just before the play's
 outcome lands (the owner's first kill or death in it). The last frame
-freezes, blurs and darkens, and a teaser text pops in, so the payoff is
+freezes, blurs and darkens (optionally with a teaser text), so the payoff is
 hidden until the viewer reaches the full chapter later. The first clip also
 carries the opening line ("Want to know the trick to laning?"). Each clip is
 its own mp4, so story-join swipes (with the whoosh) between hook clips and
@@ -31,7 +31,7 @@ HOOK_MIN_S = 2.0
 FREEZE_S = 1.4  # frozen, blurred tail with the teaser text
 BLUR_RAMP_S = 0.25
 TITLE_S = 2.8  # the opening line stays this long
-DEFAULT_FREEZE_TEXT = "???"
+DEFAULT_FREEZE_TEXT = ""  # owner 2026-11-27: no teaser text by default
 OUTRO_S = 8.0
 OUTRO_SUB_AT_S = 0.6
 OUTRO_SUB_WIDTH = 960  # px, the subscribe animation in the outro
@@ -124,10 +124,12 @@ def hook_cmd(clip: HookClip, out: str, *, title: str | None, font: str) -> list[
         "[q]gblur=sigma=28,eq=brightness=-0.12:saturation=0.6[qb]",
         f"[p][qb]blend=all_expr='A+(B-A)*clip((T-{d})/{BLUR_RAMP_S}\\,0\\,1)'[f]",
     ]
-    texts = [_text(clip.text, size=200, y="(h-th)/2", at=d + 0.05, until=None, font=font)]
+    texts = []
+    if clip.text:
+        texts.append(_text(clip.text, size=200, y="(h-th)/2", at=d + 0.05, until=None, font=font))
     if title:
         texts.append(_text(title, size=104, y="h*0.14", at=0.15, until=TITLE_S, font=font))
-    v.append(f"[f]{','.join(texts)}[v]")
+    v.append(f"[f]{','.join(texts)}[v]" if texts else "[f]null[v]")
     a = (
         "[0:a]aresample=48000,aformat=channel_layouts=stereo,"
         f"afade=t=out:st={max(0.0, d - 0.25)}:d=0.25,apad=whole_dur={total}[a]"

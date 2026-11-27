@@ -556,7 +556,7 @@ def main(argv: list[str] | None = None) -> int:
         default=[],
         metavar="GAME:CHAPTER[:TEXT]",
         help="a cold-open clip: game n's chapter m (1-based), cut before its outcome; "
-        "TEXT pops on the frozen frame (default ???). Repeat for more clips.",
+        "optional TEXT pops on the frozen frame. Repeat for more clips.",
     )
     ap.add_argument("--hook-title", help="opening line over the first hook clip")
     ap.add_argument("--outro", action="store_true", help="add the end card after the last game")

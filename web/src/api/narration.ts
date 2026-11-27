@@ -65,13 +65,13 @@ export function startExport(target: TargetRef, force = false): Promise<{ job_id:
 }
 
 /*
- * File URLs. The backend stores narration files in `<work_dir>/narration/`
- * and the video it narrates lives in `<work_dir>/`, both under the
- * `/workspace` static mount (spec "Files"). These two builders are the
- * only place that layout is known on the client.
+ * File URLs. The API sends the narration folder (`narration_url`); older
+ * sessions fall back to `<video folder>/narration/` (spec "Files"). These
+ * builders are the only place that layout is known on the client.
  */
 
 function narrationFolderUrl(view: SessionView): string {
+  if (view.narration_url) return view.narration_url;
   const videoPath = view.video_url.split("?")[0] ?? view.video_url;
   const folder = videoPath.slice(0, videoPath.lastIndexOf("/"));
   return `${folder}/narration`;
