@@ -2557,7 +2557,135 @@ def narration_export(kind: str, key: str, force: bool = False) -> dict:
         r = c.post(f"{API}/narration/{kind}/{key}/export", json={"force": force})
         if r.status_code != 200:
             return {"status": "failed", "error": r.text}
-        return _wait_for_job(c, r.json()["job_id"], timeout_s=1800)
+        return _wait_for_job(c, r.json()["job_id"], timeout_s=3600)
+
+
+def _narration_url(kind: str, key: str, tail: str = "") -> str:
+    return f"{API}/narration/{kind}/{key}{tail}"
+
+
+def _narration_result(r: httpx.Response) -> dict:
+    """The session view on success, else a failure dict carrying the reason."""
+    if r.status_code != 200:
+        return {"status": "failed", "error": r.text}
+    return r.json()
+
+
+@mcp.tool()
+def narration_session(kind: str, key: str) -> dict:
+    """Read the narration session: takes (start_s, duration_s, media_in_s,
+    offset_s, gain, muted), mix, game/camera regions, markers (chapters,
+    games, inserts, cues), `stale` and `suggested_shift_s`. Use it before
+    editing so you know the take ids. All times are joined-video seconds."""
+    with _client() as c:
+        return _narration_result(c.get(_narration_url(kind, key)))
+
+
+@mcp.tool()
+def narration_edit_take(
+    kind: str,
+    key: str,
+    take_id: str,
+    start_s: float | None = None,
+    duration_s: float | None = None,
+    media_in_s: float | None = None,
+    offset_s: float | None = None,
+    gain: float | None = None,
+    muted: bool | None = None,
+) -> dict:
+    """Change one take; fields left out stay as they are. `start_s` is where
+    the take sits on the video, `duration_s` trims its length (min 0.3 s),
+    `media_in_s` is where in the recording it starts playing, `offset_s`
+    (-3..3) nudges it against the picture, `gain` (0-4) its volume, `muted`
+    silences it. Seconds are joined-video seconds. Returns the session."""
+    fields = {
+        "start_s": start_s,
+        "duration_s": duration_s,
+        "media_in_s": media_in_s,
+        "offset_s": offset_s,
+        "gain": gain,
+        "muted": muted,
+    }
+    body = {k: v for k, v in fields.items() if v is not None}
+    with _client() as c:
+        return _narration_result(c.patch(_narration_url(kind, key, f"/takes/{take_id}"), json=body))
+
+
+@mcp.tool()
+def narration_split_take(kind: str, key: str, take_id: str, at_s: float) -> dict:
+    """Cut one take in two at `at_s` (joined-video seconds, inside the take
+    and at least 0.3 s from either end). Both halves share the recording, so
+    you can then delete, mute or re-gain one half. Returns the session."""
+    with _client() as c:
+        r = c.post(_narration_url(kind, key, f"/takes/{take_id}/split"), params={"at_s": at_s})
+        return _narration_result(r)
+
+
+@mcp.tool()
+def narration_delete_take(kind: str, key: str, take_id: str) -> dict:
+    """Delete one take by id (see `narration_session`). The recording file is
+    kept while another half of a split still uses it. Returns the session."""
+    with _client() as c:
+        return _narration_result(c.delete(_narration_url(kind, key, f"/takes/{take_id}")))
+
+
+@mcp.tool()
+def narration_set_mix(
+    kind: str,
+    key: str,
+    narration_gain: float | None = None,
+    game_gain: float | None = None,
+    duck_ratio: float | None = None,
+) -> dict:
+    """Set how loud the owner and the game are. `narration_gain` (0-4) is the
+    voice level, `game_gain` (0-2) the overall game level, `duck_ratio`
+    (1-20) how hard the game dips while the owner talks. Fields left out keep
+    their value. For a louder or quieter stretch use
+    `narration_set_game_regions`. Returns the session."""
+    changes = {
+        "narration_gain": narration_gain,
+        "game_gain": game_gain,
+        "duck_ratio": duck_ratio,
+    }
+    with _client() as c:
+        current = c.get(_narration_url(kind, key))
+        if current.status_code != 200:
+            return {"status": "failed", "error": current.text}
+        mix = current.json()["session"]["mix"]
+        mix.update({k: v for k, v in changes.items() if v is not None})
+        return _narration_result(c.put(_narration_url(kind, key, "/mix"), json=mix))
+
+
+@mcp.tool()
+def narration_set_game_regions(kind: str, key: str, regions: list[dict]) -> dict:
+    """Replace the game-audio regions: stretches where the game plays at a
+    set level. Each region is `{"id", "start_s", "end_s", "level"}` with
+    level 0-2 (1 = normal, 0 = silent) in joined-video seconds; regions may
+    not overlap. An empty list clears them. Returns the session."""
+    with _client() as c:
+        return _narration_result(c.put(_narration_url(kind, key, "/game-regions"), json=regions))
+
+
+@mcp.tool()
+def narration_set_camera_regions(kind: str, key: str, regions: list[dict]) -> dict:
+    """Replace the camera regions: stretches where the camera box is shown.
+    Each region is `{"id", "start_s", "end_s", "box": {"enabled", "width_frac",
+    "x", "y", "rounded"}}` in joined-video seconds; regions may not overlap.
+    An empty list clears them. Returns the session."""
+    with _client() as c:
+        return _narration_result(c.put(_narration_url(kind, key, "/camera-regions"), json=regions))
+
+
+@mcp.tool()
+def narration_relock(kind: str, key: str, shift_s: float = 0.0) -> dict:
+    """Accept the video as it is now (clears `stale`). When a re-render moved
+    the content (the session's `suggested_shift_s`), pass it as `shift_s` to
+    move every take and region by that many joined-video seconds; leave it 0
+    to keep them where they are. Returns the session."""
+    with _client() as c:
+        return _narration_result(
+            c.post(_narration_url(kind, key, "/relock"), json={"shift_s": shift_s})
+        )
 
 
 def main() -> None:

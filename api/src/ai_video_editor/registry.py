@@ -348,6 +348,14 @@ _PLUMBING_TOOLS = frozenset(
         "list_cloud_vods",
         "download_vod_from_cloud",
         "remove_vod_from_cloud",
+        "narration_session",
+        "narration_edit_take",
+        "narration_split_take",
+        "narration_delete_take",
+        "narration_set_mix",
+        "narration_set_game_regions",
+        "narration_set_camera_regions",
+        "narration_relock",
     }
 )
 
