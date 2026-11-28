@@ -293,3 +293,44 @@ def test_apply_edits_passes_both_pieces_of_a_split_chapter(ws):
     assert (a.game, a.chapter, a.start_s, a.end_s, a.id) == (1, 1, 2.0, -9.0, "A")
     assert (b.game, b.chapter, b.start_s, b.end_s, b.id) == (1, 1, -8.0, 3.0, "A2")
     assert r.renders == []
+
+
+def test_apply_edits_resolves_an_extended_non_play_chapter(ws):
+    mp = ws / "story" / f"{STEM}.join.json"
+    jm = _map(ws)
+    ch = jm.games[0].chapters[0]
+    ch.play_id, ch.kind = None, "opening"
+    jm.hook.picks[0].chapter_id = f"{R1}:opening@100.0"
+    mp.write_text(jm.model_dump_json(), encoding="utf-8")
+    plan = _plan("a1")  # as a previous apply left it: extended, so id and start moved
+    plan.chapters[0] = plan.chapters[0].model_copy(
+        update={"play_id": None, "kind": "opening", "start_s": 95.0, "end_s": 135.0}
+    )
+    (ws / "story" / R1 / "story.json").write_text(plan.model_dump_json(), encoding="utf-8")
+    _edits(ws, [EditPick(id="A", chapter_id=f"{R1}:opening@100.0", start_s=15.0, end_s=10.0)])
+    r = Rec()
+    r.run()
+    assert not any("skipped" in s for s in r.said)
+    [(_, _, kw)] = r.joins
+    assert [(p.game, p.chapter) for p in kw["hook"]] == [(1, 1)]
+
+
+def test_apply_edits_re_resolves_after_the_re_render_shifts_chapters(ws):
+    _edits(ws, [EditPick(id="A", chapter_id=f"{R1}:p1", start_s=15.0, end_s=10.0)])
+    r = Rec()
+
+    def render(**kw):
+        r.renders.append(kw)
+        plan = _plan("a1")
+        front = Chapter(title="new", start_s=20.0, end_s=40.0, kind="fight", play_id="p0")
+        plan.chapters = [
+            front,
+            plan.chapters[0].model_copy(update={"start_s": 95.0, "end_s": 135.0}),
+            *plan.chapters[1:],
+        ]
+        (ws / "story" / R1 / "story.json").write_text(plan.model_dump_json(), encoding="utf-8")
+
+    ae.apply_edits(STEM, say=r.said.append, render=render, join=r.join)
+    assert len(r.renders) == 1
+    [(_, _, kw)] = r.joins
+    assert [(p.game, p.chapter) for p in kw["hook"]] == [(1, 2)]

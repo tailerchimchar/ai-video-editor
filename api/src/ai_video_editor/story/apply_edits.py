@@ -6,6 +6,12 @@ a window that runs past it becomes ONE managed `Extend` request
 (`source="clip_edit"`) in that round's `requests.json`, the round re-renders
 once, and the join runs with the picks in track order. The edits file is
 deleted after a successful join.
+
+Limitation: the chapter's bounds before our managed extend are rebuilt by
+subtracting the previous extend in full. `requests.apply_requests` can clamp an
+extend at the ends of the video or at a neighbouring chapter, so after such a
+clamp the rebuilt bounds are a little wider than the real ones. The next run
+then asks for slightly less than it needs; fix it by editing requests.json.
 """
 
 from __future__ import annotations
@@ -16,6 +22,7 @@ from pathlib import Path
 from ..config import settings
 from .bookends import HookPick
 from .hook_edits import (
+    ChapterBase,
     EditPick,
     base_digest,
     chapter_bases,
@@ -28,7 +35,6 @@ from .render import StoryRenderError
 from .requests import Extend, game_clock_s, load_requests, save_requests
 
 CLIP_EDIT = "clip_edit"
-_START_TOL_S = 1.0
 
 
 def _load_map(stem: str) -> JoinMap:
@@ -41,14 +47,18 @@ def _load_map(stem: str) -> JoinMap:
     return jm
 
 
-def _resolve(plan: StoryPlan, round_name: str, cid: str, base_start_s: float) -> int | None:
+def _resolve(plan: StoryPlan, round_name: str, cid: str, base: ChapterBase) -> int | None:
+    """The chapter by id; else the chapter that holds the map chapter's midpoint
+    (a non-play id and its start both move when the chapter is extended or
+    merged), the nearest centre when several do."""
     for i, c in enumerate(plan.chapters):
         if chapter_id(round_name, c) == cid:
             return i
-    for i, c in enumerate(plan.chapters):
-        if abs(c.start_s - base_start_s) <= _START_TOL_S:
-            return i
-    return None
+    mid = (base.chapter_rec_start_s + base.chapter_rec_end_s) / 2
+    holding = [(i, c) for i, c in enumerate(plan.chapters) if c.start_s <= mid <= c.end_s]
+    if not holding:
+        return None
+    return min(holding, key=lambda ic: abs((ic[1].start_s + ic[1].end_s) / 2 - mid))[0]
 
 
 def _managed(reqs, ch: Chapter, offset: float) -> list[Extend]:
@@ -93,18 +103,18 @@ def apply_edits(
     plans: dict[str, StoryPlan] = {}
     # (round, chapter index in the current plan) -> wanted recording window
     wanted: dict[tuple[str, int], tuple[float, float]] = {}
-    resolved: list[tuple[EditPick, str, int]] = []
+    resolved: list[tuple[EditPick, ChapterBase]] = []
     for p in sorted(edits.hook.picks, key=lambda x: x.at_s):
         b = bases.get(p.chapter_id)
         if b is None or b.round not in rounds:
             say(f"skipped {p.chapter_id}: no such chapter in {b.round if b else '?'} any more")
             continue
         plan = plans.setdefault(b.round, _load_plan(b.round))
-        idx = _resolve(plan, b.round, p.chapter_id, b.chapter_rec_start_s)
+        idx = _resolve(plan, b.round, p.chapter_id, b)
         if idx is None:
             say(f"skipped {p.chapter_id}: no such chapter in {b.round} any more")
             continue
-        resolved.append((p, b.round, idx))
+        resolved.append((p, b))
         lo, hi = b.rec_start_s - p.start_s, b.rec_end_s + p.end_s
         old = wanted.get((b.round, idx))
         wanted[(b.round, idx)] = (lo, hi) if old is None else (min(old[0], lo), max(old[1], hi))
@@ -145,6 +155,15 @@ def apply_edits(
         render(asset_id=plans[rnd].asset_id, round=rnd)
         plans[rnd] = _load_plan(rnd)
 
+    # the re-render can shift, merge or reorder chapters: resolve again
+    final: list[tuple[EditPick, str, int]] = []
+    for p, b in resolved:
+        idx = _resolve(plans[b.round], b.round, p.chapter_id, b)
+        if idx is None:
+            say(f"skipped {p.chapter_id}: no such chapter in {b.round} any more")
+            continue
+        final.append((p, b.round, idx))
+
     picks = [
         HookPick(
             game=rounds.index(rnd) + 1,
@@ -155,7 +174,7 @@ def apply_edits(
             end_s=p.end_s,
             id=p.id,
         )
-        for p, rnd, idx in resolved
+        for p, rnd, idx in final
     ]
     out = join(
         rounds,
