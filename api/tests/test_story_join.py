@@ -322,3 +322,21 @@ def test_join_writes_hook_block_and_options(ws, fakes, tmp_path, monkeypatch):
     assert [e.rec_s for e in hook.picks[0].events] == [120, 128]
     assert hook.picks[1].video_start_s == 99.5 and hook.picks[0].video_end_s == 100.0
     assert options.outro is True and options.subscribe_after == 1
+
+
+def test_cli_apply_edits_needs_no_rounds(ws, monkeypatch):
+    from ai_video_editor.story import apply_edits as ae
+
+    seen = {}
+
+    def fake(stem, *, force=False, **kw):
+        seen.update(stem=stem, force=force)
+        return Path("o.mp4")
+
+    monkeypatch.setattr(ae, "apply_edits", fake)
+    assert join.main(["--apply-edits", "joined_x"]) == 0
+    assert seen == {"stem": "joined_x", "force": False}
+    assert join.main(["--apply-edits", "joined_x", "--force-edits"]) == 0
+    assert seen["force"] is True
+    with pytest.raises(SystemExit):
+        join.main(["--apply-edits", "joined_x", R1])

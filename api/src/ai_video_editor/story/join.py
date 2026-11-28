@@ -591,7 +591,15 @@ def write_join_files(
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="story-join", description=__doc__.splitlines()[0])
-    ap.add_argument("rounds", nargs="+", help="round names, in game order (at least 2)")
+    ap.add_argument("rounds", nargs="*", help="round names, in game order (at least 2)")
+    ap.add_argument(
+        "--apply-edits",
+        metavar="STEM",
+        help="re-join a joined video from the owner's hook edits (STEM.edits.json); no rounds",
+    )
+    ap.add_argument(
+        "--force-edits", action="store_true", help="apply edits made on an older join map"
+    )
     ap.add_argument("--out", help="output mp4 (default WORKSPACE/story/joined_...)")
     ap.add_argument("--title", help="video title for the join map")
     ap.add_argument(
@@ -621,6 +629,17 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--music", help="outro music file (default WORKSPACE/music/outro.*)")
     ap.add_argument("--music-start", type=float, default=0.0, help="seconds into the music")
     args = ap.parse_args(argv)
+    if args.apply_edits:
+        if args.rounds:
+            ap.error("--apply-edits takes no rounds")
+        from .apply_edits import apply_edits
+
+        try:
+            print(apply_edits(args.apply_edits, force=args.force_edits))
+        except (StoryRenderError, ValueError) as e:
+            print(f"story-join: {e}", file=sys.stderr)
+            return 1
+        return 0
     if len(args.rounds) < 2:
         ap.error("need at least 2 rounds")
     out = Path(args.out) if args.out else default_out(args.rounds)

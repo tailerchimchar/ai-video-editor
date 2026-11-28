@@ -2396,7 +2396,7 @@ def story_render(round: str, asset_id: str, plays: bool = True) -> dict:
 
 @mcp.tool()
 def story_join(
-    rounds: list[str],
+    rounds: list[str] | None = None,
     hook: list[str] | None = None,
     hook_title: str | None = None,
     hook_mode: str = "tease",
@@ -2404,6 +2404,8 @@ def story_join(
     music_start_s: float = 0.0,
     subscribe_after: int = 1,
     title: str | None = None,
+    apply_edits: str | None = None,
+    force_edits: bool = False,
 ) -> dict:
     """Join several rendered stories (round folder names, in game order) into
     one video: each game swipes in right-to-left with a whoosh, and the like &
@@ -2421,11 +2423,19 @@ def story_join(
     watching + subscribe) over WORKSPACE/music/outro.* when the owner put
     one there (`music_start_s` skips into it); silent otherwise.
 
+    `apply_edits="<joined stem>"` re-joins from the owner's hook edits written
+    by the PC narrate page (`<stem>.edits.json`): re-order/add/remove/trim hook
+    clips, extend a chapter when a clip runs past its footage, then re-join;
+    refuses when the map changed since the edits unless `force_edits=True`.
+    Pass no `rounds` with it.
+
     Never mix solo-queue and team (ACL) games in one join. Heavy ffmpeg
     work: one at a time. Job-based; waits for completion.
     """
     body = {
-        "rounds": rounds,
+        "rounds": rounds or [],
+        "apply_edits": apply_edits,
+        "force_edits": force_edits,
         "hook": hook or [],
         "hook_title": hook_title,
         "hook_mode": hook_mode,

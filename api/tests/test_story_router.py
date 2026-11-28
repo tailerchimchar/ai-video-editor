@@ -176,3 +176,25 @@ def test_join_runs_the_job(client, sandbox, monkeypatch):
     assert job["status"] == "completed", job
     assert seen["rounds"] == ["a", "b"] and seen["outro"] is True
     assert seen["hook"][0].text == "wow" and seen["hook_title"] == "Hi"
+
+
+def test_join_apply_edits_runs_the_job(client, sandbox, monkeypatch):
+    seen: dict = {}
+
+    def fake_apply(stem, *, force=False):
+        seen.update(stem=stem, force=force)
+        return Path(settings.workspace_dir) / "story" / "joined_x.mp4"
+
+    monkeypatch.setattr(story_router, "apply_edits", fake_apply)
+    bad = client.post("/api/v1/story/join", json={"apply_edits": "j", "rounds": ["a"]})
+    assert bad.status_code == 422
+    r = client.post("/api/v1/story/join", json={"apply_edits": "joined_x", "force_edits": True})
+    assert r.status_code == 200
+    job_id = r.json()["job_id"]
+    for _ in range(50):
+        job = client.get(f"/api/v1/jobs/{job_id}").json()
+        if job["status"] in ("completed", "failed"):
+            break
+        time.sleep(0.05)
+    assert job["status"] == "completed", job
+    assert seen == {"stem": "joined_x", "force": True}

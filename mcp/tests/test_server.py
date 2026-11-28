@@ -292,6 +292,23 @@ def test_story_join_posts_hook_and_outro():
     assert bodies[0]["rounds"] == ["a", "b"] and bodies[0]["subscribe_after"] == 1
 
 
+def test_story_join_apply_edits_posts_the_stem():
+    import json as _json
+
+    bodies: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            bodies.append(_json.loads(request.content))
+            return httpx.Response(200, json={"job_id": "j1"})
+        return httpx.Response(200, json={"status": "completed", "output_path": "j.mp4"})
+
+    with _patch_client(handler):
+        server.story_join(apply_edits="joined_x", force_edits=True)
+    assert bodies[0]["apply_edits"] == "joined_x" and bodies[0]["force_edits"] is True
+    assert bodies[0]["rounds"] == []
+
+
 def test_narration_status_and_remove_take():
     seen: list[tuple[str, str]] = []
 

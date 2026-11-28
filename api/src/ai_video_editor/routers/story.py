@@ -32,6 +32,7 @@ from ..config import settings
 from ..database import get_db
 from ..jobs import finish_job
 from ..models import RankResponse
+from ..story.apply_edits import apply_edits
 from ..story.bookends import parse_pick
 from ..story.cli import render_round
 from ..story.join import default_out, join_stories
@@ -159,7 +160,7 @@ async def render(round: str, body: RenderBody) -> RankResponse:
 
 
 class JoinBody(BaseModel):
-    rounds: list[str]
+    rounds: list[str] = []
     title: str | None = None
     subscribe_after: int | None = 1
     hook: list[str] = []  # "GAME:CHAPTER[:TEXT]", 1-based
@@ -167,6 +168,8 @@ class JoinBody(BaseModel):
     hook_title: str | None = None
     outro: bool = False
     music_start_s: float = 0.0
+    apply_edits: str | None = None  # joined stem: re-join from its hook edits
+    force_edits: bool = False
 
 
 async def _run_join_job(job_id: str, body: JoinBody) -> None:
@@ -174,6 +177,10 @@ async def _run_join_job(job_id: str, body: JoinBody) -> None:
     try:
         await db.execute("UPDATE jobs SET status = 'running' WHERE id = ?", (job_id,))
         await db.commit()
+        if body.apply_edits:
+            out = await asyncio.to_thread(apply_edits, body.apply_edits, force=body.force_edits)
+            await finish_job(db, job_id, output_path=str(out), job_type="story_join")
+            return
         out = await asyncio.to_thread(
             join_stories,
             body.rounds,
@@ -196,6 +203,14 @@ async def _run_join_job(job_id: str, body: JoinBody) -> None:
 @router.post("/join", response_model=RankResponse)
 async def join(body: JoinBody) -> RankResponse:
     """Join rendered stories into one video (swipes, optional hook / outro). Job-based."""
+    if body.apply_edits:
+        if body.rounds:
+            raise HTTPException(422, "apply_edits takes no rounds")
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", body.apply_edits):
+            raise HTTPException(422, "bad apply_edits stem")
+        job_id = await _insert_job("story_join")
+        _track(_run_join_job(job_id, body))
+        return RankResponse(job_id=job_id)
     if len(body.rounds) < 2:
         raise HTTPException(422, "need at least 2 rounds")
     for r in body.rounds:

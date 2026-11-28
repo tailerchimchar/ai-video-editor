@@ -62,6 +62,7 @@ def _checked(v):
 
 class _Timed(BaseModel):
     at: Clock
+    source: str | None = None  # who wrote it: "clip_edit" = managed by --apply-edits
 
     @field_validator("at", mode="after")
     @classmethod

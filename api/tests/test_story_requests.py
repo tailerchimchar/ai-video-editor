@@ -369,3 +369,12 @@ def test_order_extend_then_trim_then_mute():
     c = _apply(_plan([_ch(100.0, 200.0)]), reqs)[0].chapters[0]
     assert (c.start_s, c.end_s) == (120.0, 180.0)  # trimmed after the extend
     assert c.mic_mutes == [(120.0, 180.0)]  # muted after the trim
+
+
+def test_extend_keeps_source_tag_round_trip(tmp_path):
+    reqs = StoryRequests(
+        requests=[Extend(at=105, before_s=5, after_s=2, source="clip_edit"), Extend(at=9)]
+    )
+    save_requests(tmp_path, reqs)
+    back = load_requests(tmp_path).requests
+    assert back[0].source == "clip_edit" and back[1].source is None
