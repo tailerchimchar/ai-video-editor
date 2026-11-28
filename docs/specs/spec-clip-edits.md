@@ -1,5 +1,7 @@
 # Spec: hook clip edits from the narration timeline
 
+**Built** 2026-11-28/29 on `feat/clip-edits` (phase 1; commits from the plan run). Docs: `api/docs/narration.md` (Hook clip edits), `web/docs/features/narration.md`, `knowledge/series/Story-join.md`.
+
 **Status:** decided 2026-11-28, revised the same day after two reviews and the owner's playground test · **Baseline:** `feat/narration-v2` @ 24f4004 · **Preview:** https://claude.ai/artifact/SXy8VfwPw2cMd8X91mmQm9 · **Playground (drag it):** https://claude.ai/artifact/M46eiu7XEc5XmSrAKYy6C3 · **Builds on:** [`spec-narration-v2.md`](./spec-narration-v2.md)
 
 The first version of this spec covered hook clips, chapters, Jev ratings, a rule proposer and a takes remap in one go, with a hatched "pending" overlay on the timeline. The owner tried the mock and did not like the overlay ("in Clipchamp you can move and re-order; in this one you see the shadow"), and both reviews (UX, editing model) said the same two things: the layout should slide like Clipchamp, and two thirds of the spec is not needed to get "+2 s on both hook clips, done by me". This revision is **phase 1 = hook clips only**, with the rest kept as later phases.

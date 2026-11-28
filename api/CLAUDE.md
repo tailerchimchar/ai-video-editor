@@ -126,7 +126,10 @@ time** (~1 GB free with the owner's apps open), each with a memory audit under
     game-audio regions + one duck knob; export → `narrated.mp4`. `docs/narration.md`.
 6c. Several games of one series → `story-join` (MCP `story_join`): hook, swipes,
     outro (`--hook-mode play` = montage hook, played through); narrate at
-    `/narrate/joined/<stem>`. How and why:
+    `/narrate/joined/<stem>`. The owner edits the hook on that PC page (trim,
+    extend, move, split, delete; saved to `WORKSPACE/story/<stem>.edits.json`,
+    copied to the laptop by hand), then `story-join --apply-edits <stem>`
+    re-joins from it (`docs/narration.md`, Hook clip edits). How and why:
     `knowledge/series/Story-join.md`.
 7. Owner watches the story; fixes are recorded with `mentor_record_correction`.
 8. Drive, only when the owner asks: `grokbot-publish-round <round> --game league --asset-id <id>

@@ -53,6 +53,29 @@ Kinds:
    to the game's default spot (League: above the minimap).
 9. **Export narrated.mp4** starts a job; a link appears when it finishes.
 
+### Editing the hook (joined videos with a v2 map)
+
+The **hook** lane is a track of clips. Nothing renders on the PC: edits save to
+`WORKSPACE/story/<stem>.edits.json` and the laptop applies them.
+
+- **Drag an edge** = trim or extend (extend eats empty space first, then pushes
+  the later clips). **Drag the body** = move (snaps to neighbours; drops
+  before/after a clip by half; leaves empty space behind).
+- **Delete / Backspace** or **x** deletes the clip and leaves empty space.
+  **Ctrl+S** splits at the playhead into two pieces of one chapter ("part 1" /
+  "part 2", each at least 2 s). **Ctrl+Z** undoes, **Ctrl+Shift+Z** / **Ctrl+Y**
+  redoes. Shortcuts never fire while typing in a field or recording a take.
+- A chapter's panel has **add to the hook**.
+- The **changes** badge shows the laptop command and the file path (copy the
+  file to the laptop by hand: manual sync for now), **close the empty spaces**
+  and **discard all changes**.
+- With nothing selected the **storyboard** panel shows the whole video as JSON,
+  read-only until **write**; apply takes `hook.picks` only.
+- Markers and the frame strip slide by `(track_end - n * 0.5) - rendered_intro`
+  so an unchanged hook sits exactly on the rendered video. A joined video
+  rendered before this feature shows markers only (no hook lane) until the
+  laptop re-joins on this branch.
+
 If the video was re-rendered after you recorded, the page shows **stale**.
 When the API knows how much longer the video got before the games (a new
 hook), **shift takes by Δ s and relock** moves every take and region by that
@@ -107,6 +130,13 @@ recording. The browser duck is an approximation; the export is the reference.
 | `src/lib/waveform.ts`                        | pure peaks: envelope of a decoded take, peaks per pixel column                           |
 | `src/lib/mixSchedule.ts`                     | pure: which takes play when, region level at a time                                      |
 | `src/lib/regions.ts`                         | pure: clamp game-audio regions to the video's end                                        |
+| `src/lib/hookTrack.ts`                       | pure hook track maths: settle, trim, drop, split, layout, seek, changes                  |
+| `src/lib/history.ts`                         | pure undo / redo history                                                                 |
+| `src/hooks/useHookPicks.ts`                  | hook picks query + optimistic save, undo history, discard                                |
+| `src/hooks/useStoryboard.ts`                 | storyboard query                                                                         |
+| `src/components/narration/HookInspector.tsx` | the selected hook clip / chapter: add to the hook, delete                                |
+| `src/components/narration/StoryboardPanel.tsx` | whole video as JSON, read-only until write                                             |
+| `src/components/narration/HookChangesBadge.tsx` | changes badge: laptop command, file path, close spaces, discard all                   |
 | `src/hooks/useMediaStream.ts`                | `getUserMedia` (mic + optional camera)                                                   |
 | `src/hooks/useMediaDevices.ts`               | microphone / camera lists                                                                |
 | `src/hooks/useMediaRecorder.ts`              | `MediaRecorder` start / stop → WebM `Blob`                                               |

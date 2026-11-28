@@ -51,6 +51,10 @@ Unknown kind or key: 404; bad characters in kind/key: 422 (all routes).
 | PUT `/game-regions` | list of GameAudioRegion (replaces all) | SessionView | 422 overlap, or a region with `end_s <= start_s` |
 | PUT `/camera-regions` | list of CameraRegion (replaces all) | SessionView | 422 overlap |
 | POST `/relock` | `{shift_s}` (optional, default 0) | SessionView | |
+| GET `/hook` | | HookView: the hook track (saved edits if any, else what is rendered) | 404 no hook data (not a joined video, or a map older than v2) |
+| PUT `/hook` | `{picks, mode?, title?}` (whole list) | HookView | 404, 409 stale (laptop re-joined since), 422 bad picks |
+| DELETE `/hook` | | HookView (edits file removed) | 404 |
+| GET `/storyboard` | | games and chapters (`id`, kind, game-clock window, `video_start_s`, kill/death times, `in_hook`, `has_hook_window`) plus the hook view | 404 |
 | POST `/export` | `{force}` (optional) | `{job_id}` (job type `narration_export`) | 422 no takes or all takes muted (muted takes are left out of the export), 409 stale unless forced |
 
 Marker kinds: `chapter`, `game`, `cue`, `insert`.
@@ -127,4 +131,40 @@ exporter through FastAPI dependencies so tests can swap them.
 - `narration_relock`: accept the video, optionally shifting takes.
 - `narration_export`: mix to `narrated.mp4` (waits for the job).
 
+- `hook_picks_get` / `hook_picks_set` / `hook_picks_reset`: read, replace, discard the hook track of a joined video.
+- `storyboard_get`: the video as games and chapters (chapter ids for picks).
+- `story_join(apply_edits="<stem>", force_edits=)`: laptop only, applies the saved hook edits.
+
 Recording is browser-only (microphone).
+
+## Hook clip edits (joined videos)
+
+Spec: `docs/specs/spec-clip-edits.md`. The owner edits the hook on the PC page;
+nothing renders there. Code: `story/hook_edits.py` (file + track maths),
+`narration/hook_service.py` (use-cases), `story/apply_edits.py` (laptop).
+
+- File: `WORKSPACE/story/<stem>.edits.json`, written atomically:
+  `{schema_version, video, base_digest, hook: {mode, title, picks}}`. A pick is
+  `{id, chapter_id, at_s, start_s, end_s}`: `at_s` = where it sits on the
+  hook track (swipes not counted); `start_s` / `end_s` are offsets from the
+  chapter's base window in recording seconds (`+start_s` = starts earlier,
+  `+end_s` = ends later). The same chapter may appear twice (a split), each
+  pick with its own `id`. `base_digest` hashes the map's hook ids and base
+  windows.
+- Track rules: extend eats empty space first, then pushes later clips; trim
+  and delete leave empty space; overlaps are pushed later. Empty space is an
+  editor thing: the laptop joins the clips back to back in `at_s` order.
+- Errors: 404 no hook data (needs a v2 join map with a `hook` block), 409 when
+  the map changed since the edits (`stale_edits`; discard with DELETE, or the
+  laptop passes `--force-edits`), 422 for bad picks (unknown `chapter_id`,
+  duplicate pick `id`, an unreadable edits file); offsets past the neighbouring
+  chapters are clamped, not refused.
+- Laptop: `story-join --apply-edits <stem>` (MCP `story_join(apply_edits=)`).
+  Refuses a changed map unless `--force-edits`. One managed `extend` request
+  (`source: "clip_edit"`) per chapter whose clip runs past its footage; that
+  round re-renders; then the re-join from the map's saved picks, mode, title
+  and options. The edits file is deleted after. The new map is v2: `hook`
+  block (base windows in recording seconds, events, `at_s`) and `hook_rec_*`
+  on every play chapter, so chapters can be added to the hook later.
+- A join map from before this feature has no hook block: the page shows
+  markers only until the laptop re-joins on this branch.

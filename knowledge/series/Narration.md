@@ -20,3 +20,4 @@ web page (`/narrate/story/<round>`). Edits come first, then narration
 - **Camera box:** shown only when switched on; drag to move, corner to resize.
 - **Headphones always**, or the game bleeds into the mic.
 - **Hook (owner 2026-11-27):** a montage of the best plays played through; the voice carries the 10/0 stat and one credential sentence over it; opening line only, no op.gg card. Built as `--hook-mode play` in [[Story-join]].
+- **Editing the hook on the page (owner 2026-11-28):** trim, extend, move, split, delete hook clips on the timeline; see [[Story-join]].

@@ -17,3 +17,10 @@ A [[Solo queue]] story-join focused on the laning phase: how the owner wins lane
 - **Outplayed "Alt Tabbed" endings:** the owner tabs out at VICTORY, so the last 1-2 s of a story can show Outplayed's "video capture paused" screen. Trim it with a `trim` request (end) on the last chapter (Xayah, Yunara).
 [[Zeri 8-7-12 (2026-11-23)]] is retired: the owner won't use it.
 
+## Editing the hook on the PC (owner 2026-11-28)
+- The owner trims, extends, moves, splits and deletes hook clips on the PC narrate page (`/narrate/joined/<stem>`); nothing renders there. The laptop applies it: `story-join --apply-edits <stem>`.
+- Delete: "if I delete a clip, just leave an empty space there ... if I extend, push the other clips".
+- Extend: "if I extend into the empty space it should enter it ... like an actual rendering software video model". So extend eats empty space first, then pushes.
+- Undo and split: "ctrl + z ... ctrl + s for splitting a clip ... so if I split a clip, I can delete one of the splits".
+- Empty space is only an editor thing: the laptop joins the clips back to back in track order.
+- The edits file is copied PC to laptop by hand for now. A video joined before this feature needs a re-join on the laptop before the page shows the hook lane.
