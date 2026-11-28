@@ -51,10 +51,10 @@ Unknown kind or key: 404; bad characters in kind/key: 422 (all routes).
 | PUT `/game-regions` | list of GameAudioRegion (replaces all) | SessionView | 422 overlap, or a region with `end_s <= start_s` |
 | PUT `/camera-regions` | list of CameraRegion (replaces all) | SessionView | 422 overlap |
 | POST `/relock` | `{shift_s}` (optional, default 0) | SessionView | |
-| GET `/hook` | | HookView: the hook track (saved edits if any, else what is rendered) | 404 no hook data (not a joined video, or a map older than v2) |
-| PUT `/hook` | `{picks, mode?, title?}` (whole list) | HookView | 404, 409 stale (laptop re-joined since), 422 bad picks |
+| GET `/hook` | | HookView: the hook track (saved edits if any, else what is rendered); each pick carries `rendered_rec_start_s` / `rendered_rec_end_s` (what the mp4 shows, null for a new piece) | 404 no hook data (not a joined video, or a map older than v2), 422 unreadable edits file |
+| PUT `/hook` | `{picks, mode?, title?}` (whole list) | HookView | 404, 409 stale (laptop re-joined since), 422 bad picks or an unreadable edits file |
 | DELETE `/hook` | | HookView (edits file removed) | 404 |
-| GET `/storyboard` | | games and chapters (`id`, kind, game-clock window, `video_start_s`, kill/death times, `in_hook`, `has_hook_window`) plus the hook view | 404 |
+| GET `/storyboard` | | games and chapters (`id`, kind, game-clock window, `video_start_s`, kill/death times, `in_hook`, `has_hook_window`, `hook_len_s`) plus the hook view | 404, 422 unreadable edits file |
 | POST `/export` | `{force}` (optional) | `{job_id}` (job type `narration_export`) | 422 no takes or all takes muted (muted takes are left out of the export), 409 stale unless forced |
 
 Marker kinds: `chapter`, `game`, `cue`, `insert`.
@@ -156,15 +156,25 @@ nothing renders there. Code: `story/hook_edits.py` (file + track maths),
   editor thing: the laptop joins the clips back to back in `at_s` order.
 - Errors: 404 no hook data (needs a v2 join map with a `hook` block), 409 when
   the map changed since the edits (`stale_edits`; discard with DELETE, or the
-  laptop passes `--force-edits`), 422 for bad picks (unknown `chapter_id`,
-  duplicate pick `id`, an unreadable edits file); offsets past the neighbouring
-  chapters are clamped, not refused.
+  laptop passes `--force-edits`), 422 for bad picks on PUT (unknown
+  `chapter_id`, duplicate pick `id`) and for an unreadable edits file on PUT,
+  GET `/hook` and GET `/storyboard`; offsets past the neighbouring chapters
+  are clamped, not refused.
 - Laptop: `story-join --apply-edits <stem>` (MCP `story_join(apply_edits=)`).
-  Refuses a changed map unless `--force-edits`. One managed `extend` request
-  (`source: "clip_edit"`) per chapter whose clip runs past its footage; that
-  round re-renders; then the re-join from the map's saved picks, mode, title
-  and options. The edits file is deleted after. The new map is v2: `hook`
-  block (base windows in recording seconds, events, `at_s`) and `hook_rec_*`
-  on every play chapter, so chapters can be added to the hook later.
+  Refuses a changed map unless `--force-edits`, and refuses the join flags
+  (`--out`, `--title`, `--hook*`, `--outro`, `--music*`, `--subscribe-after`;
+  the HTTP route 422s on `rounds`/`hook`/`title`/... with `apply_edits`). One
+  managed `extend` request (`source: "clip_edit"`) per chapter whose clip runs
+  past its footage; each touched round re-renders once (with plays when its
+  chapters carry `play_id`s). The re-join takes the picks, mode and title from
+  the edits file and the options (title, subscribe, outro, music start) from
+  the map. Offsets are re-based on the base window of the re-rendered chapter
+  (an extend moves it), so the new map's base ± folded offsets is exactly what
+  was rendered and a second apply with the same offsets adds no extend. It
+  refuses (nothing re-joined) when the edits had picks and none resolved. The
+  edits file is deleted after. The new map is v2: `hook` block (base windows
+  in recording seconds, events, `at_s`, folded offsets) and `hook_rec_*` on
+  every chapter with kills or deaths that is long enough for a hook, so
+  chapters can be added to the hook later.
 - A join map from before this feature has no hook block: the page shows
   markers only until the laptop re-joins on this branch.

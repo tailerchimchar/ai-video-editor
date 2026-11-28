@@ -65,12 +65,20 @@ The **hook** lane is a track of clips. Nothing renders on the PC: edits save to
   **Ctrl+S** splits at the playhead into two pieces of one chapter ("part 1" /
   "part 2", each at least 2 s). **Ctrl+Z** undoes, **Ctrl+Shift+Z** / **Ctrl+Y**
   redoes. Shortcuts never fire while typing in a field or recording a take.
-- A chapter's panel has **add to the hook**.
+- The **storyboard** panel lists every game's chapters (title, game clock);
+  a play chapter outside the hook has **add to the hook** (it lands in the
+  first empty space that fits, else at the end of the track).
 - The **changes** badge shows the laptop command and the file path (copy the
   file to the laptop by hand: manual sync for now), **close the empty spaces**
   and **discard all changes**.
-- With nothing selected the **storyboard** panel shows the whole video as JSON,
-  read-only until **write**; apply takes `hook.picks` only.
+- With nothing selected the **storyboard** panel also shows the whole video as
+  JSON (open it with its header), read-only until **write**; apply takes
+  `hook.picks` only.
+- The clip inspector's **as rendered** line is what the mp4 shows: the map's
+  base window with the offsets the last apply folded in (`rendered_rec_*`);
+  a new piece says "not in the video yet".
+- If the hook data cannot be read (a corrupt edits file), the error shows
+  under the timeline with **discard**.
 - Markers and the frame strip slide by `(track_end - n * 0.5) - rendered_intro`
   so an unchanged hook sits exactly on the rendered video. A joined video
   rendered before this feature shows markers only (no hook lane) until the
@@ -134,8 +142,8 @@ recording. The browser duck is an approximation; the export is the reference.
 | `src/lib/history.ts`                         | pure undo / redo history                                                                 |
 | `src/hooks/useHookPicks.ts`                  | hook picks query + optimistic save, undo history, discard                                |
 | `src/hooks/useStoryboard.ts`                 | storyboard query                                                                         |
-| `src/components/narration/HookInspector.tsx` | the selected hook clip / chapter: add to the hook, delete                                |
-| `src/components/narration/StoryboardPanel.tsx` | whole video as JSON, read-only until write                                             |
+| `src/components/narration/HookInspector.tsx` | the selected hook clip: game clock, as rendered, offsets, reset, delete                  |
+| `src/components/narration/StoryboardPanel.tsx` | chapter list with add to the hook; whole video as JSON, read-only until write          |
 | `src/components/narration/HookChangesBadge.tsx` | changes badge: laptop command, file path, close spaces, discard all                   |
 | `src/hooks/useMediaStream.ts`                | `getUserMedia` (mic + optional camera)                                                   |
 | `src/hooks/useMediaDevices.ts`               | microphone / camera lists                                                                |

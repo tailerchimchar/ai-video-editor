@@ -55,7 +55,9 @@ game       ▁▂▃▅▆▅▃▂▁▂▃▅ with dips under the takes, [25%]
 ## Hook lane (joined videos with a v2 map)
 
 `HookLane.tsx` draws the hook as a track: clips at their `at_s`, empty space
-between them; `HookPreviewLine.tsx` shows the drop position while dragging.
+between them; while a clip is dragged `HookLane` draws its ghost at the drop
+position (snapped). `HookPreviewLine.tsx` is the line under the timeline: the
+intro and video length as they will be, and where the playhead plays from.
 Rules (maths in `lib/hookTrack.ts`): an edge drag trims or extends (extend eats
 empty space, then pushes later clips; edge handles sit inside the clip); a body
 drag moves, snapping to neighbours and dropping before/after a clip by half;
@@ -111,7 +113,7 @@ for "split at playhead".
 | `TakeBlock.tsx`      | one take: canvas waveform (visible part only), nudge / trim drag                                    |
 | `GameAudioLane.tsx`  | canvas peaks as mixed, regions and their drags, Delete key                                          |
 | `HookLane.tsx`       | hook clips on the track, edge / body drags, split, delete                                           |
-| `HookPreviewLine.tsx` | drop-position line while a hook clip is dragged                                                    |
+| `HookPreviewLine.tsx` | intro / video-length / playhead line under the timeline (the drop ghost lives in `HookLane`)      |
 | `Playhead.tsx`       | the playhead line                                                                                   |
 | `lane.ts`            | lane heights, pointer x, canvas sizing / mirror bars                                                |
 

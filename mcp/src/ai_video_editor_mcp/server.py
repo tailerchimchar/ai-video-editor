@@ -2719,15 +2719,17 @@ def hook_picks_set(
     """Replace the hook track of a joined video. `picks` is the whole new list,
     in any order: `{"chapter_id": "r1:p00", "at_s": 0, "start_s": 0, "end_s": 0}`
     plus an optional `id`. `at_s` places the pick on the hook track (seconds);
-    `start_s` / `end_s` move the window edges, net from the RENDERED window
-    (+ = starts earlier / ends later, - = trims), clamped to the neighbouring
-    chapters. The same chapter may appear twice (a split): give each pick its own
+    `start_s` / `end_s` move the window edges, net from the chapter's BASE
+    window (its `hook_window`; + = starts earlier / ends later, - = trims),
+    clamped to the neighbouring chapters. After an apply the map's picks carry
+    the folded offsets (base +- offsets = what was rendered), so send the
+    returned values back unchanged to keep a clip as it is. The same chapter may appear twice (a split): give each pick its own
     `id`. Overlaps are pushed later; empty space between picks is closed when the
     laptop applies. Use `storyboard_get` for the chapter ids. `mode` / `title`
     keep the saved values when omitted. Nothing is rendered here: the laptop
     applies it with `story-join --apply-edits <key>` (the returned
     `laptop_command`). 404 = no hook data, 409 = the laptop re-joined (reset
-    first), 422 = bad picks. Returns the hook view."""
+    first), 422 = bad picks or an unreadable edits file. Returns the hook view."""
     body = {"picks": picks, "mode": mode, "title": title}
     body = {k: v for k, v in body.items() if v is not None}
     with _client() as c:
