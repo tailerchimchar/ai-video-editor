@@ -7,7 +7,20 @@
  * short, IRL video) needs no change here.
  */
 
-import type { CameraBox, SessionView, TargetRef, Take, UploadTakeArgs } from "@/types/narration";
+import type {
+  AudioMix,
+  CameraBox,
+  CameraRegion,
+  FrameStrip,
+  GameAudioRegion,
+  Marker,
+  Peaks,
+  SessionView,
+  TakeEdit,
+  TargetRef,
+  Take,
+  UploadTakeArgs,
+} from "@/types/narration";
 import { request } from "./client";
 
 function basePath({ kind, key }: TargetRef): string {
@@ -24,11 +37,12 @@ export function getSession(target: TargetRef): Promise<SessionView> {
  * accepts `video/webm` or `audio/webm` exactly, so codec parameters
  * (`;codecs=opus`) are stripped from the blob's MIME type.
  */
-export function uploadTake(target: TargetRef, args: UploadTakeArgs): Promise<Take> {
+export function uploadTake(target: TargetRef, args: UploadTakeArgs, replace = true): Promise<Take> {
   const query = new URLSearchParams({
     start_s: args.startS.toFixed(3),
     duration_s: args.durationS.toFixed(3),
     has_camera: String(args.hasCamera),
+    replace: String(replace),
   });
   const fallback = args.hasCamera ? "video/webm" : "audio/webm";
   const contentType = args.blob.type.split(";")[0]?.trim() || fallback;
@@ -51,9 +65,68 @@ export function putCamera(target: TargetRef, camera: CameraBox): Promise<Session
   return request<SessionView>(`${basePath(target)}/camera`, { method: "PUT", body: camera });
 }
 
-/** POST /relock — keep the takes as they are against the current video. */
-export function relock(target: TargetRef): Promise<SessionView> {
-  return request<SessionView>(`${basePath(target)}/relock`, { method: "POST" });
+/** POST /relock — re-pin the takes to the current video, shifted by `shiftS` (0 = as they are). */
+export function relock(target: TargetRef, shiftS = 0): Promise<SessionView> {
+  return request<SessionView>(`${basePath(target)}/relock`, {
+    method: "POST",
+    body: { shift_s: shiftS },
+  });
+}
+
+/** PATCH /takes/{take_id} — partial edit (trim, offset, gain, mute). */
+export function patchTake(target: TargetRef, takeId: string, edit: TakeEdit): Promise<SessionView> {
+  return request<SessionView>(`${basePath(target)}/takes/${encodeURIComponent(takeId)}`, {
+    method: "PATCH",
+    body: edit,
+  });
+}
+
+/** POST /takes/{take_id}/split?at_s= — split a take at a video second. */
+export function splitTake(target: TargetRef, takeId: string, atS: number): Promise<SessionView> {
+  const query = new URLSearchParams({ at_s: atS.toFixed(3) });
+  return request<SessionView>(
+    `${basePath(target)}/takes/${encodeURIComponent(takeId)}/split?${query.toString()}`,
+    { method: "POST" },
+  );
+}
+
+/** PUT /mix — the ducking / gain settings. */
+export function putMix(target: TargetRef, mix: AudioMix): Promise<SessionView> {
+  return request<SessionView>(`${basePath(target)}/mix`, { method: "PUT", body: mix });
+}
+
+/** PUT /game-regions — replace the game-audio regions. */
+export function putGameRegions(
+  target: TargetRef,
+  regions: GameAudioRegion[],
+): Promise<SessionView> {
+  return request<SessionView>(`${basePath(target)}/game-regions`, {
+    method: "PUT",
+    body: regions,
+  });
+}
+
+/** PUT /camera-regions — replace the camera-override regions. */
+export function putCameraRegions(target: TargetRef, regions: CameraRegion[]): Promise<SessionView> {
+  return request<SessionView>(`${basePath(target)}/camera-regions`, {
+    method: "PUT",
+    body: regions,
+  });
+}
+
+/** GET /frames — the video's sprite-sheet frame strip. */
+export function getFrames(target: TargetRef): Promise<FrameStrip> {
+  return request<FrameStrip>(`${basePath(target)}/frames`);
+}
+
+/** GET /peaks — waveform peaks of the game audio. */
+export function getPeaks(target: TargetRef): Promise<Peaks> {
+  return request<Peaks>(`${basePath(target)}/peaks`);
+}
+
+/** GET /markers — chapter / game / cue markers (also in `SessionView.markers`). */
+export function getMarkers(target: TargetRef): Promise<Marker[]> {
+  return request<Marker[]>(`${basePath(target)}/markers`);
 }
 
 /** POST /export — starts a `narration_export` job; poll it with `getJob`. 409 when stale and not forced. */
