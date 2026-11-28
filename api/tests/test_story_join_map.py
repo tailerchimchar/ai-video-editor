@@ -7,7 +7,12 @@ from pathlib import Path
 from ai_video_editor.story.broll import BRollInsert
 from ai_video_editor.story.join_map import (
     SUBSCRIBE_LEAD_S,
+    JoinHook,
+    JoinHookEvent,
+    JoinHookPick,
+    JoinMap,
     build_join_map,
+    chapter_id,
     youtube_chapters,
 )
 from ai_video_editor.story.planner import Chapter, StoryPlan
@@ -31,7 +36,7 @@ def _ch(title, start, end, kills=(), deaths=(), broll=()) -> Chapter:
     )
 
 
-def _map(subscribe=None):
+def _map(subscribe=None, hook=None):
     p1 = _plan(_ch("The opening", 60, 160, kills=[100]), _ch("Fight", 300, 330, deaths=[310]))
     item = BRollInsert(item_id=3070, mic_start_s=400, mic_end_s=404, src_start_s=400, src_end_s=404)
     p2 = _plan(_ch("The opening", 20, 120, broll=[item]))
@@ -48,6 +53,7 @@ def _map(subscribe=None):
         story_jsons=[Path("a/story.json"), Path("b/story.json")],
         digest_jsons=[Path("a/digest.json"), None],
         subscribe=subscribe,
+        hook=hook,
     )
 
 
@@ -149,3 +155,39 @@ def test_chapter_name_cleans_planner_play_titles():
         == "2v2 skirmish · won 2-for-0"
     )
     assert chapter_name("First back") == "First back"
+
+
+def test_chapter_id_uses_play_id_or_kind_and_start():
+    play = Chapter(title="x", start_s=240.6, end_s=260.7, kind="lane", play_id="p01")
+    assert chapter_id("r1", play) == "r1:p01"
+    early = Chapter(title="The opening", start_s=50.0, end_s=204.1, kind="early")
+    assert chapter_id("r1", early) == "r1:early@50.0"
+
+
+def test_map_v2_carries_hook_block_and_event_times():
+    pick = JoinHookPick(
+        id="a1b2c3d4",
+        chapter_id="r1:p01",
+        round="r1",
+        chapter_index=1,
+        rec_start_s=300.0,
+        rec_end_s=312.0,
+        offset_s=-10.0,
+        at_s=0.0,
+        video_start_s=0.0,
+        video_end_s=12.0,
+        events=[JoinHookEvent(rec_s=310.0, kind="death")],
+        chapter_rec_start_s=300.0,
+        chapter_rec_end_s=330.0,
+    )
+    jm = _map(hook=JoinHook(mode="play", title="t", picks=[pick]))
+    assert jm.schema_version == 2 and jm.hook.picks[0].chapter_id == "r1:p01"
+    assert len(jm.hook.picks[0].id) == 8
+    assert jm.games[0].chapters[0].kill_times_s == [110.0]  # rec 100 - offset -10
+    assert jm.games[0].chapters[1].death_times_s == [320.0]
+    assert JoinMap.model_validate_json(jm.model_dump_json()).hook == jm.hook
+
+
+def test_map_without_hook_is_v1():
+    assert _map().schema_version == 1 and _map().hook is None
+    assert _map().options.subscribe_after == 1

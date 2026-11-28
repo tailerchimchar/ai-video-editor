@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 
 import pytest
 
 from ai_video_editor.config import settings
 from ai_video_editor.story import bookends
-from ai_video_editor.story.bookends import HookClip, HookPick, hook_window, parse_pick
+from ai_video_editor.story.bookends import (
+    HookClip,
+    HookPick,
+    hook_window,
+    hook_window_rec,
+    parse_pick,
+)
 from ai_video_editor.story.planner import Chapter, StoryPlan
 from ai_video_editor.story.render import StoryRenderError
 
@@ -129,3 +136,15 @@ def test_play_mode_cmd_has_no_freeze():
     assert cmd[cmd.index("-t") + 1] == "6.0"
     assert cmd[len(cmd) - cmd[::-1].index("-t") :][0] == "6.0"
     assert "afade=t=out:st=5.75:d=0.25" in g and "apad" not in g
+
+
+def test_hook_window_rec_play_mode_matches_video_window():
+    plan = _plan(_ch(100, 140, kills=[120, 128]))
+    assert hook_window_rec(plan, 0, "play") == (116.0, 130.0)
+    assert hook_window(plan, 0, 0.0, "play") == (16.0, 30.0)
+
+
+def test_hook_pick_carries_offsets():
+    p = parse_pick("3:2")
+    assert (p.start_s, p.end_s, p.id) == (0.0, 0.0, None)
+    assert dataclasses.replace(p, end_s=2.0).end_s == 2.0

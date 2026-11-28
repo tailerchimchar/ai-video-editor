@@ -11,15 +11,26 @@ chapter list from the map.
 from __future__ import annotations
 
 import re
+import uuid
 from pathlib import Path
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel
 
-from .planner import StoryPlan
+from .planner import Chapter, StoryPlan
 from .suggest.placement import chapter_footage_starts
+
+if TYPE_CHECKING:
+    from .bookends import HookClip, HookMode, HookPick
 
 SUBSCRIBE_LEAD_S = 2.0  # the overlay starts this long into the game after the card
 YOUTUBE_MIN_CHAPTER_S = 10.0  # YouTube ignores chapter lists with shorter entries
+
+
+def chapter_id(round_name: str, chapter: Chapter) -> str:
+    """A chapter's stable id: `<round>:<play id>`, or `<round>:<kind>@<start>`
+    for chapters that are not a play."""
+    return f"{round_name}:{chapter.play_id or f'{chapter.kind}@{chapter.start_s:.1f}'}"
 
 
 class JoinChapter(BaseModel):
@@ -31,6 +42,8 @@ class JoinChapter(BaseModel):
     kills: int
     deaths: int
     items: list[int] = []  # first-back / broll item ids shown in this chapter
+    kill_times_s: list[float] = []  # game clock, like game_start_s
+    death_times_s: list[float] = []
 
 
 class JoinGame(BaseModel):
@@ -51,7 +64,44 @@ class JoinInsert(BaseModel):
     asset: str
 
 
+class JoinHookEvent(BaseModel):
+    rec_s: float  # recording seconds
+    kind: Literal["kill", "death"]
+
+
+class JoinHookPick(BaseModel):
+    id: str
+    chapter_id: str
+    round: str
+    chapter_index: int  # 0-based in the game's story plan
+    rec_start_s: float  # the base window, recording seconds
+    rec_end_s: float
+    offset_s: float  # the game's recording offset (game clock = recording - offset)
+    start_s: float = 0.0  # owner extend: begin this much earlier
+    end_s: float = 0.0  # owner extend: end this much later
+    at_s: float  # where the clip starts in the hook, without the swipes
+    video_start_s: float  # where its piece sits in the joined video
+    video_end_s: float
+    events: list[JoinHookEvent] = []
+    chapter_rec_start_s: float
+    chapter_rec_end_s: float
+    text: str = ""
+
+
+class JoinHook(BaseModel):
+    mode: Literal["tease", "play"] = "tease"
+    title: str | None = None
+    picks: list[JoinHookPick] = []
+
+
+class JoinOptions(BaseModel):
+    subscribe_after: int | None = 1
+    outro: bool = False
+    music_start_s: float = 0.0
+
+
 class JoinMap(BaseModel):
+    schema_version: int = 1  # 2: carries the hook block
     video: str
     title: str
     series: str | None = None
@@ -60,6 +110,8 @@ class JoinMap(BaseModel):
     outro_s: float = 0.0  # the end card after the last game
     games: list[JoinGame]
     inserts: list[JoinInsert] = []
+    hook: JoinHook | None = None
+    options: JoinOptions = JoinOptions()
 
 
 def build_join_map(
@@ -80,6 +132,8 @@ def build_join_map(
     transition_s: float = 0.0,
     lead_s: float = 0.0,
     outro: tuple[float, Path] | None = None,
+    hook: JoinHook | None = None,
+    options: JoinOptions | None = None,
 ) -> JoinMap:
     """`transition_s`: each game after the first starts this long before the
     previous one ends (the swipe overlaps them; owner 2026-11-26 dropped the
@@ -90,7 +144,8 @@ def build_join_map(
     duration; asset path), placed SUBSCRIBE_LEAD_S into game n+1. `lead_s`:
     where game 1 starts (after the hook; the swipe overlap already taken
     off). `outro`: (duration, file) of the end card, swiped in after the
-    last game."""
+    last game. `hook`: the hook block (makes this a version 2 map);
+    `options`: the settings the join was made with."""
     games: list[JoinGame] = []
     t = lead_s
     for i, r in enumerate(rounds):
@@ -109,6 +164,8 @@ def build_join_map(
                 kills=len(c.kill_times_s),
                 deaths=len(c.death_times_s),
                 items=[b.item_id for b in c.broll],
+                kill_times_s=[round(t - offsets_s[i], 1) for t in c.kill_times_s],
+                death_times_s=[round(t - offsets_s[i], 1) for t in c.death_times_s],
             )
             for c, s in zip(plan.chapters, starts, strict=True)
         ]
@@ -145,6 +202,7 @@ def build_join_map(
         )
         t = start + outro_s
     return JoinMap(
+        schema_version=2 if hook is not None else 1,
         video=str(video),
         title=title,
         series=series,
@@ -153,7 +211,62 @@ def build_join_map(
         outro_s=round(outro_s, 2),
         games=games,
         inserts=inserts,
+        hook=hook,
+        options=options or JoinOptions(),
     )
+
+
+def hook_block(
+    rounds: list[str],
+    plans: list[StoryPlan],
+    picks: list[HookPick],
+    clips: list[HookClip],
+    starts_s: list[float],
+    durations_s: list[float],
+    offsets_s: list[float],
+    *,
+    mode: HookMode,
+    title: str | None,
+) -> JoinHook:
+    """The hook block: one entry per pick with its base window (recording
+    seconds, before the owner's offsets), events, chapter bounds and its
+    place on the hook track. `rounds`, `plans` and `offsets_s` are per game;
+    `clips`, `starts_s` (in the joined video) and `durations_s` are per pick."""
+    from .bookends import hook_window_rec
+
+    out: list[JoinHookPick] = []
+    at = 0.0
+    for i, (p, clip) in enumerate(zip(picks, clips, strict=True)):
+        plan = plans[p.game - 1]
+        ch = plan.chapters[p.chapter - 1]
+        rec_start, rec_end = hook_window_rec(plan, p.chapter - 1, p.mode)
+        events = [JoinHookEvent(rec_s=t, kind="kill") for t in ch.kill_times_s]
+        events += [JoinHookEvent(rec_s=t, kind="death") for t in ch.death_times_s]
+        out.append(
+            JoinHookPick(
+                id=p.id or uuid.uuid4().hex[:8],
+                chapter_id=chapter_id(rounds[p.game - 1], ch),
+                round=rounds[p.game - 1],
+                chapter_index=p.chapter - 1,
+                rec_start_s=rec_start,
+                rec_end_s=rec_end,
+                offset_s=offsets_s[p.game - 1],
+                start_s=p.start_s,
+                end_s=p.end_s,
+                at_s=round(at, 2),
+                video_start_s=starts_s[i],
+                video_end_s=round(starts_s[i] + durations_s[i], 2),
+                events=sorted(
+                    (e for e in events if ch.start_s <= e.rec_s <= ch.end_s),
+                    key=lambda e: e.rec_s,
+                ),
+                chapter_rec_start_s=ch.start_s,
+                chapter_rec_end_s=ch.end_s,
+                text=p.text,
+            )
+        )
+        at += clip.end_s - clip.start_s
+    return JoinHook(mode=mode, title=title, picks=out)
 
 
 _PLAY_TITLE = re.compile(

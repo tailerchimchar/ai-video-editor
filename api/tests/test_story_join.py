@@ -12,6 +12,7 @@ import pytest
 from ai_video_editor.config import settings
 from ai_video_editor.story import join
 from ai_video_editor.story.bookends import HookPick
+from ai_video_editor.story.planner import Chapter, StoryPlan
 from ai_video_editor.story.render import StoryRenderError
 
 R1 = "2026-11-23_2056_zeri_8-7-12"
@@ -44,10 +45,20 @@ def fakes(monkeypatch):
     calls: dict = {"ffmpeg": [], "join_files": [], "bookends": []}
 
     def write_files(
-        rounds, out, *, transition_s, title=None, subscribe=None, lead_s=0.0, outro=None
+        rounds,
+        out,
+        *,
+        transition_s,
+        title=None,
+        subscribe=None,
+        lead_s=0.0,
+        outro=None,
+        hook=None,
+        options=None,
     ):
         calls["join_files"].append((list(rounds), transition_s, subscribe))
         calls["bookends"].append((lead_s, outro))
+        calls["map"] = (hook, options)
         return Path(out).with_suffix(".join.json")
 
     def run(cmd, timeout):
@@ -210,6 +221,39 @@ def test_no_subscribe_without_asset_or_when_disabled(ws, fakes, tmp_path):
     assert all(sub is None for _, _, sub in fakes["join_files"])
 
 
+def _hook_plan() -> StoryPlan:
+    chapters = [
+        Chapter(title="a", start_s=0, end_s=60, kind="lane"),
+        Chapter(
+            title="c", start_s=100, end_s=140, kind="fight", kill_times_s=[120, 128], play_id="p00"
+        ),
+    ]
+    return StoryPlan(chapters=chapters, total_s=100, mic_stream=None, audio="mixed", cards=False)
+
+
+def test_hook_clips_apply_offsets_inside_the_chapter(ws, monkeypatch):
+    plan = StoryPlan(
+        chapters=[
+            Chapter(
+                title="c",
+                start_s=100,
+                end_s=140,
+                kind="fight",
+                kill_times_s=[120, 128],
+                play_id="p00",
+            )
+        ],
+        total_s=40,
+        mic_stream=None,
+        audio="mixed",
+        cards=False,
+    )
+    monkeypatch.setattr(join, "_load_plan", lambda r: plan)
+    clip = join.hook_clips(["r1"], [HookPick(1, 1, "", mode="play", start_s=3.0, end_s=20.0)])[0]
+    assert (clip.rec_start_s, clip.rec_end_s) == (113.0, 140.0)  # end clamped to the chapter
+    assert (clip.start_s, clip.end_s) == (13.0, 40.0)
+
+
 def test_hook_and_outro_wrap_the_games(ws, fakes, tmp_path, monkeypatch):
     from ai_video_editor.story import bookends
 
@@ -227,6 +271,8 @@ def test_hook_and_outro_wrap_the_games(ws, fakes, tmp_path, monkeypatch):
         return work / "outro.mp4"
 
     monkeypatch.setattr(join, "hook_clips", lambda rounds, picks: list(picks))
+    monkeypatch.setattr(join, "_load_plan", lambda r: _hook_plan())
+    monkeypatch.setattr(join, "_offset", lambda plan: 0.0)
     monkeypatch.setattr(bookends, "render_hook", fake_hook)
     monkeypatch.setattr(bookends, "render_outro", fake_outro)
     out = tmp_path / "j.mp4"
@@ -248,3 +294,31 @@ def test_hook_and_outro_wrap_the_games(ws, fakes, tmp_path, monkeypatch):
 
 def test_parts_dir_is_hidden_under_story(ws, tmp_path):
     assert join.parts_dir(tmp_path / "joined_x.mp4") == ws / "story" / "_joined" / "joined_x"
+
+
+def test_join_writes_hook_block_and_options(ws, fakes, tmp_path, monkeypatch):
+    from ai_video_editor.story import bookends
+    from ai_video_editor.story.bookends import HookClip
+
+    for r in (R1, R2):
+        _story(ws, r)
+    clips = [
+        HookClip(join.story_path(R1), 10.0, 20.0, "", rec_start_s=110.0, rec_end_s=120.0),
+        HookClip(join.story_path(R2), 5.0, 12.0, "", rec_start_s=105.0, rec_end_s=112.0),
+    ]
+    monkeypatch.setattr(join, "hook_clips", lambda rounds, picks: clips)
+    monkeypatch.setattr(join, "_load_plan", lambda r: _hook_plan())
+    monkeypatch.setattr(join, "_offset", lambda plan: 5.0)
+    monkeypatch.setattr(
+        bookends, "render_hook", lambda c, work, *, title: [work / "h1.mp4", work / "h2.mp4"]
+    )
+    monkeypatch.setattr(bookends, "render_outro", lambda *a, **k: Path("o.mp4"))
+    picks = [HookPick(1, 2, "", id="keep0001"), HookPick(2, 2)]
+    join.join_stories([R1, R2], tmp_path / "j.mp4", hook=picks, hook_title="t", outro=True)
+    hook, options = fakes["map"]
+    assert [p.at_s for p in hook.picks] == [0.0, 10.0]
+    assert hook.picks[0].id == "keep0001" and len(hook.picks[1].id) == 8
+    assert hook.picks[0].chapter_id == f"{R1}:p00" and hook.picks[0].offset_s == 5.0
+    assert [e.rec_s for e in hook.picks[0].events] == [120, 128]
+    assert hook.picks[1].video_start_s == 99.5 and hook.picks[0].video_end_s == 100.0
+    assert options.outro is True and options.subscribe_after == 1

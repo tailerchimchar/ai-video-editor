@@ -62,6 +62,9 @@ class HookPick:
     chapter: int
     text: str = DEFAULT_FREEZE_TEXT
     mode: HookMode = "tease"  # "play": run through the outcome, no freeze
+    start_s: float = 0.0  # owner offset: begin this much earlier (extend)
+    end_s: float = 0.0  # owner offset: end this much later (extend)
+    id: str | None = None  # stable id in the join map (None: made on write)
 
 
 @dataclass(frozen=True)
@@ -71,6 +74,8 @@ class HookClip:
     end_s: float
     text: str
     freeze: bool = True  # False (play mode): no freeze / blur / teaser text
+    rec_start_s: float = 0.0  # the same window in recording seconds
+    rec_end_s: float = 0.0
 
 
 def parse_pick(spec: str) -> HookPick:
@@ -84,44 +89,59 @@ def parse_pick(spec: str) -> HookPick:
     return HookPick(game, chapter, text)
 
 
-def hook_window(
-    plan: StoryPlan, chapter_index: int, card_s: float, mode: HookMode = "tease"
+def hook_window_rec(
+    plan: StoryPlan, chapter_index: int, mode: HookMode = "tease"
 ) -> tuple[float, float]:
-    """(start, end) in story.mp4 seconds: up to HOOK_LEAD_S of the chapter,
+    """(start, end) in recording seconds: up to HOOK_LEAD_S of the chapter,
     ending HOOK_CUT_BEFORE_S before its first owner kill or death. A chapter
     with neither keeps its first HOOK_LEAD_S. `play` mode instead runs through
     the outcome: up to HOOK_LEAD_S before the first event to HOOK_PLAY_TAIL_S
-    after the last, at most HOOK_PLAY_MAX_S long."""
+    after the last, at most HOOK_PLAY_MAX_S long. A tease whose outcome is
+    right at the chapter start borrows lead-in, so start may precede it."""
     ch = plan.chapters[chapter_index]
-    start = video_second(plan, chapter_index, ch.start_s, card_s)
-    stop = video_second(plan, chapter_index, ch.end_s, card_s)
-    assert start is not None and stop is not None
     events = sorted(t for t in ch.kill_times_s + ch.death_times_s if ch.start_s <= t <= ch.end_s)
     if mode == "play":
         if events:
-            first = video_second(plan, chapter_index, events[0], card_s)
-            last = video_second(plan, chapter_index, events[-1], card_s)
-            assert first is not None and last is not None
-            end = min(stop, last + HOOK_PLAY_TAIL_S)
-            begin = max(start, first - HOOK_LEAD_S, end - HOOK_PLAY_MAX_S)
+            end = min(ch.end_s, events[-1] + HOOK_PLAY_TAIL_S)
+            begin = max(ch.start_s, events[0] - HOOK_LEAD_S, end - HOOK_PLAY_MAX_S)
         else:
-            end = min(stop, start + HOOK_LEAD_S)
-            begin = start
+            end = min(ch.end_s, ch.start_s + HOOK_LEAD_S)
+            begin = ch.start_s
         if end - begin < HOOK_MIN_S:
             raise StoryRenderError(f"chapter {chapter_index + 1} is too short for a hook")
         return round(begin, 2), round(end, 2)
-    if events:
-        hit = video_second(plan, chapter_index, events[0], card_s)
-        assert hit is not None
-        end = hit - HOOK_CUT_BEFORE_S
-    else:
-        end = min(stop, start + HOOK_LEAD_S)
-    begin = max(start, end - HOOK_LEAD_S)
+    end = events[0] - HOOK_CUT_BEFORE_S if events else min(ch.end_s, ch.start_s + HOOK_LEAD_S)
+    begin = max(ch.start_s, end - HOOK_LEAD_S)
     if end - begin < HOOK_MIN_S:  # outcome right at the chapter start: borrow lead-in
         begin = max(0.0, end - HOOK_LEAD_S)
     if end - begin < HOOK_MIN_S:
         raise StoryRenderError(f"chapter {chapter_index + 1} is too short for a hook")
     return round(begin, 2), round(end, 2)
+
+
+def hook_video_window(
+    plan: StoryPlan, chapter_index: int, rec_start: float, rec_end: float, card_s: float
+) -> tuple[float, float]:
+    """A recording-seconds window of a chapter as (start, end) in story.mp4
+    seconds. A start before the chapter (borrowed lead-in) reaches back into
+    the previous footage by the same length, not below 0."""
+    ch = plan.chapters[chapter_index]
+    end = video_second(plan, chapter_index, rec_end, card_s)
+    assert end is not None
+    if rec_start >= ch.start_s:
+        start = video_second(plan, chapter_index, rec_start, card_s)
+        assert start is not None
+    else:
+        start = max(0.0, end - (rec_end - rec_start))
+    return round(start, 2), round(end, 2)
+
+
+def hook_window(
+    plan: StoryPlan, chapter_index: int, card_s: float, mode: HookMode = "tease"
+) -> tuple[float, float]:
+    """`hook_window_rec` in story.mp4 seconds."""
+    rec_start, rec_end = hook_window_rec(plan, chapter_index, mode)
+    return hook_video_window(plan, chapter_index, rec_start, rec_end, card_s)
 
 
 def font_path() -> str:

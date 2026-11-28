@@ -42,7 +42,14 @@ from typing import Literal
 from ..config import settings
 from . import bookends
 from .bookends import HookClip, HookPick
-from .join_map import SUBSCRIBE_LEAD_S, build_join_map, youtube_chapters
+from .join_map import (
+    SUBSCRIBE_LEAD_S,
+    JoinHook,
+    JoinOptions,
+    build_join_map,
+    hook_block,
+    youtube_chapters,
+)
 from .planner import StoryPlan
 from .render import FPS, StoryRenderError, _encode_opts, _run_ffmpeg
 
@@ -430,9 +437,25 @@ def hook_clips(rounds: list[str], picks: list[HookPick]) -> list[HookClip]:
             raise StoryRenderError(
                 f"hook pick game {p.game} has chapters 1..{len(plan.chapters)}, not {p.chapter}"
             )
-        start, end = bookends.hook_window(plan, p.chapter - 1, settings.story_card_seconds, p.mode)
+        ch = plan.chapters[p.chapter - 1]
+        base_start, base_end = bookends.hook_window_rec(plan, p.chapter - 1, p.mode)
+        rec_start = max(base_start - p.start_s, min(ch.start_s, base_start))
+        rec_end = min(base_end + p.end_s, ch.end_s) if p.end_s else base_end
+        if rec_end - rec_start < bookends.HOOK_MIN_S:
+            raise StoryRenderError(f"hook pick {p.game}:{p.chapter} is too short after its edits")
+        start, end = bookends.hook_video_window(
+            plan, p.chapter - 1, rec_start, rec_end, settings.story_card_seconds
+        )
         clips.append(
-            HookClip(story_path(rounds[p.game - 1]), start, end, p.text, freeze=p.mode == "tease")
+            HookClip(
+                story_path(rounds[p.game - 1]),
+                start,
+                end,
+                p.text,
+                freeze=p.mode == "tease",
+                rec_start_s=rec_start,
+                rec_end_s=rec_end,
+            )
         )
     return clips
 
@@ -465,7 +488,8 @@ def join_stories(
     out.parent.mkdir(parents=True, exist_ok=True)
     work = parts_dir(out)
     asset = subscribe_asset()
-    hooks = bookends.render_hook(hook_clips(rounds, hook), work, title=hook_title) if hook else []
+    clips = hook_clips(rounds, hook) if hook else []
+    hooks = bookends.render_hook(clips, work, title=hook_title) if hook else []
     outro_file: Path | None = None
     if outro:
         outro_file = bookends.render_outro(
@@ -494,6 +518,20 @@ def join_stories(
         subscribe=(asset.as_posix(), sub_at) if sub_at is not None else None,
     )
     sub = (subscribe_after, _asset_duration(asset), asset) if sub_at is not None else None
+    hook_map: JoinHook | None = None
+    if hook:
+        plans = [_load_plan(r) for r in rounds]
+        hook_map = hook_block(
+            rounds,
+            plans,
+            hook,
+            clips,
+            starts[:first],
+            durations[:first],
+            [_offset(p) for p in plans],
+            mode=hook[0].mode,
+            title=hook_title,
+        )
     write_join_files(
         rounds,
         out,
@@ -502,6 +540,10 @@ def join_stories(
         subscribe=sub,
         lead_s=starts[first],
         outro=(durations[-1], outro_file) if outro_file else None,
+        hook=hook_map,
+        options=JoinOptions(
+            subscribe_after=subscribe_after, outro=outro, music_start_s=music_start_s
+        ),
     )
     return out
 
@@ -515,6 +557,8 @@ def write_join_files(
     subscribe: tuple[int, float, Path] | None = None,
     lead_s: float = 0.0,
     outro: tuple[float, Path] | None = None,
+    hook: JoinHook | None = None,
+    options: JoinOptions | None = None,
 ) -> Path:
     """`<out>.join.json` and `<out>.chapters.txt` next to the joined mp4."""
     plans = [_load_plan(r) for r in rounds]
@@ -535,6 +579,8 @@ def write_join_files(
         transition_s=transition_s,
         lead_s=lead_s,
         outro=outro,
+        hook=hook,
+        options=options,
     )
     map_path = out.with_suffix(".join.json")
     map_path.write_text(jm.model_dump_json(indent=2), encoding="utf-8")
