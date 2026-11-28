@@ -211,3 +211,67 @@ def test_hook_block_at_s_follows_rendered_lengths_with_the_freeze():
         title=None,
     )
     assert [p.at_s for p in hook.picks] == [0.0, 11.4]
+
+
+def test_map_chapters_carry_play_id_and_hook_base_window():
+    from ai_video_editor.story.bookends import hook_window_rec
+
+    quiet = _ch("The opening", 60, 160)
+    play = _ch("Fight, owner won", 300, 330, kills=[310]).model_copy(update={"play_id": "p01"})
+    plan = _plan(quiet, play)
+    kw = dict(
+        video=Path("j.mp4"),
+        title="t",
+        rounds=["r1"],
+        labels=["X"],
+        plans=[plan],
+        offsets_s=[-10.0],
+        story_durations_s=[100.0],
+        card_s=0.0,
+        story_card_s=0.0,
+        story_jsons=[Path("a/story.json")],
+        digest_jsons=[None],
+    )
+    for mode in ("tease", "play"):
+        jm = build_join_map(**kw, hook_mode=mode)
+        a, b = jm.games[0].chapters
+        assert (a.play_id, a.hook_rec_start_s, a.hook_rec_end_s) == (None, None, None)
+        assert b.play_id == "p01"
+        assert (b.hook_rec_start_s, b.hook_rec_end_s) == hook_window_rec(plan, 1, mode)
+        assert jm.games[0].offset_s == -10.0
+        assert JoinMap.model_validate_json(jm.model_dump_json()) == jm
+    assert (
+        build_join_map(**kw).games[0].chapters[1].hook_rec_start_s
+        == hook_window_rec(plan, 1, "tease")[0]
+    )
+
+
+def test_too_short_chapter_gets_no_hook_window():
+    plan = _plan(_ch("Blink", 300, 301, kills=[300.5]))
+    jm = build_join_map(
+        video=Path("j.mp4"),
+        title="t",
+        rounds=["r1"],
+        labels=["X"],
+        plans=[plan],
+        offsets_s=[0.0],
+        story_durations_s=[10.0],
+        card_s=0.0,
+        story_card_s=0.0,
+        story_jsons=[Path("a/story.json")],
+        digest_jsons=[None],
+        hook_mode="play",
+    )
+    assert jm.games[0].chapters[0].hook_rec_start_s is None
+
+
+def test_old_maps_without_the_new_fields_still_parse():
+    jm = _map()
+    raw = jm.model_dump()
+    for g in raw["games"]:
+        g.pop("offset_s")
+        for c in g["chapters"]:
+            for k in ("play_id", "hook_rec_start_s", "hook_rec_end_s"):
+                c.pop(k)
+    old = JoinMap.model_validate(raw)
+    assert old.games[0].offset_s == 0.0 and old.games[0].chapters[0].play_id is None

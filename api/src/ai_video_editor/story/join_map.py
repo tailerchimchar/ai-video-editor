@@ -27,10 +27,14 @@ SUBSCRIBE_LEAD_S = 2.0  # the overlay starts this long into the game after the c
 YOUTUBE_MIN_CHAPTER_S = 10.0  # YouTube ignores chapter lists with shorter entries
 
 
-def chapter_id(round_name: str, chapter: Chapter) -> str:
+def chapter_id_from(round_name: str, kind: str, play_id: str | None, rec_start_s: float) -> str:
     """A chapter's stable id: `<round>:<play id>`, or `<round>:<kind>@<start>`
-    for chapters that are not a play."""
-    return f"{round_name}:{chapter.play_id or f'{chapter.kind}@{chapter.start_s:.1f}'}"
+    (recording seconds) for chapters that are not a play."""
+    return f"{round_name}:{play_id or f'{kind}@{rec_start_s:.1f}'}"
+
+
+def chapter_id(round_name: str, chapter: Chapter) -> str:
+    return chapter_id_from(round_name, chapter.kind, chapter.play_id, chapter.start_s)
 
 
 class JoinChapter(BaseModel):
@@ -44,6 +48,9 @@ class JoinChapter(BaseModel):
     items: list[int] = []  # first-back / broll item ids shown in this chapter
     kill_times_s: list[float] = []  # game clock, like game_start_s
     death_times_s: list[float] = []
+    play_id: str | None = None
+    hook_rec_start_s: float | None = None  # base hook window, recording seconds
+    hook_rec_end_s: float | None = None  # None: no events, or too short for a hook
 
 
 class JoinGame(BaseModel):
@@ -55,6 +62,7 @@ class JoinGame(BaseModel):
     story_json: str
     digest_json: str | None
     chapters: list[JoinChapter]
+    offset_s: float = 0.0  # the game's recording offset (game clock = recording - offset)
 
 
 class JoinInsert(BaseModel):
@@ -114,6 +122,22 @@ class JoinMap(BaseModel):
     options: JoinOptions = JoinOptions()
 
 
+def _hook_base(plan: StoryPlan, index: int, mode: str) -> dict[str, float]:
+    """`hook_rec_*` for one chapter: its base hook window, or nothing when the
+    chapter has no kills or deaths or is too short for a hook."""
+    from .bookends import hook_window_rec
+    from .render import StoryRenderError
+
+    c = plan.chapters[index]
+    if not (c.kill_times_s or c.death_times_s):
+        return {}
+    try:
+        start, end = hook_window_rec(plan, index, mode)  # type: ignore[arg-type]
+    except StoryRenderError:
+        return {}
+    return {"hook_rec_start_s": start, "hook_rec_end_s": end}
+
+
 def build_join_map(
     *,
     video: Path,
@@ -134,6 +158,7 @@ def build_join_map(
     outro: tuple[float, Path] | None = None,
     hook: JoinHook | None = None,
     options: JoinOptions | None = None,
+    hook_mode: str = "tease",
 ) -> JoinMap:
     """`transition_s`: each game after the first starts this long before the
     previous one ends (the swipe overlaps them; owner 2026-11-26 dropped the
@@ -145,7 +170,8 @@ def build_join_map(
     where game 1 starts (after the hook; the swipe overlap already taken
     off). `outro`: (duration, file) of the end card, swiped in after the
     last game. `hook`: the hook block (makes this a version 2 map);
-    `options`: the settings the join was made with."""
+    `options`: the settings the join was made with. `hook_mode`: the mode each
+    chapter's base hook window (`hook_rec_*`) is computed for."""
     games: list[JoinGame] = []
     t = lead_s
     for i, r in enumerate(rounds):
@@ -166,8 +192,10 @@ def build_join_map(
                 items=[b.item_id for b in c.broll],
                 kill_times_s=[round(t - offsets_s[i], 1) for t in c.kill_times_s],
                 death_times_s=[round(t - offsets_s[i], 1) for t in c.death_times_s],
+                play_id=c.play_id,
+                **_hook_base(plan, n, hook_mode),
             )
-            for c, s in zip(plan.chapters, starts, strict=True)
+            for n, (c, s) in enumerate(zip(plan.chapters, starts, strict=True))
         ]
         end = story_start + story_durations_s[i]
         games.append(
@@ -180,6 +208,7 @@ def build_join_map(
                 story_json=str(story_jsons[i]),
                 digest_json=str(digest_jsons[i]) if digest_jsons[i] else None,
                 chapters=chapters,
+                offset_s=offsets_s[i],
             )
         )
         t = end

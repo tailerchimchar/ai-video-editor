@@ -21,6 +21,9 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
+import re
+import tempfile
 from pathlib import Path
 from typing import Literal
 from uuid import uuid4
@@ -30,12 +33,13 @@ from pydantic import BaseModel, Field, ValidationError
 from ..config import settings
 from .bookends import FREEZE_S, HOOK_MIN_S
 from .join import SWIPE_S
-from .join_map import JoinHook, JoinHookEvent, JoinHookPick, JoinMap
+from .join_map import JoinHook, JoinHookEvent, JoinHookPick, JoinMap, chapter_id_from
 
 NEIGHBOUR_GAP_S = 0.5
 EDITS_SUFFIX = ".edits.json"
 _EPS = 1e-6
 _AT_TOL = 0.06  # the map keeps at_s to 0.01, the edits to 0.1
+_STEM = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 class EditPick(BaseModel):
@@ -81,6 +85,8 @@ def base_digest(hook: JoinHook) -> str:
 
 
 def edits_path(video_stem: str) -> Path:
+    if not _STEM.fullmatch(video_stem):
+        raise ValueError(f"bad video stem: {video_stem!r}")
     return Path(settings.workspace_dir) / "story" / f"{video_stem}{EDITS_SUFFIX}"
 
 
@@ -97,7 +103,14 @@ def load_edits(video_stem: str) -> HookEdits | None:
 def save_edits(e: HookEdits) -> Path:
     path = edits_path(e.video)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(e.model_dump(), indent=2), encoding="utf-8")
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(e.model_dump(), indent=2))
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
     return path
 
 
@@ -105,16 +118,15 @@ def delete_edits(video_stem: str) -> None:
     edits_path(video_stem).unlink(missing_ok=True)
 
 
-def _label(jm: JoinMap, round_name: str, index: int, fallback: str) -> str:
-    for g in jm.games:
-        if g.round == round_name and 0 <= index < len(g.chapters):
-            return g.chapters[index].title.split(",")[0].strip()
-    return fallback
+def _label(title: str) -> str:
+    return title.split(",")[0].strip()
 
 
 def chapter_bases(jm: JoinMap) -> dict[str, ChapterBase]:
-    """Every chapter the hook can use, by chapter id (today: the hook block's)."""
+    """Every chapter the hook can use, by chapter id: the hook block's picks
+    first (they win), then every chapter the map gave a base window."""
     out: dict[str, ChapterBase] = {}
+    titles = {(g.round, i): c.title for g in jm.games for i, c in enumerate(g.chapters)}
     for p in jm.hook.picks if jm.hook else []:
         if p.chapter_id in out:
             continue
@@ -128,8 +140,34 @@ def chapter_bases(jm: JoinMap) -> dict[str, ChapterBase]:
             chapter_rec_start_s=p.chapter_rec_start_s,
             chapter_rec_end_s=p.chapter_rec_end_s,
             events=list(p.events),
-            label=_label(jm, p.round, p.chapter_index, p.chapter_id),
+            label=_label(titles.get((p.round, p.chapter_index), p.chapter_id)),
         )
+    for g in jm.games:
+        for i, c in enumerate(g.chapters):
+            if c.hook_rec_start_s is None or c.hook_rec_end_s is None:
+                continue
+            rec_start = round(c.game_start_s + g.offset_s, 3)
+            cid = chapter_id_from(g.round, c.kind, c.play_id, rec_start)
+            if cid in out:
+                continue
+            events = [
+                JoinHookEvent(rec_s=round(t + g.offset_s, 3), kind="kill") for t in c.kill_times_s
+            ]
+            events += [
+                JoinHookEvent(rec_s=round(t + g.offset_s, 3), kind="death") for t in c.death_times_s
+            ]
+            out[cid] = ChapterBase(
+                chapter_id=cid,
+                round=g.round,
+                chapter_index=i,
+                rec_start_s=c.hook_rec_start_s,
+                rec_end_s=c.hook_rec_end_s,
+                offset_s=g.offset_s,
+                chapter_rec_start_s=rec_start,
+                chapter_rec_end_s=round(c.game_end_s + g.offset_s, 3),
+                events=sorted(events, key=lambda e: e.rec_s),
+                label=_label(c.title),
+            )
     return out
 
 
@@ -150,7 +188,7 @@ def limits(jm: JoinMap, p: ChapterBase | JoinHookPick) -> tuple[float, float]:
         if g.round != p.round:
             continue
         i = p.chapter_index
-        if 0 < i <= len(g.chapters):
+        if 0 < i < len(g.chapters):
             lo = g.chapters[i - 1].game_end_s + p.offset_s + NEIGHBOUR_GAP_S
         if i + 1 < len(g.chapters):
             hi = g.chapters[i + 1].game_start_s + p.offset_s - NEIGHBOUR_GAP_S
@@ -176,7 +214,10 @@ def clamp_offsets(
             end_s = HOOK_MIN_S - window - start_s
         else:
             start_s = HOOK_MIN_S - window - end_s
-    return round(start_s, 1), round(end_s, 1)
+    # round the edge that moved away from the other one, so rounding never shortens
+    if keep == "start":
+        return round(start_s, 1), math.ceil(end_s * 10 - 1e-9) / 10
+    return math.ceil(start_s * 10 - 1e-9) / 10, round(end_s, 1)
 
 
 def settle(picks: list[EditPick], lengths: dict[str, float]) -> list[EditPick]:
@@ -185,20 +226,26 @@ def settle(picks: list[EditPick], lengths: dict[str, float]) -> list[EditPick]:
     out: list[EditPick] = []
     end = 0.0
     for p in sorted(picks, key=lambda x: x.at_s):
-        at = max(p.at_s, 0.0)
+        at = round(max(p.at_s, 0.0), 1)
         if out and at < end - _EPS:
-            at = end
-        at = round(at, 1)
+            at = math.ceil(end * 10 - 1e-9) / 10  # up to the grid, so it never overlaps
+        if p.id not in lengths:
+            raise ValueError(f"length missing for pick id: {p.id}")
         out.append(p.model_copy(update={"at_s": at}))
-        end = at + lengths.get(p.id, 0.0)
+        end = at + lengths[p.id]
     return out
 
 
-def _mode(jm: JoinMap) -> str:
+def _mode_of(jm: JoinMap, edits: HookEdits | None) -> str:
+    """The hook mode: the edits' when there is an edits file, else the map's."""
+    if edits is not None:
+        return edits.hook.mode
     return jm.hook.mode if jm.hook else "play"
 
 
-def validate_picks(jm: JoinMap, picks: list[EditPick]) -> list[EditPick]:
+def validate_picks(
+    jm: JoinMap, picks: list[EditPick], edits: HookEdits | None = None
+) -> list[EditPick]:
     """Check chapters and ids, clamp offsets, settle the track."""
     bases = chapter_bases(jm)
     seen: set[str] = set()
@@ -211,20 +258,28 @@ def validate_picks(jm: JoinMap, picks: list[EditPick]) -> list[EditPick]:
         seen.add(p.id)
         s, e = clamp_offsets(jm, bases[p.chapter_id], p.start_s, p.end_s, "start")
         clamped.append(p.model_copy(update={"start_s": s, "end_s": e}))
-    lengths = {p.id: _len(bases[p.chapter_id], _mode(jm), p.start_s, p.end_s) for p in clamped}
+    lengths = {
+        p.id: _len(bases[p.chapter_id], _mode_of(jm, edits), p.start_s, p.end_s) for p in clamped
+    }
     return settle(clamped, lengths)
 
 
 def split_pick(
-    jm: JoinMap, picks: list[EditPick], pick_id: str, at_track_s: float
+    jm: JoinMap,
+    picks: list[EditPick],
+    pick_id: str,
+    at_track_s: float,
+    edits: HookEdits | None = None,
 ) -> list[EditPick]:
     """Cut the pick that holds `at_track_s` into two picks of the same chapter."""
     bases = chapter_bases(jm)
-    mode = _mode(jm)
+    mode = _mode_of(jm, edits)
     for i, p in enumerate(picks):
         if p.id != pick_id:
             continue
-        b = bases[p.chapter_id]
+        b = bases.get(p.chapter_id)
+        if b is None:
+            raise ValueError(f"unknown chapter_id: {p.chapter_id}")
         if not p.at_s <= at_track_s < p.at_s + _len(b, mode, p.start_s, p.end_s):
             raise ValueError("split point is outside the pick")
         rec_t = round(b.rec_start_s - p.start_s + (at_track_s - p.at_s), 1)
@@ -326,6 +381,7 @@ def hook_view(jm: JoinMap, video_stem: str, edits: HookEdits | None) -> HookView
     bases = chapter_bases(jm)
     rendered = {p.id: p for p in jm.hook.picks}
     current = (edits or fresh_edits(jm, video_stem)).hook
+    mode = _mode_of(jm, edits)
     ordered = sorted(current.picks, key=lambda x: x.at_s)
     views: list[HookPickView] = []
     gaps = cursor = track_end = total = 0.0
@@ -333,7 +389,7 @@ def hook_view(jm: JoinMap, video_stem: str, edits: HookEdits | None) -> HookView
         b = bases.get(p.chapter_id)
         if b is None:  # a stale file may name a chapter the map no longer has
             continue
-        ln = _len(b, current.mode, p.start_s, p.end_s)
+        ln = _len(b, mode, p.start_s, p.end_s)
         lo, hi = limits(jm, b)
         rec_end = b.rec_end_s + p.end_s
         r = rendered.get(p.id)
@@ -370,11 +426,14 @@ def hook_view(jm: JoinMap, video_stem: str, edits: HookEdits | None) -> HookView
         total += ln
     digest = base_digest(jm.hook)
     ref = sorted(jm.hook.picks, key=lambda x: x.at_s)
-    dirty = len(ordered) != len(ref) or any(
-        not _same(a, b) for a, b in zip(ordered, ref, strict=True)
+    dirty = (
+        current.mode != jm.hook.mode
+        or current.title != jm.hook.title
+        or len(ordered) != len(ref)
+        or any(not _same(a, b) for a, b in zip(ordered, ref, strict=True))
     )
     return HookView(
-        mode=current.mode,
+        mode=mode,
         title=current.title,
         rendered_intro_s=jm.intro_s,
         track_end_s=round(track_end, 3),

@@ -581,6 +581,7 @@ def write_join_files(
         outro=outro,
         hook=hook,
         options=options,
+        hook_mode=hook.mode if hook else "tease",
     )
     map_path = out.with_suffix(".join.json")
     map_path.write_text(jm.model_dump_json(indent=2), encoding="utf-8")

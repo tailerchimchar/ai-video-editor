@@ -107,7 +107,11 @@ def _jm() -> JoinMap:
 
 
 def _edits(jm, picks):
-    return HookEdits(video="joined_x", base_digest=base_digest(jm.hook), hook=EditHook(picks=picks))
+    return HookEdits(
+        video="joined_x",
+        base_digest=base_digest(jm.hook),
+        hook=EditHook(mode=jm.hook.mode, title=jm.hook.title, picks=picks),
+    )
 
 
 def test_base_digest_depends_on_ids_and_windows_only():
@@ -276,3 +280,122 @@ def test_edits_round_trip_on_disk(tmp_path, monkeypatch):
     he.delete_edits("j")
     he.delete_edits("j")
     assert he.load_edits("j") is None
+
+
+def _jm_with_extra_chapters():
+    """The `_jm` map, with the chapters carrying their own base windows."""
+    jm = _jm()
+    ch = jm.games[0].chapters
+    ch[0].play_id = "p00"
+    ch[0].hook_rec_start_s, ch[0].hook_rec_end_s = 110.0, 120.0  # the pick's 116..130 wins
+    ch[2].play_id = "p02"
+    ch[2].hook_rec_start_s, ch[2].hook_rec_end_s = 205.0, 215.0
+    ch[2].kill_times_s = [220.0, 212.0]
+    ch[2].death_times_s = [225.0]
+    jm.hook.picks = jm.hook.picks[:1]
+    return jm
+
+
+def test_chapter_bases_includes_chapters_outside_the_hook():
+    jm = _jm_with_extra_chapters()
+    b = chapter_bases(jm)
+    assert set(b) == {"r1:p00", "r1:p02"}
+    assert (b["r1:p00"].rec_start_s, b["r1:p00"].rec_end_s) == (116, 130)  # from the pick
+    p2 = b["r1:p02"]
+    assert (p2.rec_start_s, p2.rec_end_s) == (205.0, 215.0)
+    assert (p2.round, p2.chapter_index, p2.offset_s) == ("r1", 2, 0.0)
+    assert (p2.chapter_rec_start_s, p2.chapter_rec_end_s) == (200.0, 230.0)
+    assert p2.label == "Another play"
+    assert [(e.rec_s, e.kind) for e in p2.events] == [
+        (212.0, "kill"),
+        (220.0, "kill"),
+        (225.0, "death"),
+    ]
+
+
+def test_chapter_bases_non_play_chapter_id_uses_kind_and_recording_start():
+    jm = _jm_with_extra_chapters()
+    jm.games[0].offset_s = 10.0
+    c = jm.games[0].chapters[1]
+    c.hook_rec_start_s, c.hook_rec_end_s = 175.0, 185.0
+    assert "r1:early@170.0" in chapter_bases(jm)  # game_start 160 + offset 10
+
+
+def _edits_with(jm, **hook_kw):
+    e = fresh_edits(jm, "j")
+    return e.model_copy(update={"hook": e.hook.model_copy(update=hook_kw)})
+
+
+def test_dirty_considers_mode_and_title():
+    jm = _jm()
+    assert not hook_view(jm, "j", fresh_edits(jm, "j")).dirty
+    assert hook_view(jm, "j", _edits_with(jm, mode="tease")).dirty
+    assert hook_view(jm, "j", _edits_with(jm, title="new")).dirty
+
+
+def test_mode_comes_from_the_edits_when_there_are_edits():
+    jm = _jm()  # map mode: play
+    v = hook_view(jm, "j", _edits_with(jm, mode="tease"))
+    assert v.picks[0].len_s == pytest.approx(14.0 + he.FREEZE_S)
+    out = validate_picks(jm, [EditPick(id="a", chapter_id="r1:p00"), EditPick(chapter_id="r1:p00")])
+    assert out[1].at_s == 14.0  # no edits arg: the map's mode (play)
+    out = validate_picks(
+        jm,
+        [EditPick(id="a", chapter_id="r1:p00"), EditPick(chapter_id="r1:p00")],
+        _edits_with(jm, mode="tease"),
+    )
+    assert out[1].at_s == pytest.approx(15.4, abs=0.05)
+
+
+def test_hook_view_in_tease_mode_includes_the_freeze():
+    jm = _jm()
+    jm.hook.mode = "tease"
+    v = hook_view(jm, "j", None)
+    assert v.picks[0].len_s == pytest.approx(14.0 + 1.4)
+
+
+def test_split_pick_errors():
+    jm = _jm()
+    picks = fresh_edits(jm, "j").hook.picks
+    with pytest.raises(ValueError, match="unknown pick id"):
+        split_pick(jm, picks, "nope", 5.0)
+    with pytest.raises(ValueError, match="outside the pick"):
+        split_pick(jm, picks, "aaaaaaaa", 50.0)
+    bad = [picks[0].model_copy(update={"chapter_id": "r1:gone"})]
+    with pytest.raises(ValueError, match="unknown chapter_id: r1:gone"):
+        split_pick(jm, bad, "aaaaaaaa", 5.0)
+
+
+def test_clamp_never_leaves_a_window_shorter_than_the_minimum_after_rounding():
+    jm = _jm()
+    p = jm.hook.picks[0]
+    for keep in ("start", "end"):
+        s, e = clamp_offsets(jm, p, 0.04, -14.04, keep)
+        assert (p.rec_end_s - p.rec_start_s) + s + e >= he.HOOK_MIN_S - 1e-9
+
+
+def test_settle_rounds_up_so_rounding_never_overlaps():
+    a = EditPick(id="a", chapter_id="x", at_s=0)
+    b = EditPick(id="b", chapter_id="x", at_s=0.5)
+    out = settle([a, b], {"a": 2.01, "b": 1})
+    assert out[1].at_s == 2.1
+
+
+def test_settle_unknown_id_raises():
+    with pytest.raises(ValueError, match="missing"):
+        settle([EditPick(id="a", chapter_id="x")], {})
+
+
+def test_limits_next_neighbour_index_is_bounded():
+    jm = _jm()
+    b = chapter_bases(jm)["r1:p02"]
+    assert limits(jm, b.model_copy(update={"chapter_index": 3}))[1] == math.inf
+
+
+def test_edits_path_rejects_path_tricks_and_save_is_atomic(tmp_path, monkeypatch):
+    monkeypatch.setattr(he.settings, "workspace_dir", tmp_path)
+    for bad in ("../x", "a/b", "a\b", ".."):
+        with pytest.raises(ValueError):
+            he.edits_path(bad)
+    he.save_edits(fresh_edits(_jm(), "j"))
+    assert [p.name for p in (tmp_path / "story").iterdir()] == ["j.edits.json"]
