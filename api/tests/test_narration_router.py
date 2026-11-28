@@ -245,3 +245,72 @@ def test_store_is_swappable(client, video):
         app.dependency_overrides.pop(narration_router.get_store, None)
     assert (other / "narration" / "session.json").is_file()
     assert not (video.parent / "narration").exists()
+
+
+# -- frames / peaks / markers -------------------------------------------
+@pytest.fixture
+def renderers():
+    from ai_video_editor.narration import strips
+    from ai_video_editor.narration.models import Peaks
+
+    def frames(video, cache_dir, fp):
+        return strips.FrameStripFiles(
+            sprite=cache_dir / f"frames-{fp}.jpg",
+            meta=cache_dir / f"frames-{fp}.json",
+            every_s=4.0,
+            tile_w=160,
+            tile_h=90,
+            cols=199,
+            count=199,
+        )
+
+    app.dependency_overrides[narration_router.get_frames_renderer] = lambda: frames
+    app.dependency_overrides[narration_router.get_peaks_renderer] = lambda: (
+        lambda video, cache_dir, fp: Peaks(rate_hz=10, peaks=[0.0, 1.0])
+    )
+    yield
+    app.dependency_overrides.pop(narration_router.get_frames_renderer, None)
+    app.dependency_overrides.pop(narration_router.get_peaks_renderer, None)
+
+
+def test_frames_route(client, video, renderers):
+    body = client.get(f"{BASE}/frames").json()
+    assert body["count"] == 199 and body["tile_h"] == 90 and body["every_s"] == 4.0
+    fp = targets.fingerprint(video)
+    assert body["sprite_url"].endswith(f"cache/frames-{fp}.jpg")
+
+
+def test_peaks_route(client, video, renderers):
+    assert client.get(f"{BASE}/peaks").json() == {"rate_hz": 10, "peaks": [0.0, 1.0]}
+
+
+def test_markers_route_reads_sorted_cues(client, video):
+    import json
+
+    cues = video.parent / "narration" / "cues.json"
+    cues.parent.mkdir(parents=True)
+    cues.write_text(
+        json.dumps([{"at_s": 20, "label": "b"}, {"at_s": 13.8, "label": "X1 opening"}]),
+        encoding="utf-8",
+    )
+    got = client.get(f"{BASE}/markers").json()
+    assert [m["at_s"] for m in got] == [13.8, 20.0]
+    assert got[0] == {"at_s": 13.8, "label": "X1 opening", "kind": "cue"}
+
+
+def test_markers_route_empty_without_cues_file(client, video):
+    assert client.get(f"{BASE}/markers").json() == []
+
+
+def test_load_cues_invalid_and_truncated(video):
+    from ai_video_editor.narration import service
+    from ai_video_editor.narration.store import FileNarrationStore
+
+    store = FileNarrationStore(lambda ref: video.parent)
+    ref = TargetRef(kind="fake", key="r1")
+    path = store.cues_path(ref)
+    path.parent.mkdir(parents=True)
+    path.write_text("not json")
+    assert service.load_cues(store, ref) == []
+    path.write_text('[{"at_s": 1, "label": "' + "x" * 200 + '"}]')
+    assert len(service.load_cues(store, ref)[0].label) == 80

@@ -35,6 +35,10 @@ class NarrationStore(Protocol):
 
     def export_path(self, ref: TargetRef) -> Path: ...
 
+    def cache_dir(self, ref: TargetRef) -> Path: ...
+
+    def cues_path(self, ref: TargetRef) -> Path: ...
+
 
 class FileNarrationStore:
     """Files under `<root>/narration/`: `session.json`, `takes/`, `narrated.mp4`.
@@ -60,6 +64,12 @@ class FileNarrationStore:
 
     def export_path(self, ref: TargetRef) -> Path:
         return self._dir(ref) / "narrated.mp4"
+
+    def cache_dir(self, ref: TargetRef) -> Path:
+        return self._dir(ref) / "cache"
+
+    def cues_path(self, ref: TargetRef) -> Path:
+        return self._dir(ref) / "cues.json"
 
     # -- session -------------------------------------------------------
     def load(self, ref: TargetRef) -> NarrationSession | None:

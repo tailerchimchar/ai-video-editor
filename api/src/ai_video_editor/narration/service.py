@@ -7,6 +7,7 @@ new store needs no edit.
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import datetime, timezone
 
@@ -15,7 +16,7 @@ from pydantic import BaseModel
 from ..config import settings
 from . import targets
 from .layout import camera_box
-from .models import CameraBox, NarrationSession, PixelBox, Take, TargetRef
+from .models import CameraBox, Marker, NarrationSession, PixelBox, Take, TargetRef
 from .store import NarrationStore
 from .targets import NarrationTarget
 
@@ -77,6 +78,18 @@ def _narration_url(ref: TargetRef, target: NarrationTarget, store: NarrationStor
     except ValueError:
         return target.video_url(ref.key).rsplit("/", 1)[0] + "/narration"
     return "/workspace/" + rel.as_posix()
+
+
+def load_cues(store: NarrationStore, ref: TargetRef) -> list[Marker]:
+    """Owner cue markers from `cues.json`; a missing or invalid file is `[]`."""
+    try:
+        raw = json.loads(store.cues_path(ref).read_text(encoding="utf-8"))
+        return [
+            Marker(at_s=float(c["at_s"]), label=str(c.get("label", ""))[:80], kind="cue")
+            for c in raw
+        ]
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        return []
 
 
 def _export_url(ref: TargetRef, target: NarrationTarget, store: NarrationStore) -> str | None:
