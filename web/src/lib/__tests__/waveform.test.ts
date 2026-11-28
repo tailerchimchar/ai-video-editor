@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mergeChannels, peaksForWidth } from "../waveform";
+import { columnPeaks, envelope, mergeChannels, peaksForWidth } from "../waveform";
 
 describe("waveform", () => {
   it("ramp into 10 columns increases to 1", () => {
@@ -19,5 +19,23 @@ describe("waveform", () => {
   it("mergeChannels averages", () => {
     const m = mergeChannels([new Float32Array([1, 0]), new Float32Array([0, 1])]);
     expect(Array.from(m)).toEqual([0.5, 0.5]);
+  });
+  it("envelope takes the abs max per window, normalised", () => {
+    const ch = new Float32Array([0.1, -0.2, 0.4, 0, 0.1, 0.05]);
+    expect(Array.from(envelope(ch, 6, 3))).toEqual([0.5, 1, 0.25]);
+    expect(Array.from(envelope(new Float32Array(4), 4, 2))).toEqual([0, 0]);
+  });
+  it("columnPeaks maxes the samples under each column", () => {
+    const env = [0, 0.2, 0.9, 0.1, 0.5, 0.3];
+    // rate 2 Hz, 1 px per s: each column covers two samples
+    expect(Array.from(columnPeaks(env, 2, 0, 1, 3))).toEqual(
+      [0.2, 0.9, 0.5].map((v) => Math.fround(v)),
+    );
+    // zoomed in past the sample rate: columns repeat the sample they fall in
+    expect(Array.from(columnPeaks(env, 2, 1, 4, 4))).toEqual(
+      [0.9, 0.9, 0.1, 0.1].map((v) => Math.fround(v)),
+    );
+    // outside the envelope is silence
+    expect(Array.from(columnPeaks(env, 2, -1, 1, 2))).toEqual([0, 0.2].map((v) => Math.fround(v)));
   });
 });

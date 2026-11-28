@@ -29,6 +29,10 @@ export default {
         },
         danger: "var(--danger)",
         success: "var(--success)",
+        warn: {
+          DEFAULT: "var(--warn)",
+          glow: "var(--warn-glow)",
+        },
       },
       fontFamily: {
         // Distinctive choices per the frontend-design skill:

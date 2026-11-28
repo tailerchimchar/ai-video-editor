@@ -18,9 +18,13 @@ export function applyTakeEdit(t: Take, edit: TakeEdit): Take {
   return { ...t, ...defined };
 }
 
-/** Cut the head so the take starts (effectively) at `newStartS`. */
+/**
+ * Move the head so the take starts (effectively) at `newStartS`: later cuts
+ * audio, earlier brings back trimmed audio (never before the media start or 0:00).
+ */
 export function trimHead(t: Take, newStartS: number): Take {
-  const cut = Math.max(0, newStartS - effectiveStart(t));
+  const earliest = Math.max(-t.media_in_s, -t.start_s, -effectiveStart(t));
+  const cut = Math.max(earliest, newStartS - effectiveStart(t));
   return {
     ...t,
     start_s: t.start_s + cut,
@@ -29,11 +33,14 @@ export function trimHead(t: Take, newStartS: number): Take {
   };
 }
 
-/** Cut the tail so the take ends (effectively) at `newEndS`, within the media if known. */
+/**
+ * Move the tail so the take ends (effectively) at `newEndS`. With the media
+ * length known it may grow back up to the media's end; without it, only cut.
+ */
 export function trimTail(t: Take, newEndS: number, mediaDurationS?: number): Take {
-  let duration = newEndS - effectiveStart(t);
-  if (mediaDurationS !== undefined) duration = Math.min(duration, mediaDurationS - t.media_in_s);
-  return { ...t, duration_s: Math.max(0, Math.min(duration, t.duration_s)) };
+  const limit = mediaDurationS !== undefined ? mediaDurationS - t.media_in_s : t.duration_s;
+  const duration = Math.min(newEndS - effectiveStart(t), limit);
+  return { ...t, duration_s: Math.max(0, duration) };
 }
 
 /** Split at effective time `atS` into head and tail (tail gets `newId`). */

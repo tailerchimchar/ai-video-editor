@@ -32,6 +32,9 @@
   /* Status */
   --danger: #ef4444;
   --success: #22c55e;
+  /* Game-audio level regions on the narration timeline */
+  --warn: #f59e0b;
+  --warn-glow: rgba(245, 158, 11, 0.16);
 
   /* Motion */
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
