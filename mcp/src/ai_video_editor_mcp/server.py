@@ -2399,6 +2399,7 @@ def story_join(
     rounds: list[str],
     hook: list[str] | None = None,
     hook_title: str | None = None,
+    hook_mode: str = "tease",
     outro: bool = False,
     music_start_s: float = 0.0,
     subscribe_after: int = 1,
@@ -2414,7 +2415,9 @@ def story_join(
     (1-based game in `rounds`, 1-based chapter of that story). Each clip is
     cut just before the play's outcome, freezes, blurs, and pops TEXT
     (none by default). `hook_title` pops over the first clip, e.g. "Want to
-    know the trick to laning?". `outro=True` adds an end card (thanks for
+    know the trick to laning?". `hook_mode="play"` instead runs each clip
+    through its outcome (about 6 s before the first kill to 2 s after the
+    last, max 14 s), with no freeze or TEXT. `outro=True` adds an end card (thanks for
     watching + subscribe) over WORKSPACE/music/outro.* when the owner put
     one there (`music_start_s` skips into it); silent otherwise.
 
@@ -2425,6 +2428,7 @@ def story_join(
         "rounds": rounds,
         "hook": hook or [],
         "hook_title": hook_title,
+        "hook_mode": hook_mode,
         "outro": outro,
         "music_start_s": music_start_s,
         "subscribe_after": subscribe_after,

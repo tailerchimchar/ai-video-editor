@@ -28,6 +28,7 @@ and `<out>.chapters.txt`, the YouTube description chapters.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import math
 import re
@@ -429,8 +430,10 @@ def hook_clips(rounds: list[str], picks: list[HookPick]) -> list[HookClip]:
             raise StoryRenderError(
                 f"hook pick game {p.game} has chapters 1..{len(plan.chapters)}, not {p.chapter}"
             )
-        start, end = bookends.hook_window(plan, p.chapter - 1, settings.story_card_seconds)
-        clips.append(HookClip(story_path(rounds[p.game - 1]), start, end, p.text))
+        start, end = bookends.hook_window(plan, p.chapter - 1, settings.story_card_seconds, p.mode)
+        clips.append(
+            HookClip(story_path(rounds[p.game - 1]), start, end, p.text, freeze=p.mode == "tease")
+        )
     return clips
 
 
@@ -558,6 +561,13 @@ def main(argv: list[str] | None = None) -> int:
         help="a cold-open clip: game n's chapter m (1-based), cut before its outcome; "
         "optional TEXT pops on the frozen frame. Repeat for more clips.",
     )
+    ap.add_argument(
+        "--hook-mode",
+        choices=["tease", "play"],
+        default="tease",
+        help="tease: cut before the outcome, freeze + blur (default); "
+        "play: run through the outcome, no freeze or teaser text",
+    )
     ap.add_argument("--hook-title", help="opening line over the first hook clip")
     ap.add_argument("--outro", action="store_true", help="add the end card after the last game")
     ap.add_argument("--music", help="outro music file (default WORKSPACE/music/outro.*)")
@@ -572,7 +582,10 @@ def main(argv: list[str] | None = None) -> int:
             out,
             subscribe_after=args.subscribe_after or None,
             title=args.title,
-            hook=[bookends.parse_pick(h) for h in args.hook] or None,
+            hook=[
+                dataclasses.replace(bookends.parse_pick(h), mode=args.hook_mode) for h in args.hook
+            ]
+            or None,
             hook_title=args.hook_title,
             outro=args.outro,
             music=Path(args.music) if args.music else None,
