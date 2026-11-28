@@ -11,6 +11,7 @@ import pytest
 
 from ai_video_editor.config import settings
 from ai_video_editor.story import join
+from ai_video_editor.story.bookends import HookPick
 from ai_video_editor.story.render import StoryRenderError
 
 R1 = "2026-11-23_2056_zeri_8-7-12"
@@ -164,6 +165,15 @@ def test_cli_default_out(ws, fakes):
     assert join.main([R1, R2]) == 0
     expected = ws / "story" / "joined_2026-11-23_zeri-jhin.mp4"
     assert fakes["ffmpeg"][-1][-1] == expected.as_posix()
+
+
+def test_cli_hook_mode_sets_pick_mode(ws, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(join, "join_stories", lambda *a, **k: seen.update(k) or Path("o.mp4"))
+    assert join.main(["r1", "r2", "--hook", "1:1", "--hook-mode", "play"]) == 0
+    assert seen["hook"] == [HookPick(1, 1, "", mode="play")]
+    join.main(["r1", "r2", "--hook", "1:1"])
+    assert seen["hook"][0].mode == "tease"
 
 
 def test_cli_needs_two_rounds(ws, fakes):

@@ -20,8 +20,10 @@ import asyncio
 import contextlib
 import re
 import uuid
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -161,6 +163,7 @@ class JoinBody(BaseModel):
     title: str | None = None
     subscribe_after: int | None = 1
     hook: list[str] = []  # "GAME:CHAPTER[:TEXT]", 1-based
+    hook_mode: Literal["tease", "play"] = "tease"
     hook_title: str | None = None
     outro: bool = False
     music_start_s: float = 0.0
@@ -177,7 +180,7 @@ async def _run_join_job(job_id: str, body: JoinBody) -> None:
             default_out(body.rounds),
             subscribe_after=body.subscribe_after or None,
             title=body.title,
-            hook=[parse_pick(h) for h in body.hook] or None,
+            hook=[replace(parse_pick(h), mode=body.hook_mode) for h in body.hook] or None,
             hook_title=body.hook_title,
             outro=body.outro,
             music_start_s=body.music_start_s,

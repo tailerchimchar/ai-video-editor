@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from ..config import settings
 from ..edits import _escape_drawtext, _escape_fontfile_path
@@ -28,6 +29,8 @@ from .suggest.placement import video_second
 HOOK_LEAD_S = 6.0  # footage before the outcome
 HOOK_CUT_BEFORE_S = 0.25  # stop this long before the kill / death lands
 HOOK_MIN_S = 2.0
+HOOK_PLAY_TAIL_S = 2.0  # play mode: footage kept after the last kill / death
+HOOK_PLAY_MAX_S = 14.0  # play mode: longest clip
 FREEZE_S = 1.4  # frozen, blurred tail with the teaser text
 BLUR_RAMP_S = 0.25
 TITLE_S = 2.8  # the opening line stays this long
@@ -44,6 +47,9 @@ MUSIC_EXTS = (".mp3", ".wav", ".m4a", ".ogg", ".flac", ".opus")
 _FONTS = ("C:/Windows/Fonts/impact.ttf", "C:/Windows/Fonts/arialbd.ttf")
 
 
+HookMode = Literal["tease", "play"]
+
+
 @dataclass(frozen=True)
 class HookPick:
     """Game `game` (1-based, join order), chapter `chapter` (1-based, as the
@@ -52,6 +58,7 @@ class HookPick:
     game: int
     chapter: int
     text: str = DEFAULT_FREEZE_TEXT
+    mode: HookMode = "tease"  # "play": run through the outcome, no freeze
 
 
 @dataclass(frozen=True)
@@ -60,6 +67,7 @@ class HookClip:
     start_s: float  # in story.mp4
     end_s: float
     text: str
+    freeze: bool = True  # False (play mode): no freeze / blur / teaser text
 
 
 def parse_pick(spec: str) -> HookPick:
@@ -73,15 +81,32 @@ def parse_pick(spec: str) -> HookPick:
     return HookPick(game, chapter, text)
 
 
-def hook_window(plan: StoryPlan, chapter_index: int, card_s: float) -> tuple[float, float]:
+def hook_window(
+    plan: StoryPlan, chapter_index: int, card_s: float, mode: HookMode = "tease"
+) -> tuple[float, float]:
     """(start, end) in story.mp4 seconds: up to HOOK_LEAD_S of the chapter,
     ending HOOK_CUT_BEFORE_S before its first owner kill or death. A chapter
-    with neither keeps its first HOOK_LEAD_S."""
+    with neither keeps its first HOOK_LEAD_S. `play` mode instead runs through
+    the outcome: up to HOOK_LEAD_S before the first event to HOOK_PLAY_TAIL_S
+    after the last, at most HOOK_PLAY_MAX_S long."""
     ch = plan.chapters[chapter_index]
     start = video_second(plan, chapter_index, ch.start_s, card_s)
     stop = video_second(plan, chapter_index, ch.end_s, card_s)
     assert start is not None and stop is not None
     events = sorted(t for t in ch.kill_times_s + ch.death_times_s if ch.start_s <= t <= ch.end_s)
+    if mode == "play":
+        if events:
+            first = video_second(plan, chapter_index, events[0], card_s)
+            last = video_second(plan, chapter_index, events[-1], card_s)
+            assert first is not None and last is not None
+            end = min(stop, last + HOOK_PLAY_TAIL_S)
+            begin = max(start, first - HOOK_LEAD_S, end - HOOK_PLAY_MAX_S)
+        else:
+            end = min(stop, start + HOOK_LEAD_S)
+            begin = start
+        if end - begin < HOOK_MIN_S:
+            raise StoryRenderError(f"chapter {chapter_index + 1} is too short for a hook")
+        return round(begin, 2), round(end, 2)
     if events:
         hit = video_second(plan, chapter_index, events[0], card_s)
         assert hit is not None
@@ -115,24 +140,29 @@ def _text(text: str, *, size: int, y: str, at: float, until: float | None, font:
 
 
 def hook_cmd(clip: HookClip, out: str, *, title: str | None, font: str) -> list[str]:
-    """One hook clip: play, then freeze + blur ramp + teaser text."""
+    """One hook clip: play, then freeze + blur ramp + teaser text (`freeze`);
+    without it the clip just plays through and fades out."""
     d = round(clip.end_s - clip.start_s, 3)
-    total = round(d + FREEZE_S, 3)
-    v = [
-        f"[0:v]fps={FPS},scale={WIDTH}:{HEIGHT},setsar=1,format=yuv420p,"
-        f"tpad=stop_mode=clone:stop_duration={FREEZE_S},split[p][q]",
-        "[q]gblur=sigma=28,eq=brightness=-0.12:saturation=0.6[qb]",
-        f"[p][qb]blend=all_expr='A+(B-A)*clip((T-{d})/{BLUR_RAMP_S}\\,0\\,1)'[f]",
-    ]
+    total = round(d + FREEZE_S, 3) if clip.freeze else d
+    if clip.freeze:
+        v = [
+            f"[0:v]fps={FPS},scale={WIDTH}:{HEIGHT},setsar=1,format=yuv420p,"
+            f"tpad=stop_mode=clone:stop_duration={FREEZE_S},split[p][q]",
+            "[q]gblur=sigma=28,eq=brightness=-0.12:saturation=0.6[qb]",
+            f"[p][qb]blend=all_expr='A+(B-A)*clip((T-{d})/{BLUR_RAMP_S}\\,0\\,1)'[f]",
+        ]
+    else:
+        v = [f"[0:v]fps={FPS},scale={WIDTH}:{HEIGHT},setsar=1,format=yuv420p[f]"]
     texts = []
-    if clip.text:
+    if clip.text and clip.freeze:
         texts.append(_text(clip.text, size=200, y="(h-th)/2", at=d + 0.05, until=None, font=font))
     if title:
         texts.append(_text(title, size=104, y="h*0.14", at=0.15, until=TITLE_S, font=font))
     v.append(f"[f]{','.join(texts)}[v]" if texts else "[f]null[v]")
     a = (
         "[0:a]aresample=48000,aformat=channel_layouts=stereo,"
-        f"afade=t=out:st={max(0.0, d - 0.25)}:d=0.25,apad=whole_dur={total}[a]"
+        f"afade=t=out:st={max(0.0, d - 0.25)}:d=0.25"
+        + (f",apad=whole_dur={total}[a]" if clip.freeze else "[a]")
     )
     return [
         settings.ffmpeg_path,

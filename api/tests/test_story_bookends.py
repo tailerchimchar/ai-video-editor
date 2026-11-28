@@ -106,3 +106,26 @@ def test_music_asset_is_the_owner_file(tmp_path, monkeypatch):
     (tmp_path / "music").mkdir()
     (tmp_path / "music" / "outro.mp3").write_bytes(b"x")
     assert bookends.music_asset() == tmp_path / "music" / "outro.mp3"
+
+
+def test_play_mode_runs_through_the_last_event():
+    plan = _plan(_ch(0, 100), _ch(500, 560, kills=[520, 530]))
+    assert hook_window(plan, 1, 2.5, "play") == (118.0, 132.0)
+
+
+def test_play_mode_caps_at_14_s():
+    plan = _plan(_ch(0, 100), _ch(500, 560, kills=[505, 540]))
+    start, end = hook_window(plan, 1, 2.5, "play")
+    assert (start, end) == (128.0, 142.0)
+    assert end - start == bookends.HOOK_PLAY_MAX_S
+
+
+def test_play_mode_cmd_has_no_freeze():
+    clip = HookClip(Path("s.mp4"), 10.0, 16.0, "2v3?", freeze=False)
+    cmd = bookends.hook_cmd(clip, "o.mp4", title="Want to know?", font="f")
+    g = cmd[cmd.index("-filter_complex") + 1]
+    assert "tpad" not in g and "gblur" not in g and "blend" not in g
+    assert "text='2v3?'" not in g and "text='Want to know?'" in g
+    assert cmd[cmd.index("-t") + 1] == "6.0"
+    assert cmd[len(cmd) - cmd[::-1].index("-t") :][0] == "6.0"
+    assert "afade=t=out:st=5.75:d=0.25" in g and "apad" not in g
