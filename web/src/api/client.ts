@@ -72,3 +72,12 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
 
   return (await res.json()) as T;
 }
+
+/** The API's own message (`{"detail": "..."}`) when it sent one, else the error's. */
+export function errorMessage(err: unknown): string {
+  if (err instanceof ApiError) {
+    const detail = (err.body as { detail?: unknown } | null)?.detail;
+    if (typeof detail === "string") return detail;
+  }
+  return err instanceof Error ? err.message : String(err);
+}

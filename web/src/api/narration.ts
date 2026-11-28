@@ -13,9 +13,12 @@ import type {
   CameraRegion,
   FrameStrip,
   GameAudioRegion,
+  HookPicksBody,
+  HookView,
   Marker,
   Peaks,
   SessionView,
+  Storyboard,
   TakeEdit,
   TargetRef,
   Take,
@@ -135,6 +138,26 @@ export function startExport(target: TargetRef, force = false): Promise<{ job_id:
     method: "POST",
     body: { force },
   });
+}
+
+/** GET /hook — the hook track of a joined video; 404 when the map has no hook block. */
+export function getHook(target: TargetRef): Promise<HookView> {
+  return request<HookView>(`${basePath(target)}/hook`);
+}
+
+/** PUT /hook — save the hook picks (the laptop applies them). 422 = invalid list, 409 = re-joined since. */
+export function putHook(target: TargetRef, body: HookPicksBody): Promise<HookView> {
+  return request<HookView>(`${basePath(target)}/hook`, { method: "PUT", body });
+}
+
+/** DELETE /hook — discard the saved hook changes. */
+export function resetHook(target: TargetRef): Promise<HookView> {
+  return request<HookView>(`${basePath(target)}/hook`, { method: "DELETE" });
+}
+
+/** GET /storyboard — games and chapters of a joined video, with what the hook uses. */
+export function getStoryboard(target: TargetRef): Promise<Storyboard> {
+  return request<Storyboard>(`${basePath(target)}/storyboard`);
 }
 
 /*
