@@ -3,9 +3,9 @@ import react from "@vitejs/plugin-react";
 import path from "node:path";
 
 // Vite proxies `/api` and `/workspace` to the backend (default :8000) so dev
-// is same-origin. `VITE_API_URL` is not a proxy override: it is the client's
-// API base URL (src/lib/env.ts), bypasses the proxy and needs CORS on the API.
-// The constant below is only the proxy target.
+// is same-origin. `VITE_API_URL` does two things: it overrides the proxy target
+// below, and (via src/lib/env.ts) it becomes the client's API base URL, which
+// bypasses the proxy and so needs CORS on the API.
 const API_TARGET = process.env.VITE_API_URL ?? "http://localhost:8000";
 
 export default defineConfig({

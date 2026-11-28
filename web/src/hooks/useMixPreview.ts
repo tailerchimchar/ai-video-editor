@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { useAudioContext, type AudioContextHandle } from "@/hooks/useAudioContext";
+import type { AudioContextHandle } from "@/hooks/useAudioContext";
 import { regionLevelAt, scheduleFrom } from "@/lib/mixSchedule";
 import type { NarrationSession } from "@/types/narration";
 
@@ -50,8 +50,8 @@ interface Options {
   buffers: Map<string, AudioBuffer>;
   /** false while recording: takes go silent, game audio stays. */
   enabled: boolean;
-  /** Share the page's context (so decoded buffers and the graph agree). */
-  audio?: AudioContextHandle;
+  /** The page's context (so decoded buffers and the graph agree). */
+  audio: AudioContextHandle;
 }
 
 declare global {
@@ -66,8 +66,7 @@ declare global {
  * An approximation of the export, which stays the reference.
  */
 export function useMixPreview({ video, session, buffers, enabled, audio }: Options) {
-  const own = useAudioContext();
-  const { ctx, ensure } = audio ?? own;
+  const { ctx, ensure } = audio;
 
   // Latest inputs, read by the long-lived listeners.
   const live = useRef({ session, buffers, enabled });
@@ -100,8 +99,8 @@ export function useMixPreview({ video, session, buffers, enabled, audio }: Optio
 
     const schedule = () => {
       stopAll();
-      const { session: s, buffers: bufs } = live.current;
-      if (!s || !playing()) return;
+      const { session: s, buffers: bufs, enabled: on } = live.current;
+      if (!s || !on || !playing()) return;
       const rate = video.playbackRate || 1;
       for (const p of scheduleFrom(s.takes, video.currentTime)) {
         const take = s.takes.find((t) => t.id === p.takeId);
@@ -134,7 +133,8 @@ export function useMixPreview({ video, session, buffers, enabled, audio }: Optio
         for (const v of buf) sum += v * v;
         const rms = Math.sqrt(sum / buf.length);
         const loud = rms > mix.duck_threshold;
-        const target = loud ? 1 / mix.duck_ratio : 1;
+        // While recording the takes are silent, so the game must not duck for them.
+        const target = loud && live.current.enabled ? 1 / mix.duck_ratio : 1;
         const ms = loud ? mix.duck_attack_ms : mix.duck_release_ms;
         g.duckGain.gain.setTargetAtTime(target, ctx.currentTime, Math.max(ms / 1000 / 3, 0.001));
         g.gameGain.gain.setTargetAtTime(

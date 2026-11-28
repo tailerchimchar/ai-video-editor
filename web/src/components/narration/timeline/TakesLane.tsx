@@ -13,8 +13,6 @@ interface TakesLaneProps {
   buffers: Map<string, AudioBuffer>;
   waveforms: Map<string, Float32Array>;
   onSelect: (takeId: string | null) => void;
-  /** A take was clicked (not dragged). */
-  onPlay: (take: Take) => void;
   onEdit: (takeId: string, edit: TakeEdit) => void;
   onSeek: (s: number) => void;
 }
@@ -62,10 +60,7 @@ export const TakesLane = memo(function TakesLane(props: TakesLaneProps) {
           view={view}
           selected={take.id === selectedId}
           wave={waves.get(take.media)}
-          onClick={(t) => {
-            props.onSelect(t.id);
-            props.onPlay(t);
-          }}
+          onClick={(t) => props.onSelect(t.id)}
           onEdit={(t, edit) => {
             props.onSelect(t.id);
             props.onEdit(t.id, edit);

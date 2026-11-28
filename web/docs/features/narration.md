@@ -29,7 +29,8 @@ Kinds:
    removed. Nothing outside the new take changes.
 5. **Edit on the timeline** under the video (details in
    [`timeline.md`](./timeline.md)):
-   - click a take = select it, seek there and hear it with the video;
+   - click a take = select it (nothing seeks or plays; the **take** panel's
+     **play from here** seeks to its start and plays it with the video);
    - drag a take = nudge it (±3 s, for lip-sync / timing), the label shows
      the change;
    - drag the edges of the selected take = trim it (dragging back out

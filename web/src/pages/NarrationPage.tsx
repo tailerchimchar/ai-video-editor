@@ -171,6 +171,15 @@ function NarrationWorkspace({ target }: { target: TargetRef }) {
 
   const { session } = view;
   const busy = capture.recording;
+  const failed: { error: unknown }[] = [
+    narration.editTake,
+    narration.splitTake,
+    narration.saveMix,
+    narration.saveGameRegions,
+    narration.removeTake,
+  ];
+  const failure = failed.find((m) => m.error)?.error;
+  const editError = failure ? (failure as Error).message : null;
   const selectedTake = session.takes.find((t) => t.id === selectedTakeId);
 
   return (
@@ -207,12 +216,6 @@ function NarrationWorkspace({ target }: { target: TargetRef }) {
             takes={session.takes}
             selectedTakeId={selectedTakeId}
             onSelectTake={setSelectedTakeId}
-            onPlayTake={(take) => {
-              audio.ensure();
-              if (!video) return;
-              video.currentTime = effectiveStart(take);
-              void video.play();
-            }}
             onTakeEdit={(takeId, edit) => narration.editTake.mutate({ takeId, edit })}
             buffers={buffers}
             waveforms={waveforms}
@@ -225,6 +228,7 @@ function NarrationWorkspace({ target }: { target: TargetRef }) {
               narration.saveGameRegions.mutate(clampRegions(next, durationS))
             }
           />
+          {editError && <p className="font-mono text-xs text-danger">{editError}</p>}
         </div>
 
         <aside className="space-y-6 lg:col-span-4">
@@ -260,6 +264,12 @@ function NarrationWorkspace({ target }: { target: TargetRef }) {
               video={video}
               busy={busy || narration.splitTake.isPending || narration.removeTake.isPending}
               onEdit={(edit) => narration.editTake.mutate({ takeId: selectedTake.id, edit })}
+              onPlay={() => {
+                audio.ensure();
+                if (!video) return;
+                video.currentTime = effectiveStart(selectedTake);
+                void video.play();
+              }}
               onSplit={(atS) => narration.splitTake.mutate({ takeId: selectedTake.id, atS })}
               onDelete={() => narration.removeTake.mutate(selectedTake.id)}
             />
@@ -285,7 +295,7 @@ function NarrationWorkspace({ target }: { target: TargetRef }) {
 
           <ExportPanel
             stale={view.stale}
-            takeCount={session.takes.length}
+            takeCount={session.takes.filter((t) => !t.muted).length}
             onRelock={() => narration.relockTakes.mutate(0)}
             suggestedShiftS={view.suggested_shift_s}
             onShiftRelock={(s) => narration.relockTakes.mutate(s)}

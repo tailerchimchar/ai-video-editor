@@ -271,17 +271,20 @@ async def upload_take(
     data = await request.body()
     if len(data) > MAX_UPLOAD_BYTES:
         raise HTTPException(413, "take is too large")
-    return service.add_take(
-        ref,
-        target,
-        store,
-        data=data,
-        suffix=".webm",
-        start_s=start_s,
-        duration_s=duration_s,
-        has_camera=has_camera,
-        replace=replace,
-    )
+    try:
+        return service.add_take(
+            ref,
+            target,
+            store,
+            data=data,
+            suffix=".webm",
+            start_s=start_s,
+            duration_s=duration_s,
+            has_camera=has_camera,
+            replace=replace,
+        )
+    except TakeTooShortError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 @router.patch("/{kind}/{key}/takes/{take_id}", response_model=SessionView)
@@ -367,6 +370,8 @@ async def export(
     session = service.load_or_create(ref, target, store)
     if not session.takes:
         raise HTTPException(422, "no takes recorded yet")
+    if all(t.muted for t in session.takes):
+        raise HTTPException(422, "no unmuted takes: unmute one to export")
     if service.is_stale(ref, target, session) and not force:
         raise HTTPException(
             409, "the video changed since the takes were recorded; relock, delete them or force"

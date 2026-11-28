@@ -28,8 +28,12 @@ class OverlapError(ValueError):
 
 def apply_edit(take: Take, edit: TakeEdit) -> Take:
     """Return a copy of `take` with the edit's set fields applied."""
-    data = take.model_dump() | edit.model_dump(exclude_none=True)
-    if data["duration_s"] < MIN_TAKE_S:
+    changes = edit.model_dump(exclude_none=True)
+    data = take.model_dump() | changes
+    # Only edits that change the span are held to the minimum, so a short
+    # take (from before the upload check) can still be muted or re-gained.
+    touches_span = bool({"duration_s", "start_s", "media_in_s"} & changes.keys())
+    if touches_span and data["duration_s"] < MIN_TAKE_S:
         raise TakeTooShortError(f"take must be at least {MIN_TAKE_S}s")
     return Take.model_validate(data)
 
@@ -100,8 +104,16 @@ def punch_in(takes: list[Take], new: Take, new_id: Callable[[], str]) -> list[Ta
 
 
 def shift_session(session: NarrationSession, shift_s: float) -> NarrationSession:
-    """Move every take and region by `shift_s`, clamping at 0 (relock)."""
-    takes = [t.model_copy(update={"start_s": max(0.0, t.start_s + shift_s)}) for t in session.takes]
+    """Move every take and region by `shift_s`, clamping at 0 (relock).
+
+    A take's effective start (`start_s + offset_s`) is clamped too: when a
+    negative shift would put it before 0, `start_s` is raised so it lands on 0
+    (the duration and the nudge are kept).
+    """
+    takes = [
+        t.model_copy(update={"start_s": max(0.0, t.start_s + shift_s, -t.offset_s)})
+        for t in session.takes
+    ]
 
     def _shift(regions):
         out = []

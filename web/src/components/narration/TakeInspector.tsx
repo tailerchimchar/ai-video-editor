@@ -12,6 +12,8 @@ interface TakeInspectorProps {
   /** The playhead is read here (every frame while playing), not in the page. */
   video: HTMLVideoElement | null;
   onEdit: (edit: TakeEdit) => void;
+  /** Seek to the take's start and play. */
+  onPlay: () => void;
   onSplit: (atS: number) => void;
   onDelete: () => void;
   /** Split or delete in flight. */
@@ -33,6 +35,7 @@ export function TakeInspector({
   take,
   video,
   onEdit,
+  onPlay,
   onSplit,
   onDelete,
   busy,
@@ -74,6 +77,9 @@ export function TakeInspector({
       />
 
       <div className="flex flex-wrap items-center gap-2">
+        <Button size="sm" disabled={!video} onClick={onPlay}>
+          play from here
+        </Button>
         <Button
           size="sm"
           variant={take.muted ? "primary" : "ghost"}

@@ -34,7 +34,6 @@ interface TimelineProps {
   takes: Take[];
   selectedTakeId: string | null;
   onSelectTake: (takeId: string | null) => void;
-  onPlayTake: (take: Take) => void;
   onTakeEdit: (takeId: string, edit: TakeEdit) => void;
   buffers: Map<string, AudioBuffer>;
   waveforms: Map<string, Float32Array>;
@@ -206,7 +205,6 @@ export function Timeline(props: TimelineProps) {
                 buffers={props.buffers}
                 waveforms={props.waveforms}
                 onSelect={props.onSelectTake}
-                onPlay={props.onPlayTake}
                 onEdit={props.onTakeEdit}
                 onSeek={props.onSeek}
               />

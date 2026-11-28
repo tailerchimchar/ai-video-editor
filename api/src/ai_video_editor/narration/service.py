@@ -15,10 +15,18 @@ from pydantic import BaseModel
 
 from ..config import settings
 from . import targets
-from .edits import apply_edit, check_no_overlap, media_refcount, punch_in, shift_session
+from .edits import (
+    TakeTooShortError,
+    apply_edit,
+    check_no_overlap,
+    media_refcount,
+    punch_in,
+    shift_session,
+)
 from .edits import split_take as split_take_pure
 from .layout import camera_box
 from .models import (
+    MIN_TAKE_S,
     AudioMix,
     CameraBox,
     CameraRegion,
@@ -156,6 +164,8 @@ def add_take(
     has_camera: bool,
     replace: bool = True,
 ) -> Take:
+    if duration_s < MIN_TAKE_S:
+        raise TakeTooShortError(f"take must be at least {MIN_TAKE_S}s")
     session = load_or_create(ref, target, store)
     if not session.takes:  # the first take pins the video as it is now
         session.video_fingerprint = _current_fingerprint(ref, target)

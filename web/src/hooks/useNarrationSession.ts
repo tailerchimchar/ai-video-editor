@@ -65,7 +65,13 @@ export function useNarrationSession(target: TargetRef) {
 
   const relockTakes = useMutation({
     mutationFn: (shiftS: number) => relock(target, shiftS),
-    onSuccess: setView,
+    onSuccess: (view) => {
+      setView(view);
+      // A re-rendered video has new frames and loudness.
+      for (const part of ["frames", "peaks"]) {
+        qc.invalidateQueries({ queryKey: [...queryKey, part], exact: true });
+      }
+    },
   });
 
   /**

@@ -229,6 +229,18 @@ def test_export_without_takes_422(client, video, exporter):
     assert client.post(f"{BASE}/export", json={}).status_code == 422
 
 
+def test_export_all_muted_422(client, video, exporter):
+    take = _take(client).json()
+    client.patch(f"{BASE}/takes/{take['id']}", json={"muted": True})
+    assert client.post(f"{BASE}/export", json={}).status_code == 422
+    assert exporter == []
+
+
+def test_upload_under_min_take_422(client, video):
+    assert _take(client, duration=0.2).status_code == 422
+    assert client.get(BASE).json()["session"]["takes"] == []
+
+
 def test_export_failure_marks_job_failed(client, video):
     _take(client)
 

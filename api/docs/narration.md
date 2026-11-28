@@ -42,16 +42,16 @@ Unknown kind or key: 404; bad characters in kind/key: 422 (all routes).
 | GET `/frames` | | FrameStrip (sprite JPEG, cached) | 500 |
 | GET `/peaks` | | Peaks (game-audio loudness, cached) | 500 |
 | GET `/markers` | | Marker list (target markers + `cues.json`), by time | |
-| POST `/takes` | raw `video/webm` or `audio/webm`; query `start_s`, `duration_s`, `has_camera`, `replace` (default true) | Take | 415 type, 413 over 500 MB |
+| POST `/takes` | raw `video/webm` or `audio/webm`; query `start_s`, `duration_s`, `has_camera`, `replace` (default true) | Take | 415 type, 413 over 500 MB, 422 (`start_s` < 0, `duration_s` ≤ 0 or < 0.3 s) |
 | PATCH `/takes/{id}` | TakeEdit (any of start_s, duration_s, media_in_s, offset_s, gain, muted) | SessionView | 404, 422 (too short, starts before 0) |
 | POST `/takes/{id}/split?at_s=` | | SessionView | 404, 422 (within 0.3 s of an end) |
 | DELETE `/takes/{id}` | | SessionView | 404 |
 | PUT `/camera` | CameraBox | SessionView | |
 | PUT `/mix` | AudioMix | SessionView | |
-| PUT `/game-regions` | list of GameAudioRegion (replaces all) | SessionView | 422 overlap |
+| PUT `/game-regions` | list of GameAudioRegion (replaces all) | SessionView | 422 overlap, or a region with `end_s <= start_s` |
 | PUT `/camera-regions` | list of CameraRegion (replaces all) | SessionView | 422 overlap |
 | POST `/relock` | `{shift_s}` (optional, default 0) | SessionView | |
-| POST `/export` | `{force}` (optional) | `{job_id}` (job type `narration_export`) | 422 no takes, 409 stale unless forced |
+| POST `/export` | `{force}` (optional) | `{job_id}` (job type `narration_export`) | 422 no takes or all takes muted (muted takes are left out of the export), 409 stale unless forced |
 
 Marker kinds: `chapter`, `game`, `cue`, `insert`.
 

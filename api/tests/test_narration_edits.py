@@ -151,3 +151,18 @@ def test_check_no_overlap_allows_touching_rejects_overlap():
 def test_media_refcount():
     ts = [_take("a", 0, 1, media="x"), _take("b", 2, 1, media="x"), _take("c", 4, 1, media="y")]
     assert media_refcount(ts, "x") == 2 and media_refcount(ts, "z") == 0
+
+
+def test_shift_session_keeps_effective_start_at_or_after_zero():
+    out = shift_session(_session(takes=[_take("a", 1.0, 4, offset_s=-3)]), -2)
+    t = out.takes[0]
+    assert t.start_effective_s == 0
+    assert t.duration_s == 4
+
+
+def test_apply_edit_short_take_can_still_be_muted_or_regained():
+    short = _take("a", 1.0, 0.2)
+    assert apply_edit(short, TakeEdit(muted=True)).muted is True
+    assert apply_edit(short, TakeEdit(gain=1.5)).gain == 1.5
+    with pytest.raises(TakeTooShortError):
+        apply_edit(short, TakeEdit(start_s=2.0))

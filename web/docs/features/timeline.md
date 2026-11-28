@@ -37,7 +37,8 @@ game       ▁▂▃▅▆▅▃▂▁▂▃▅ with dips under the takes, [25%]
 
 ## Takes
 
-- **click** = select, seek to its start and play it with the video.
+- **click** = select only (no seek, no play); **play from here** in the take
+  panel seeks to its start and plays it with the video.
 - **drag the body** = nudge: the label shows the change (`+0.4 s`); one
   `PATCH .../takes/{id}` with `offset_s` on release. Limited to ±3 s and to
   not starting before 0:00.
@@ -82,6 +83,7 @@ for "split at playhead".
 | frames         | `GET .../frames` → `{sprite_url, every_s, tile_w, tile_h, cols, count}`; the API renders the JPEG sprite once per video (first load takes a few seconds: "rendering frames…")                                               |
 | game peaks     | `GET .../peaks` → `{rate_hz, peaks}` once per video; drawn normalised to the loudest moment                                                                                                                                 |
 | markers        | `SessionView.markers`: the target's chapters / game starts / inserts plus `<narration>/cues.json`                                                                                                                           |
+| (re-render)    | a successful relock invalidates the `frames` and `peaks` queries, so a re-rendered video redraws both                                                                                                                       |
 | take waveforms | each take's `.webm` fetched and decoded in the browser (`useTakeBuffers`) with the page's `AudioContext`, which the browser only allows after the first click or key press; reduced to a 200 Hz envelope once per recording |
 
 ## Code map
