@@ -1,5 +1,8 @@
 """Narration HTTP API (contract: docs/specs/spec-narration.md).
 
+    GET    /narration/{kind}/{key}/frames           frame-strip sprite (cached per video)
+    GET    /narration/{kind}/{key}/peaks            game-audio peaks (cached per video)
+    GET    /narration/{kind}/{key}/markers          owner cue markers
     GET    /narration/{kind}/{key}                  session view (creates it on first call)
     POST   /narration/{kind}/{key}/takes            upload one take (raw webm body)
     DELETE /narration/{kind}/{key}/takes/{take_id}  remove a take
@@ -28,11 +31,21 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from ..database import get_db
+from ..edits import _run_ffmpeg
 from ..jobs import finish_job
 from ..models import RankResponse
-from ..narration import service, targets
-from ..narration.export import export_narration
-from ..narration.models import KEY_PATTERN, CameraBox, NarrationSession, Take, TargetRef
+from ..narration import service, strips, targets
+from ..narration.export import export_narration, probe_frame_size
+from ..narration.models import (
+    KEY_PATTERN,
+    CameraBox,
+    FrameStrip,
+    Marker,
+    NarrationSession,
+    Peaks,
+    Take,
+    TargetRef,
+)
 from ..narration.service import SessionView
 from ..narration.store import NarrationStore, store_for
 from ..narration.targets import NarrationTarget
@@ -91,6 +104,37 @@ def get_exporter() -> Exporter:
 ExporterDep = Annotated[Exporter, Depends(get_exporter)]
 
 
+FramesRenderer = Callable[..., strips.FrameStripFiles]
+PeaksRenderer = Callable[..., Peaks]
+
+
+def get_frames_renderer() -> FramesRenderer:
+    """Swap this dependency to avoid running ffmpeg (tests)."""
+
+    def render(video: Path, cache_dir: Path, fp: str) -> strips.FrameStripFiles:
+        return strips.ensure_frames(
+            video,
+            cache_dir,
+            fp,
+            duration_s=strips.probe_duration(video),
+            run=_run_ffmpeg,
+            probe_size=probe_frame_size,
+        )
+
+    return render
+
+
+def get_peaks_renderer() -> PeaksRenderer:
+    def render(video: Path, cache_dir: Path, fp: str) -> Peaks:
+        return strips.ensure_peaks(video, cache_dir, fp, run_capture=strips.run_capture)
+
+    return render
+
+
+FramesDep = Annotated[FramesRenderer, Depends(get_frames_renderer)]
+PeaksDep = Annotated[PeaksRenderer, Depends(get_peaks_renderer)]
+
+
 def _view(
     ref: TargetRef, target: NarrationTarget, store: NarrationStore, session: NarrationSession
 ) -> SessionView:
@@ -124,6 +168,42 @@ async def relock(
     store: StoreDep,
 ) -> SessionView:
     return _view(ref, target, store, service.relock(ref, target, store))
+
+
+# -- timeline assets ------------------------------------------------------
+@router.get("/{kind}/{key}/frames", response_model=FrameStrip)
+async def get_frames(
+    ref: RefDep, target: TargetDep, store: StoreDep, renderer: FramesDep
+) -> FrameStrip:
+    video = target.video_path(ref.key)
+    fp = targets.fingerprint(video)
+    try:
+        files = await asyncio.to_thread(renderer, video, store.cache_dir(ref), fp)
+    except Exception as exc:
+        raise HTTPException(500, f"could not build the frame strip: {exc}"[:300]) from exc
+    return FrameStrip(
+        sprite_url=f"{service._narration_url(ref, target, store)}/cache/frames-{fp}.jpg",
+        every_s=files.every_s,
+        tile_w=files.tile_w,
+        tile_h=files.tile_h,
+        cols=files.cols,
+        count=files.count,
+    )
+
+
+@router.get("/{kind}/{key}/peaks", response_model=Peaks)
+async def get_peaks(ref: RefDep, target: TargetDep, store: StoreDep, renderer: PeaksDep) -> Peaks:
+    video = target.video_path(ref.key)
+    fp = targets.fingerprint(video)
+    try:
+        return await asyncio.to_thread(renderer, video, store.cache_dir(ref), fp)
+    except Exception as exc:
+        raise HTTPException(500, f"could not compute peaks: {exc}"[:300]) from exc
+
+
+@router.get("/{kind}/{key}/markers", response_model=list[Marker])
+async def get_markers(ref: RefDep, store: StoreDep) -> list[Marker]:
+    return sorted(service.load_cues(store, ref), key=lambda m: m.at_s)
 
 
 # -- takes --------------------------------------------------------------
