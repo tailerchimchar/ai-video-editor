@@ -37,7 +37,7 @@ export function useNarrationSession(target: TargetRef) {
   const session = useQuery({ queryKey, queryFn: () => getSession(target) });
 
   const setView = (view: SessionView) => qc.setQueryData(queryKey, view);
-  const refetch = () => qc.invalidateQueries({ queryKey });
+  const refetch = () => qc.invalidateQueries({ queryKey, exact: true });
 
   const addTake = useMutation({
     mutationFn: (args: UploadTakeArgs) => uploadTake(target, args),
@@ -72,7 +72,7 @@ export function useNarrationSession(target: TargetRef) {
     mutationFn: ({ takeId, edit }: { takeId: string; edit: TakeEdit }) =>
       patchTake(target, takeId, edit),
     onMutate: async ({ takeId, edit }) => {
-      await qc.cancelQueries({ queryKey });
+      await qc.cancelQueries({ queryKey, exact: true });
       const previous = qc.getQueryData<SessionView>(queryKey);
       if (previous) {
         setView({
