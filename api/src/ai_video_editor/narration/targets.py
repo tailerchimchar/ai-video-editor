@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import ClassVar, Protocol, runtime_checkable
 
 from ..config import settings
-from .models import KEY_PATTERN
+from .models import KEY_PATTERN, Marker
 
 
 class UnknownTargetError(LookupError):
@@ -44,6 +44,26 @@ class NarrationTarget(Protocol):
     def list_keys(self) -> list[str]:
         """Keys whose video exists, newest first."""
         ...
+
+    def intro_s(self, key: str) -> float | None:
+        """Length of the intro before the first game, or None when unknown.
+        Used to suggest a shift when a re-render moved the content."""
+        ...
+
+    def markers(self, key: str) -> list[Marker]:
+        """Landmarks to show on the timeline (games, chapters, inserts)."""
+        ...
+
+
+class TargetDefaults:
+    """Mixin: no intro length and no markers. A target inherits it and
+    overrides only what it knows."""
+
+    def intro_s(self, key: str) -> float | None:
+        return None
+
+    def markers(self, key: str) -> list[Marker]:
+        return []
 
 
 _REGISTRY: dict[str, NarrationTarget] = {}
@@ -82,7 +102,7 @@ def _checked_key(key: str) -> str:
     return key
 
 
-class StoryRoundTarget:
+class StoryRoundTarget(TargetDefaults):
     """A rendered story round: `WORKSPACE/story/<round>/story.mp4`.
 
     Story rounds are League of Legends today, so `game` is always "league".
@@ -121,8 +141,26 @@ class StoryRoundTarget:
         ]
         return sorted(keys, reverse=True)
 
+    def markers(self, key: str) -> list[Marker]:
+        """One chapter marker per story.json chapter, at its video second."""
+        from ..story.planner import StoryPlan
+        from ..story.suggest import placement
 
-class JoinedStoryTarget:
+        try:
+            plan = StoryPlan.model_validate_json(
+                (self.work_dir(key) / "story.json").read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError):
+            return []
+        out: list[Marker] = []
+        for idx, ch in enumerate(plan.chapters):
+            at = placement.video_second(plan, idx, ch.start_s, settings.story_card_seconds)
+            if at is not None:
+                out.append(Marker(at_s=at, label=ch.title.split(",")[0], kind="chapter"))
+        return out
+
+
+class JoinedStoryTarget(TargetDefaults):
     """A story-join video: `WORKSPACE/story/<key>.mp4`, key e.g.
     `joined_2026-11-26_xayah-kaisa-yunara`. Takes live in
     `WORKSPACE/story/_joined/<key>/` (story/join.py `parts_dir`, next to the
@@ -158,6 +196,33 @@ class JoinedStoryTarget:
             if p.is_file() and re.fullmatch(KEY_PATTERN, p.stem)
         ]
         return sorted(keys, reverse=True)
+
+    def _join_map(self, key: str):
+        from ..story.join_map import JoinMap
+
+        path = self._root() / f"{_checked_key(key)}.join.json"
+        try:
+            return JoinMap.model_validate_json(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+
+    def intro_s(self, key: str) -> float | None:
+        jm = self._join_map(key)
+        return None if jm is None else jm.intro_s
+
+    def markers(self, key: str) -> list[Marker]:
+        jm = self._join_map(key)
+        if jm is None:
+            return []
+        out: list[Marker] = []
+        for g in jm.games:
+            out.append(Marker(at_s=g.video_start_s, label=g.label, kind="game"))
+            out.extend(
+                Marker(at_s=c.video_start_s, label=c.title.split(",")[0], kind="chapter")
+                for c in g.chapters
+            )
+        out.extend(Marker(at_s=i.at_s, label=i.kind, kind="insert") for i in jm.inserts)
+        return out
 
 
 def default_targets() -> list[NarrationTarget]:

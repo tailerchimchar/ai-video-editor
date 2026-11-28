@@ -50,6 +50,12 @@ class FakeTarget:
     def list_keys(self) -> list[str]:
         return []
 
+    def intro_s(self, key: str) -> float | None:
+        return None
+
+    def markers(self, key: str) -> list:
+        return []
+
 
 def test_story_registered_by_default():
     assert get_target("story").kind == "story"
@@ -154,3 +160,72 @@ def test_joined_target_keys_paths_and_backups(ws):
         t.video_path("joined_missing")
     with pytest.raises(UnknownTargetError):
         t.video_path("../etc")
+
+
+def test_joined_intro_and_markers_from_join_json(ws):
+    import json
+
+    story = ws / "story"
+    story.mkdir()
+    key = "joined_2026-11-26_x"
+    (story / f"{key}.mp4").write_bytes(b"x")
+    t = get_target("joined")
+    assert t.intro_s(key) is None and t.markers(key) == []
+    chapter = {
+        "title": "Lane, first blood",
+        "kind": "lane",
+        "video_start_s": 20.0,
+        "game_start_s": 0,
+        "game_end_s": 30,
+        "kills": 0,
+        "deaths": 0,
+    }
+    game = {
+        "round": "r",
+        "label": "Xayah 5/0/2",
+        "video_start_s": 13.8,
+        "story_start_s": 16.0,
+        "video_end_s": 90.0,
+        "story_json": "s",
+        "digest_json": None,
+        "chapters": [chapter],
+    }
+    jm = {
+        "video": "v",
+        "title": "t",
+        "duration_s": 100.0,
+        "intro_s": 13.8,
+        "games": [game],
+        "inserts": [{"kind": "subscribe", "at_s": 30.0, "dur_s": 3.0, "asset": "a"}],
+    }
+    (story / f"{key}.join.json").write_text(json.dumps(jm), encoding="utf-8")
+    assert t.intro_s(key) == 13.8
+    got = [(m.at_s, m.label, m.kind) for m in t.markers(key)]
+    assert got == [
+        (13.8, "Xayah 5/0/2", "game"),
+        (20.0, "Lane", "chapter"),
+        (30.0, "subscribe", "insert"),
+    ]
+
+
+def test_story_round_markers_from_story_json(ws):
+    import json
+
+    d = ws / "story" / "r1"
+    d.mkdir(parents=True)
+    (d / "story.mp4").write_bytes(b"x")
+    t = StoryRoundTarget()
+    assert t.markers("r1") == [] and t.intro_s("r1") is None
+    plan = {
+        "chapters": [
+            {"title": "Fight, 2 kills", "start_s": 100.0, "end_s": 110.0, "kind": "fight"},
+            {"title": "Close", "start_s": 200.0, "end_s": 205.0, "kind": "close"},
+        ],
+        "total_s": 15.0,
+        "mic_stream": None,
+        "audio": "mixed",
+    }
+    (d / "story.json").write_text(json.dumps(plan), encoding="utf-8")
+    marks = t.markers("r1")
+    assert [(m.label, m.kind) for m in marks] == [("Fight", "chapter"), ("Close", "chapter")]
+    assert marks[0].at_s == 2.5 and marks[1].at_s == 15.0

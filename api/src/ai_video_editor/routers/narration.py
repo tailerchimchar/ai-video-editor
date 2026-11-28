@@ -2,11 +2,16 @@
 
     GET    /narration/{kind}/{key}/frames           frame-strip sprite (cached per video)
     GET    /narration/{kind}/{key}/peaks            game-audio peaks (cached per video)
-    GET    /narration/{kind}/{key}/markers          owner cue markers
+    GET    /narration/{kind}/{key}/markers          chapters, games, inserts and owner cues
     GET    /narration/{kind}/{key}                  session view (creates it on first call)
     POST   /narration/{kind}/{key}/takes            upload one take (raw webm body)
     DELETE /narration/{kind}/{key}/takes/{take_id}  remove a take
+    PATCH  /narration/{kind}/{key}/takes/{take_id}  trim / nudge / gain / mute a take
+    POST   /narration/{kind}/{key}/takes/{take_id}/split?at_s=  split a take in two
     PUT    /narration/{kind}/{key}/camera           set the camera box
+    PUT    /narration/{kind}/{key}/mix              ducking and gains
+    PUT    /narration/{kind}/{key}/game-regions     per-stretch game audio level
+    PUT    /narration/{kind}/{key}/camera-regions   per-stretch camera box
     POST   /narration/{kind}/{key}/relock           accept the current video as the takes' video
     POST   /narration/{kind}/{key}/export           background job -> narrated.mp4
 
@@ -35,15 +40,20 @@ from ..edits import _run_ffmpeg
 from ..jobs import finish_job
 from ..models import RankResponse
 from ..narration import service, strips, targets
+from ..narration.edits import OverlapError, TakeTooShortError
 from ..narration.export import export_narration, probe_frame_size
 from ..narration.models import (
     KEY_PATTERN,
+    AudioMix,
     CameraBox,
+    CameraRegion,
     FrameStrip,
+    GameAudioRegion,
     Marker,
     NarrationSession,
     Peaks,
     Take,
+    TakeEdit,
     TargetRef,
 )
 from ..narration.service import SessionView
@@ -161,13 +171,46 @@ async def put_camera(
     return _view(ref, target, store, service.set_camera(ref, target, store, body))
 
 
+@router.put("/{kind}/{key}/mix", response_model=SessionView)
+async def put_mix(body: AudioMix, ref: RefDep, target: TargetDep, store: StoreDep) -> SessionView:
+    return _view(ref, target, store, service.set_mix(ref, target, store, body))
+
+
+@router.put("/{kind}/{key}/game-regions", response_model=SessionView)
+async def put_game_regions(
+    body: list[GameAudioRegion], ref: RefDep, target: TargetDep, store: StoreDep
+) -> SessionView:
+    try:
+        session = service.set_game_regions(ref, target, store, body)
+    except OverlapError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return _view(ref, target, store, session)
+
+
+@router.put("/{kind}/{key}/camera-regions", response_model=SessionView)
+async def put_camera_regions(
+    body: list[CameraRegion], ref: RefDep, target: TargetDep, store: StoreDep
+) -> SessionView:
+    try:
+        session = service.set_camera_regions(ref, target, store, body)
+    except OverlapError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return _view(ref, target, store, session)
+
+
+class RelockBody(BaseModel):
+    shift_s: float = 0.0
+
+
 @router.post("/{kind}/{key}/relock", response_model=SessionView)
 async def relock(
     ref: RefDep,
     target: TargetDep,
     store: StoreDep,
+    body: RelockBody | None = None,
 ) -> SessionView:
-    return _view(ref, target, store, service.relock(ref, target, store))
+    shift = body.shift_s if body else 0.0
+    return _view(ref, target, store, service.relock(ref, target, store, shift))
 
 
 # -- timeline assets ------------------------------------------------------
@@ -202,8 +245,9 @@ async def get_peaks(ref: RefDep, target: TargetDep, store: StoreDep, renderer: P
 
 
 @router.get("/{kind}/{key}/markers", response_model=list[Marker])
-async def get_markers(ref: RefDep, store: StoreDep) -> list[Marker]:
-    return sorted(service.load_cues(store, ref), key=lambda m: m.at_s)
+async def get_markers(ref: RefDep, target: TargetDep, store: StoreDep) -> list[Marker]:
+    merged = target.markers(ref.key) + service.load_cues(store, ref)
+    return sorted(merged, key=lambda m: m.at_s)
 
 
 # -- takes --------------------------------------------------------------
@@ -216,6 +260,7 @@ async def upload_take(
     start_s: Annotated[float, Query(ge=0.0)],
     duration_s: Annotated[float, Query(gt=0.0)],
     has_camera: bool = False,
+    replace: bool = True,
 ) -> Take:
     content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
     if content_type not in _TAKE_TYPES:
@@ -235,7 +280,38 @@ async def upload_take(
         start_s=start_s,
         duration_s=duration_s,
         has_camera=has_camera,
+        replace=replace,
     )
+
+
+@router.patch("/{kind}/{key}/takes/{take_id}", response_model=SessionView)
+async def patch_take(
+    take_id: str, body: TakeEdit, ref: RefDep, target: TargetDep, store: StoreDep
+) -> SessionView:
+    try:
+        session = service.edit_take(ref, target, store, take_id, body)
+    except service.TakeNotFoundError as exc:
+        raise HTTPException(404, f"no take {take_id!r}") from exc
+    except (TakeTooShortError, ValueError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return _view(ref, target, store, session)
+
+
+@router.post("/{kind}/{key}/takes/{take_id}/split", response_model=SessionView)
+async def split_take(
+    take_id: str,
+    at_s: Annotated[float, Query(gt=0.0)],
+    ref: RefDep,
+    target: TargetDep,
+    store: StoreDep,
+) -> SessionView:
+    try:
+        session = service.split_take(ref, target, store, take_id, at_s)
+    except service.TakeNotFoundError as exc:
+        raise HTTPException(404, f"no take {take_id!r}") from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return _view(ref, target, store, session)
 
 
 @router.delete("/{kind}/{key}/takes/{take_id}", response_model=SessionView)
