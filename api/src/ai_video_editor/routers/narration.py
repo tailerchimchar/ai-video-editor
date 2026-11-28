@@ -14,6 +14,10 @@
     PUT    /narration/{kind}/{key}/camera-regions   per-stretch camera box
     POST   /narration/{kind}/{key}/relock           accept the current video as the takes' video
     POST   /narration/{kind}/{key}/export           background job -> narrated.mp4
+    GET    /narration/{kind}/{key}/hook             the hook track (edits if any, else rendered)
+    PUT    /narration/{kind}/{key}/hook             save the hook picks (laptop applies them)
+    DELETE /narration/{kind}/{key}/hook             discard the saved hook edits
+    GET    /narration/{kind}/{key}/storyboard       games and chapters, with what the hook uses
 
 HTTP only (DIP): the target comes from the registry, the store and the
 exporter come from FastAPI dependencies, so tests and a future per-user
@@ -39,7 +43,7 @@ from ..database import get_db
 from ..edits import _run_ffmpeg
 from ..jobs import finish_job
 from ..models import RankResponse
-from ..narration import service, strips, targets
+from ..narration import hook_service, service, strips, targets
 from ..narration.edits import OverlapError, TakeTooShortError
 from ..narration.export import export_narration, probe_frame_size
 from ..narration.models import (
@@ -59,6 +63,7 @@ from ..narration.models import (
 from ..narration.service import SessionView
 from ..narration.store import NarrationStore, store_for
 from ..narration.targets import NarrationTarget
+from ..story.hook_edits import EditPick, HookView
 
 router = APIRouter(tags=["narration"], prefix="/narration")
 
@@ -389,3 +394,48 @@ async def export(
         await db.close()
     _track(_run_export_job(job_id, exporter, ref, target, store, force))
     return RankResponse(job_id=job_id)
+
+
+# -- hook picks + storyboard (joined videos) ------------------------------
+class HookPicksBody(BaseModel):
+    picks: list[EditPick]
+    mode: str | None = None
+    title: str | None = None
+
+
+@router.get("/{kind}/{key}/hook", response_model=HookView)
+async def get_hook(ref: RefDep, target: TargetDep) -> HookView:
+    try:
+        return hook_service.get_hook(target, ref.key)
+    except hook_service.HookUnavailable as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@router.put("/{kind}/{key}/hook", response_model=HookView)
+async def put_hook(body: HookPicksBody, ref: RefDep, target: TargetDep) -> HookView:
+    try:
+        return hook_service.set_hook_picks(
+            target, ref.key, body.picks, mode=body.mode, title=body.title
+        )
+    except hook_service.HookUnavailable as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except hook_service.StaleEdits as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.delete("/{kind}/{key}/hook", response_model=HookView)
+async def delete_hook(ref: RefDep, target: TargetDep) -> HookView:
+    try:
+        return hook_service.reset_hook(target, ref.key)
+    except hook_service.HookUnavailable as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@router.get("/{kind}/{key}/storyboard", response_model=hook_service.Storyboard)
+async def get_storyboard(ref: RefDep, target: TargetDep) -> hook_service.Storyboard:
+    try:
+        return hook_service.storyboard(target, ref.key)
+    except hook_service.HookUnavailable as exc:
+        raise HTTPException(404, str(exc)) from exc

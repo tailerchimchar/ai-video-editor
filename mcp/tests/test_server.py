@@ -327,6 +327,45 @@ def test_narration_set_camera_sends_only_set_fields():
     assert bodies[1] == {"enabled": False, "width_frac": 0.2, "x": 0.7, "y": 0.6}
 
 
+def test_hook_picks_set_puts_the_list():
+    import json as _json
+
+    seen: list[tuple] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path, _json.loads(request.content)))
+        return httpx.Response(200, json={"picks": []})
+
+    picks = [{"chapter_id": "r1:p00", "at_s": 0}]
+    with _patch_client(handler):
+        server.hook_picks_set("j1", picks)
+        server.hook_picks_set("j1", picks, mode="tease", title="T")
+
+    path = "/api/v1/narration/joined/j1/hook"
+    assert seen[0] == ("PUT", path, {"picks": picks})
+    assert seen[1] == ("PUT", path, {"picks": picks, "mode": "tease", "title": "T"})
+
+
+def test_hook_picks_get_reset_and_storyboard_routes():
+    seen: list[tuple] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path))
+        return httpx.Response(200, json={})
+
+    with _patch_client(handler):
+        server.hook_picks_get("j1")
+        server.hook_picks_reset("j1")
+        server.storyboard_get("j1")
+
+    base = "/api/v1/narration/joined/j1"
+    assert seen == [
+        ("GET", base + "/hook"),
+        ("DELETE", base + "/hook"),
+        ("GET", base + "/storyboard"),
+    ]
+
+
 def test_narration_export_polls_the_job():
     import json as _json
 

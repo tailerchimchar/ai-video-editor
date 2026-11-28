@@ -54,6 +54,10 @@ class NarrationTarget(Protocol):
         """Landmarks to show on the timeline (games, chapters, inserts)."""
         ...
 
+    def join_map(self, key: str):
+        """The parsed `JoinMap` (story/join_map.py) or None when the video has none."""
+        ...
+
 
 class TargetDefaults:
     """Mixin: no intro length and no markers. A target inherits it and
@@ -64,6 +68,9 @@ class TargetDefaults:
 
     def markers(self, key: str) -> list[Marker]:
         return []
+
+    def join_map(self, key: str):
+        return None
 
 
 _REGISTRY: dict[str, NarrationTarget] = {}
@@ -197,7 +204,7 @@ class JoinedStoryTarget(TargetDefaults):
         ]
         return sorted(keys, reverse=True)
 
-    def _join_map(self, key: str):
+    def join_map(self, key: str):
         from ..story.join_map import JoinMap
 
         path = self._root() / f"{_checked_key(key)}.join.json"
@@ -207,11 +214,11 @@ class JoinedStoryTarget(TargetDefaults):
             return None
 
     def intro_s(self, key: str) -> float | None:
-        jm = self._join_map(key)
+        jm = self.join_map(key)
         return None if jm is None else jm.intro_s
 
     def markers(self, key: str) -> list[Marker]:
-        jm = self._join_map(key)
+        jm = self.join_map(key)
         if jm is None:
             return []
         out: list[Marker] = []

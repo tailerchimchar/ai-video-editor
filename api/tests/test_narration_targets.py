@@ -56,6 +56,9 @@ class FakeTarget:
     def markers(self, key: str) -> list:
         return []
 
+    def join_map(self, key: str):
+        return None
+
 
 def test_story_registered_by_default():
     assert get_target("story").kind == "story"

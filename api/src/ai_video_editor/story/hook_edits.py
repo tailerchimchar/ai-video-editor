@@ -33,7 +33,15 @@ from pydantic import BaseModel, Field, ValidationError
 from ..config import settings
 from .bookends import FREEZE_S, HOOK_MIN_S
 from .join import SWIPE_S
-from .join_map import JoinHook, JoinHookEvent, JoinHookPick, JoinMap, chapter_id_from
+from .join_map import (
+    JoinChapter,
+    JoinGame,
+    JoinHook,
+    JoinHookEvent,
+    JoinHookPick,
+    JoinMap,
+    chapter_id_from,
+)
 
 NEIGHBOUR_GAP_S = 0.5
 EDITS_SUFFIX = ".edits.json"
@@ -122,6 +130,11 @@ def _label(title: str) -> str:
     return title.split(",")[0].strip()
 
 
+def chapter_id_of(game: JoinGame, c: JoinChapter) -> str:
+    """The chapter's stable id, as `chapter_bases` computes it."""
+    return chapter_id_from(game.round, c.kind, c.play_id, round(c.game_start_s + game.offset_s, 3))
+
+
 def chapter_bases(jm: JoinMap) -> dict[str, ChapterBase]:
     """Every chapter the hook can use, by chapter id: the hook block's picks
     first (they win), then every chapter the map gave a base window."""
@@ -147,7 +160,7 @@ def chapter_bases(jm: JoinMap) -> dict[str, ChapterBase]:
             if c.hook_rec_start_s is None or c.hook_rec_end_s is None:
                 continue
             rec_start = round(c.game_start_s + g.offset_s, 3)
-            cid = chapter_id_from(g.round, c.kind, c.play_id, rec_start)
+            cid = chapter_id_of(g, c)
             if cid in out:
                 continue
             events = [

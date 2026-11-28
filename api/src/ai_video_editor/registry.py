@@ -356,6 +356,10 @@ _PLUMBING_TOOLS = frozenset(
         "narration_set_game_regions",
         "narration_set_camera_regions",
         "narration_relock",
+        "hook_picks_get",
+        "hook_picks_set",
+        "hook_picks_reset",
+        "storyboard_get",
     }
 )
 

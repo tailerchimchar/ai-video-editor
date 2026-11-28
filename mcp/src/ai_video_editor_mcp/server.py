@@ -2689,6 +2689,60 @@ def narration_relock(kind: str, key: str, shift_s: float = 0.0) -> dict:
         )
 
 
+@mcp.tool()
+def hook_picks_get(key: str) -> dict:
+    """Read the hook track of a joined video (`key` = the joined stem, e.g.
+    `joined_2026-11-26_xayah`). Each pick has an `id`, `chapter_id`, `at_s` (where
+    it sits on the hook track, seconds), `start_s` / `end_s` (owner offsets from
+    the rendered window: + starts earlier / ends later), its length and the
+    recording window it plays. `dirty` is true when the saved edits differ from
+    what is rendered; `stale_edits` when the laptop re-joined since. Returns the
+    hook view."""
+    with _client() as c:
+        return _narration_result(c.get(_narration_url("joined", key, "/hook")))
+
+
+@mcp.tool()
+def hook_picks_set(
+    key: str, picks: list[dict], mode: str | None = None, title: str | None = None
+) -> dict:
+    """Replace the hook track of a joined video. `picks` is the whole new list,
+    in any order: `{"chapter_id": "r1:p00", "at_s": 0, "start_s": 0, "end_s": 0}`
+    plus an optional `id`. `at_s` places the pick on the hook track (seconds);
+    `start_s` / `end_s` move the window edges, net from the RENDERED window
+    (+ = starts earlier / ends later, - = trims), clamped to the neighbouring
+    chapters. The same chapter may appear twice (a split): give each pick its own
+    `id`. Overlaps are pushed later; empty space between picks is closed when the
+    laptop applies. Use `storyboard_get` for the chapter ids. `mode` / `title`
+    keep the saved values when omitted. Nothing is rendered here: the laptop
+    applies it with `story-join --apply-edits <key>` (the returned
+    `laptop_command`). 404 = no hook data, 409 = the laptop re-joined (reset
+    first), 422 = bad picks. Returns the hook view."""
+    body = {"picks": picks, "mode": mode, "title": title}
+    body = {k: v for k, v in body.items() if v is not None}
+    with _client() as c:
+        return _narration_result(c.put(_narration_url("joined", key, "/hook"), json=body))
+
+
+@mcp.tool()
+def hook_picks_reset(key: str) -> dict:
+    """Discard the saved hook edits of a joined video; the track goes back to
+    what is rendered. Also the way out of a 409 after the laptop re-joined.
+    Returns the hook view."""
+    with _client() as c:
+        return _narration_result(c.delete(_narration_url("joined", key, "/hook")))
+
+
+@mcp.tool()
+def storyboard_get(key: str) -> dict:
+    """The joined video as games and chapters: per chapter its `id` (use it as
+    a pick's `chapter_id`), title, kind, game-clock window, `video_start_s`,
+    kill/death times, `in_hook` (used by the current hook picks) and
+    `has_hook_window` (can be a pick). Also the current hook view."""
+    with _client() as c:
+        return _narration_result(c.get(_narration_url("joined", key, "/storyboard")))
+
+
 def main() -> None:
     mcp.run()
 
