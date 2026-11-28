@@ -1,0 +1,237 @@
+{
+ "specName": "spec-clip-edits",
+ "timestamp": "2026-11-28T06:44:49+00:00",
+ "status": "spec-written",
+ "qaLog": [
+  {
+   "area": "Data model",
+   "question": "Where should a dragged clip edge be recorded as the source of truth?",
+   "answer": "Per-joined-video clip list (Recommended)",
+   "options": [
+    "Per-joined-video clip list",
+    "Per-round requests only",
+    "Write into plays/digest directly"
+   ]
+  },
+  {
+   "area": "AI role",
+   "question": "When you drag a hook clip's edge by +2 s, what should the AI do with that edit?",
+   "answer": "Re-rate + learn a rule (Recommended)",
+   "options": [
+    "Re-rate + learn a rule",
+    "Re-rate only",
+    "Learn only, no ratings",
+    "No AI, pure data"
+   ]
+  },
+  {
+   "area": "Edit semantics",
+   "question": "If you drag the hook clip's end past where its chapter footage ends, what should happen?",
+   "answer": "Extend the chapter too (Recommended)",
+   "options": [
+    "Extend the chapter too",
+    "Stop at the chapter bound",
+    "Cut the hook from the VOD instead"
+   ]
+  },
+  {
+   "area": "UI",
+   "question": "After you drag +2 s on the PC, what should the timeline show until the laptop re-joins?",
+   "answer": "Pending overlay (Recommended)",
+   "options": [
+    "Pending overlay",
+    "Preview the future layout",
+    "Edit in a separate list, not the timeline"
+   ]
+  },
+  {
+   "area": "Sync",
+   "question": "How should the edit record get from the PC to the laptop and the re-joined video back?",
+   "answer": "maybe don't worry too much about it so far? but maybe drive, on an explicit button like only if we need",
+   "options": [
+    "Drive, on an explicit button",
+    "Git, in knowledge/",
+    "Supabase workspace bucket",
+    "Keep it manual"
+   ]
+  },
+  {
+   "area": "Scope",
+   "question": "For your +2 s today, which do you want?",
+   "answer": "Wait for the play-mode re-join (Recommended)",
+   "options": [
+    "Wait for the play-mode re-join",
+    "Backfill the current video too",
+    "Keep tease mode, just +2 s"
+   ]
+  },
+  {
+   "area": "Process",
+   "question": "Run a red-team pass before writing the spec?",
+   "answer": "Yes, attack the spec",
+   "options": [
+    "No, skip",
+    "Yes, attack the spec"
+   ]
+  },
+  {
+   "area": "Process",
+   "question": "Spec preview as a Claude Artifact or straight to markdown?",
+   "answer": "Artifact preview + markdown",
+   "options": [
+    "Artifact preview + markdown",
+    "Markdown only"
+   ]
+  },
+  {
+   "area": "Red team: overlap",
+   "question": "If a drag would make a chapter overlap its neighbour, what should the timeline do?",
+   "answer": "Clamp at the neighbour (Recommended)",
+   "options": [
+    "Clamp at the neighbour",
+    "Allow the merge"
+   ]
+  },
+  {
+   "area": "Red team: rating time",
+   "question": "When should the AI re-rate and re-describe a clip?",
+   "answer": "what do you think? shouldn't pc also be able to use jev? let's make it easy i think idk",
+   "options": [
+    "On the laptop at apply time",
+    "On the PC right away, best effort"
+   ]
+  }
+ ],
+ "coverageMap": {
+  "Problem": "done",
+  "Data model": "done",
+  "AI role": "done",
+  "Edit semantics": "done",
+  "UI": "done",
+  "Sync": "done",
+  "Re-render & takes": "done",
+  "Scope": "done"
+ },
+ "capturedAtCommit": "24f4004",
+ "baseline": {
+  "derivedFrom": "Explore agent + direct reads",
+  "capturedAtCommit": "24f4004",
+  "repo": "ai-video-editor",
+  "branch": "feat/narration-v2",
+  "nature": "feature on top of narration v2",
+  "claims": [
+   {
+    "area": "Data model",
+    "path": "api/src/ai_video_editor/narration/models.py",
+    "claim": "Marker has at_s,label,kind only (points)"
+   },
+   {
+    "area": "Data model",
+    "path": "api/src/ai_video_editor/story/join_map.py",
+    "claim": "JoinMap has no clips, no hook picks, no schema_version"
+   },
+   {
+    "area": "Data model",
+    "path": "api/src/ai_video_editor/story/join.py",
+    "claim": "write_join_files is not passed the hook picks"
+   },
+   {
+    "area": "Edit semantics",
+    "path": "api/src/ai_video_editor/story/bookends.py",
+    "claim": "hook_window uses constants HOOK_LEAD_S 6 / HOOK_PLAY_TAIL_S 2 / HOOK_PLAY_MAX_S 14; no per-pick override"
+   },
+   {
+    "area": "Edit semantics",
+    "path": "api/src/ai_video_editor/story/requests.py",
+    "claim": "request kinds add_chapter/extend/drop/trim/mute/effect keyed by game clock; no set_window"
+   },
+   {
+    "area": "Re-render & takes",
+    "path": "api/src/ai_video_editor/narration/service.py",
+    "claim": "suggested_shift_s = intro delta; relock shifts all takes uniformly"
+   },
+   {
+    "area": "UI",
+    "path": "web/src/components/narration/timeline/MarkersLane.tsx",
+    "claim": "click-to-seek only, no drag"
+   },
+   {
+    "area": "UI",
+    "path": "web/src/components/narration/timeline/TakeBlock.tsx",
+    "claim": "edge drag pattern head/tail/nudge with pointer capture"
+   },
+   {
+    "area": "Sync",
+    "path": "api/src/ai_video_editor/grokbot/drive.py",
+    "claim": "Drive is upload-only; nothing syncs WORKSPACE"
+   }
+  ]
+ },
+ "driftLedger": [],
+ "previewUrl": "https://claude.ai/artifact/SXy8VfwPw2cMd8X91mmQm9",
+ "sourceIssue": null,
+ "feedbackRounds": [],
+ "redTeamStatus": "completed",
+ "redTeamFindings": [
+  {
+   "title": "Re-join rewrites the map that holds the diffs",
+   "severity": "critical",
+   "dimension": "Data Integrity",
+   "resolution": "D10/D16: net deltas in a separate PC-owned edits file"
+  },
+  {
+   "title": "Repeated drags stack extend requests",
+   "severity": "critical",
+   "dimension": "Data Integrity",
+   "resolution": "D11: one managed set_window per chapter"
+  },
+  {
+   "title": "Extend can merge neighbouring chapters",
+   "severity": "major",
+   "dimension": "Failure Modes",
+   "resolution": "D12: clamp at the neighbour (owner chose)"
+  },
+  {
+   "title": "Hook windows in story.mp4 seconds move on re-render",
+   "severity": "major",
+   "dimension": "Data Integrity",
+   "resolution": "D13: picks keyed by chapter id, story seconds at join time"
+  },
+  {
+   "title": "No stable chapter id across re-renders",
+   "severity": "major",
+   "dimension": "Data Integrity",
+   "resolution": "D14: round:play_id ids; edited chapters pinned"
+  },
+  {
+   "title": "Version skew silently strips clips[]",
+   "severity": "major",
+   "dimension": "Dependency Risks",
+   "resolution": "D15: schema_version; apply refuses v1; separate edits file"
+  },
+  {
+   "title": "Edit record and join map both called source of truth",
+   "severity": "major",
+   "dimension": "Contradictory Decisions",
+   "resolution": "D16"
+  },
+  {
+   "title": "Dragging back inside an applied extend",
+   "severity": "major",
+   "dimension": "Failure Modes",
+   "resolution": "D10/D11: net delta + absolute set_window"
+  },
+  {
+   "title": "Jev re-rating has no inputs on the PC",
+   "severity": "minor",
+   "dimension": "Operational Concerns",
+   "resolution": "D17: map carries facts; PC rates; failure never blocks (owner: PC should use Jev too)"
+  },
+  {
+   "title": "Free text could leak mic text or summoner names",
+   "severity": "minor",
+   "dimension": "Security Gaps",
+   "resolution": "D18"
+  }
+ ]
+}
