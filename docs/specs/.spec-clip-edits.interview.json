@@ -1,7 +1,7 @@
 {
  "specName": "spec-clip-edits",
  "timestamp": "2026-11-28T06:44:49+00:00",
- "status": "spec-written",
+ "status": "spec-revised-after-review",
  "qaLog": [
   {
    "area": "Data model",
@@ -100,6 +100,21 @@
     "On the laptop at apply time",
     "On the PC right away, best effort"
    ]
+  },
+  {
+   "area": "UI",
+   "question": "Pending overlay vs ripple",
+   "answer": "owner: 'you can see the shadow, i don't really like that' → ripple (D20)",
+   "options": [
+    "Pending overlay",
+    "Preview the future layout"
+   ]
+  },
+  {
+   "area": "Scope",
+   "question": "Minimal?",
+   "answer": "phase 1 = hooks only (D22)",
+   "options": []
   }
  ],
  "coverageMap": {
@@ -170,7 +185,26 @@
  "driftLedger": [],
  "previewUrl": "https://claude.ai/artifact/SXy8VfwPw2cMd8X91mmQm9",
  "sourceIssue": null,
- "feedbackRounds": [],
+ "feedbackRounds": [
+  {
+   "date": "2026-11-28",
+   "feedback": [
+    "is this the minimal way we can do it?",
+    "in clipchamp we can move whole clips and re-order them; should we not do that bc it would mess up jev?",
+    "is the frontend super intuitive? can anyone review it?",
+    "in clipchamp you can move and re-order; in this one you can see the shadow, i don't really like that"
+   ],
+   "reviews": [
+    "UX review (general-purpose, opus): ripple not overlay, reorder/remove hooks, no chapter reorder, ship hooks only, cut Jev + takes remap from v1, undo bug in mock, head/tail wording",
+    "Editing-model review (editing-expert, opus): minimal cut = persist picks + per-pick offsets + re-join from map; no set_window/pinning (managed extend suffices); reorder hooks fine, chapters never; risks: kind@start id churn, play_id stability, _refill, digest over whole file, game clock offset fragility, dropped plays"
+   ],
+   "changes": [
+    "spec rewritten: phase 1 = hook clips only (D20-D28)",
+    "playground rebuilt Clipchamp-style: ripple layout, body drag reorder, x remove, add-to-hook, kill ticks, start/end wording, seek-map preview line, derived rule proposal",
+    "preview artifact banner + decisions table updated"
+   ]
+  }
+ ],
  "redTeamStatus": "completed",
  "redTeamFindings": [
   {
