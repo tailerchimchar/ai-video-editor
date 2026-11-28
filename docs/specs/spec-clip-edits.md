@@ -52,17 +52,17 @@ Recording seconds, not game clock: the game clock is `recording − offset_s` an
 
 ### 4.2 Edits file (PC writes): `WORKSPACE/story/<stem>.edits.json`
 
-Slots are stored as they are on screen so the page reopens the same way; an empty slot is `{"empty": true, "len_s": 14.0}` and the laptop skips it.
+Each pick carries its track position `at_s` so the page reopens the same way; the laptop sorts by `at_s` and ignores the empty space between picks.
 
 ```jsonc
 { "schema_version": 1, "video": "joined_2026-11-26_xayah-kaisa-yunara",
   "base_digest": "sha256:1f3a9c…",      // over the map's hook pick ids + base windows, not the whole file
   "hook": { "mode": "play", "title": "Want to know the trick to laning?",
-            "picks": [ { "chapter_id": "…:p01", "start_s": 0.0, "end_s": 2.0 },
-                       { "chapter_id": "…:p01", "start_s": 0.0, "end_s": 0.0 } ] } }
+            "picks": [ { "chapter_id": "…yunara…:p01", "at_s": 0.0,  "start_s": 0.0, "end_s": 2.0 },
+                       { "chapter_id": "…kaisa…:p01",  "at_s": 30.0, "start_s": 0.0, "end_s": 0.0 } ] } }
 ```
 
-The list **is** the hook: its order is the montage order, a missing pick is removed, a new one is added. `start_s`/`end_s` are net offsets from the base window (D10), so the file is idempotent and a re-join can never apply them twice. `PUT` replaces the whole list.
+The list **is** the hook: sorted by `at_s` it is the montage order, a missing pick is removed, a new one is added. `start_s`/`end_s` are net offsets from the base window (D10), so the file is idempotent and a re-join can never apply them twice. `PUT` replaces the whole list.
 
 ### 4.3 Ids
 
@@ -97,13 +97,21 @@ The list **is** the hook: its order is the montage order, a missing pick is remo
 
 The owner tested the ripple mock and asked for three changes (2026-11-28, late): a deleted clip leaves an **empty slot**, a trimmed clip leaves its empty space inside its slot, an extended clip **pushes** the later clips; the four 1 s arrow buttons go (the offset fields stay); and with nothing selected the panel shows the **whole storyboard as JSON**, read-only until a "write" button.
 
-- **Slots.** The hook lane is a list of slots. A slot holds a clip or is empty. Slot length = max(the clip's rendered length, its edited length): trimming leaves empty space inside the slot (in front for a start trim, behind for an end trim), extending grows the slot and pushes everything after it. Deleting (×, the Delete key, or the panel's button) turns the slot into an empty one of the clip's length. Moving a clip (body drag) leaves an empty slot behind and either fills an empty slot under the pointer or inserts before the slot it lands on. "Add to the hook" fills the first empty slot, else appends. Empty slots are an editor thing: the laptop joins the clips back to back, and the preview line shows both lengths ("intro 13.8 → 42.6 s (56.1 s here with empty slots)"). The badge has "close the gaps".
-- **Storyboard JSON.** With nothing selected the right panel shows the whole video as JSON (`GET /narration/joined/{key}/storyboard`: the map's hook block with slots, every game and chapter with ids, windows, kill times and `in_hook`). A "write" button turns it into a textarea; "apply" parses it and takes `hook.picks` only in phase 1 (ids must exist and be play chapters; `{"empty": true}` keeps a slot; offsets are clamped), "cancel" discards. Errors show inline, nothing is written until apply succeeds.
+- **A track, like a video editor** (owner, after testing the slot version: "if I extend a clip into the empty space it should enter it; make it like an actual rendering software video model"). The hook lane is a track. Every clip has a position `at_s` on it and a length; empty space is simply where no clip is. Rules, all pure (`lib/hookTrack.ts`, mirrored in `story/hook_edits.py`):
+  - clips never overlap: after any change, a clip that overlaps the one before it is pushed right, and so on down the track (`settle`);
+  - **extend the end**: the clip grows in place; it eats empty space first and pushes the next clips only when it reaches them;
+  - **extend the start**: the start moves left into empty space; at the previous clip's end it stops and the extra length goes to the right instead (pushing);
+  - **trim**: the clip shrinks, nothing else moves, empty space appears;
+  - **delete** (×, Delete/Backspace, the panel's button): the clip goes, the space stays;
+  - **move** (body drag): the clip is lifted and dropped at the pointer, snapping to neighbour edges within 0.4 s; dropped onto another clip it lands before or after it depending on which half, and everything after is pushed; the space it left stays empty;
+  - "add to the hook" lands in the first empty space that fits, else at the end of the track; "close the empty spaces" compacts in track order.
+  Empty space is an editor thing: the laptop joins the clips back to back in track order, and the preview line shows both lengths ("intro 13.8 → 40.5 s (14.0 s of empty space here)").
+- **Storyboard JSON.** With nothing selected the right panel shows the whole video as JSON (`GET /narration/joined/{key}/storyboard`: the hook picks with `at_s`, every game and chapter with ids, windows, kill and death times and `in_hook`). A "write" button turns it into a textarea; "apply" parses it and takes `hook.picks` only in phase 1 (ids must exist and be play chapters; `at_s` is the place on the track, missing = right after the previous pick; offsets are clamped; the result is settled), "cancel" discards. Errors show inline, nothing is written until apply succeeds.
 
-- `MarkersLane` keeps cues; a new `HookLane` draws the slots laid out from the edits (not from the rendered mp4): slot i starts where slot i−1 ends minus the 0.5 s swipe; game 1 starts after the last slot; every chapter marker and the frame strip slide by `editor_intro − rendered_intro`.
+- `MarkersLane` keeps cues; a new `HookLane` draws the track from the edits (not from the rendered mp4): each clip at its `at_s`; game 1 starts at the end of the track; every chapter marker and the frame strip slide by `track_end − rendered_intro`.
 - Hook span: edges trim/extend with 12 px handles (TakeBlock pattern, listeners on `window`, draft until release, one `PUT`); body drag re-orders with a ghost and a slot marker; × removes; an orange outline and a dot mark a changed clip; kill/death ticks on every span (green/red) so the owner sees whether the extension catches the kill.
-- Inspector: "shows 4:04.0 – 4:20.1 (game clock)", "as rendered …", the diff in words ("ends 2.1 s later"), offset fields labelled "offset (s)" (no arrow buttons: the owner drags), reset, delete (leave slot empty), a one-line note when the clip runs past the chapter's footage, and a "storyboard" button back to the JSON view. An empty slot's panel offers "remove this slot". A chapter's inspector gets "add to the hook" (play chapters only).
-- Header badge "N hook changes · laptop applies" → popover: one line per change (trim, re-order, add, delete, empty slots) with undo, close the gaps, discard all, the laptop command and the edits file path as text. Keyboard: Delete/Backspace deletes the selected hook clip, Escape deselects.
+- Inspector: "shows 4:04.0 – 4:20.1 (game clock)", "as rendered …", the clip's place on the track, the diff in words ("ends 2.1 s later"), offset fields labelled "offset (s)" (no arrow buttons: the owner drags), reset, delete (leave space), a one-line note when the clip runs past the chapter's footage, and a "storyboard" button back to the JSON view. A chapter's inspector gets "add to the hook" (play chapters only).
+- Header badge "N hook changes · laptop applies" → popover: one line per change (trim, re-order, add, delete, empty spaces) with undo, close the empty spaces, discard all, the laptop command and the edits file path as text. Keyboard: Delete/Backspace deletes the selected hook clip, Escape deselects.
 - Preview: the frame strip tiles over seconds a hook gained are drawn as placeholders; the preview line says where the playhead plays from. Playback of the edited timeline is a seek map: inside a hook's rendered window → the mp4's hook seconds; gained seconds → the same recording moment in the chapter later in the mp4 (`video_second` of the chapter); game body → mp4 time minus the intro delta. A small jump at each boundary is accepted.
 
 ### 4.8 Takes
@@ -169,7 +177,7 @@ The edits file holds chapter ids and seconds; the map's hook block holds champio
 | D25 | Recording seconds | Base windows and events stored in recording seconds with the offset used | Game clock depends on a fragile offset (editing review risk 5) | Interview | 2026-11-28 |
 | D26 | Digest scope | `base_digest` over hook ids + base windows, not the file | A re-join that changes nothing must not invalidate edits (risk 4) | Interview | 2026-11-28 |
 | D27 | Reorder and takes | Hook-region takes flagged when the order changes (intro delta is 0) | Editing review | 2026-11-28 |
-| D29 | Slots, not ripple-delete | Delete and trim leave empty space in the slot; extend pushes; move leaves a slot behind; the laptop closes empty slots | Owner: "if I delete a clip, just leave an empty space there … if I extend, push the other clips" | Interview | 2026-11-28 |
+| D29 | A track, not slots | Clips sit at `at_s` on a track; extend eats empty space then pushes; trim and delete leave space; move snaps and pushes; the laptop joins in track order | Owner: "if I delete a clip, just leave an empty space … if I extend, push the other clips", then "if I extend into the empty space it should enter it … like an actual rendering software video model" | Interview | 2026-11-28 |
 | D30 | Storyboard JSON | Nothing selected → the whole video as JSON, read-only; "write" opens a textarea, apply takes `hook.picks` only in phase 1 | Owner: "see the json of the whole game … non-editable unless I click write" | Interview | 2026-11-28 |
 | D31 | No arrow buttons | The four 1 s buttons are removed; offset fields stay | Owner: "I will just drag if I need"; "offset I'm iffy with but keep it" | Interview | 2026-11-28 |
 | D28 | Wording | "start / end", "starts 1 s earlier / ends 2 s later", fields labelled "offset (s)"; handles visible on hover, 12 px | UX review #4, #5, #7 | Interview | 2026-11-28 |
@@ -184,8 +192,8 @@ T3..T5 ────────────────────────�
 ```
 
 1. **T1 Join map v2** (laptop side, pure): `JoinHook`/`JoinHookPick`, `schema_version`, `write_join_files(..., hook=...)`, recording-second windows and events; test on fixture plans.
-2. **T2 `story/hook_edits.py`**: models for the edits file, `clamp_pick`, `apply_offsets`, `base_digest`, pure tests.
+2. **T2 `story/hook_edits.py`**: models for the edits file (picks with `at_s`), `clamp_pick`, `settle`, `apply_offsets`, `base_digest`, pure tests.
 3. **T3 PC API + MCP + registry**: `GET/PUT/DELETE /narration/joined/{key}/hook` + `GET …/storyboard`, `JoinedStoryTarget.hook()`, tools `hook_picks_get/set/reset`, `storyboard_get`.
-4. **T4 Web**: `lib/hookEdits.ts` (+ vitest: layout, clamp, seek map), `HookLane` (slots, empty slots, body drag with fill/insert, Delete key), `HookInspector`, `StoryboardPanel` (JSON, write/apply/cancel), "add to the hook" on chapters, badge popover (undo, close the gaps, discard), preview line, `useHookPicks`; hook-region takes flagged on reorder.
+4. **T4 Web**: `lib/hookTrack.ts` (+ vitest: settle, extend eats space then pushes, start-extend stops at the previous clip, trim, delete, move/snap/drop, add-to-hook placement, close gaps, seek map), `HookLane` (track: empty space, body drag with snap and push, Delete key), `HookInspector`, `StoryboardPanel` (JSON, write/apply/cancel), "add to the hook" on chapters, badge popover (undo, close the empty spaces, discard), preview line, `useHookPicks`; hook-region takes flagged on reorder.
 5. **T5 `story-join --apply-edits`** + `story_join(apply_edits)`: digest check, managed `extend`, `story-render` of touched rounds, re-join from the map, fold offsets.
 6. **T6 Docs**: `api/docs/narration.md`, story-join docs, `web/docs/features/timeline.md`, `knowledge/series/Story-join.md`, laptop handoff.
