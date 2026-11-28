@@ -1,0 +1,74 @@
+/*
+ * Take edits — pure functions mirroring the backend's trim/split/punch-in
+ * semantics (narration/models.py). All times are video seconds; a take's
+ * effective span is shifted by its `offset_s`.
+ */
+
+import type { Take } from "@/types/narration";
+
+export const MIN_TAKE_S = 0.3;
+const MAX_OFFSET_S = 3;
+
+export const effectiveStart = (t: Take): number => t.start_s + t.offset_s;
+export const effectiveEnd = (t: Take): number => t.start_s + t.offset_s + t.duration_s;
+
+/** Cut the head so the take starts (effectively) at `newStartS`. */
+export function trimHead(t: Take, newStartS: number): Take {
+  const cut = Math.max(0, newStartS - effectiveStart(t));
+  return {
+    ...t,
+    start_s: t.start_s + cut,
+    media_in_s: t.media_in_s + cut,
+    duration_s: t.duration_s - cut,
+  };
+}
+
+/** Cut the tail so the take ends (effectively) at `newEndS`, within the media if known. */
+export function trimTail(t: Take, newEndS: number, mediaDurationS?: number): Take {
+  let duration = newEndS - effectiveStart(t);
+  if (mediaDurationS !== undefined) duration = Math.min(duration, mediaDurationS - t.media_in_s);
+  return { ...t, duration_s: Math.max(0, Math.min(duration, t.duration_s)) };
+}
+
+/** Split at effective time `atS` into head and tail (tail gets `newId`). */
+export function splitAt(t: Take, atS: number, newId: () => string): [Take, Take] {
+  const cut = atS - effectiveStart(t);
+  const head: Take = { ...t, duration_s: cut };
+  const tail: Take = {
+    ...t,
+    id: newId(),
+    start_s: t.start_s + cut,
+    media_in_s: t.media_in_s + cut,
+    duration_s: t.duration_s - cut,
+  };
+  return [head, tail];
+}
+
+/** Set the alignment offset, clamped to ±3 s. */
+export function nudge(t: Take, offsetS: number): Take {
+  return { ...t, offset_s: Math.min(MAX_OFFSET_S, Math.max(-MAX_OFFSET_S, offsetS)) };
+}
+
+/**
+ * Add `newTake`, making room: older takes overlapping its span are trimmed,
+ * split around it, or removed. Fragments under MIN_TAKE_S are dropped.
+ */
+export function punchIn(takes: Take[], newTake: Take, newId: () => string): Take[] {
+  const ns = effectiveStart(newTake);
+  const ne = effectiveEnd(newTake);
+  const out: Take[] = [];
+  for (const t of takes) {
+    const es = effectiveStart(t);
+    const ee = effectiveEnd(t);
+    if (ee <= ns || es >= ne) {
+      out.push(t);
+      continue;
+    }
+    if (es < ns) out.push(trimTail(t, ns));
+    if (ee > ne) {
+      const tail = trimHead(t, ne);
+      out.push(es < ns ? { ...tail, id: newId() } : tail);
+    }
+  }
+  return [...out.filter((t) => t.duration_s >= MIN_TAKE_S), newTake];
+}
