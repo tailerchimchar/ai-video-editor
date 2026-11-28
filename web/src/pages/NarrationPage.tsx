@@ -286,7 +286,7 @@ function NarrationWorkspace({ target }: { target: TargetRef }) {
           {(hookPicks.error || hookNote) && (
             <p className="flex items-center gap-2 font-mono text-xs text-danger">
               {hookPicks.error ?? hookNote}
-              {hookPicks.stale && (
+              {(hookPicks.stale || hookPicks.broken) && (
                 <Button size="sm" variant="danger" onClick={hookPicks.reset}>
                   discard
                 </Button>
@@ -340,6 +340,7 @@ function NarrationWorkspace({ target }: { target: TargetRef }) {
               storyboard={storyboard.data}
               hook={hookView}
               clips={hookClips}
+              extra={hookPicks.extra}
               onApply={hookPicks.setPicks}
             />
           )}

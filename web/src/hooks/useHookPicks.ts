@@ -90,9 +90,11 @@ export function useHookPicks(target: TargetRef) {
     if (picks) save.mutate(picks, { onError: back });
   }
 
-  const failure = save.error ?? discard.error;
-  const stale = (failure instanceof ApiError && failure.status === 409) || !!view?.stale_edits;
-  const error = stale ? STALE_HOOK_MESSAGE : failure ? messageOf(failure) : null;
+  const { error, stale, broken } = hookErrorState(
+    hook.error,
+    save.error ?? discard.error,
+    !!view?.stale_edits,
+  );
 
   return {
     hook,
@@ -109,7 +111,27 @@ export function useHookPicks(target: TargetRef) {
     error,
     /** The error is the 409: the answer is to discard (`reset`). */
     stale,
+    /** The hook could not be read (an unreadable edits file): discard is the way out. */
+    broken,
   };
+}
+
+/**
+ * The page's hook error line. A 404 on the hook query is an old map (no
+ * hook data), not an error; any other query error shows (an unreadable
+ * edits file is a 422) and is `broken`; a 409 on a save, or edits made on
+ * an older map, are `stale`. Both offer discard.
+ */
+export function hookErrorState(
+  queryError: unknown,
+  failure: unknown,
+  staleEdits: boolean,
+): { error: string | null; stale: boolean; broken: boolean } {
+  const stale = (failure instanceof ApiError && failure.status === 409) || staleEdits;
+  if (stale) return { error: STALE_HOOK_MESSAGE, stale, broken: false };
+  if (failure) return { error: messageOf(failure), stale, broken: false };
+  const broken = !!queryError && !(queryError instanceof ApiError && queryError.status === 404);
+  return { error: broken ? messageOf(queryError) : null, stale, broken };
 }
 
 function messageOf(err: unknown): string {

@@ -206,6 +206,9 @@ export interface HookPickView extends EditPick {
   /** Where the rendered piece sits in the mp4; null for a pick not rendered yet. */
   video_start_s: number | null;
   video_end_s: number | null;
+  /** The recording window the mp4 shows (the map's base ± its folded offsets); null for a new piece. */
+  rendered_rec_start_s: number | null;
+  rendered_rec_end_s: number | null;
   /** Differs from what the mp4 shows: the laptop applies it. */
   pending: boolean;
   beyond_chapter_s: number;
@@ -246,6 +249,8 @@ export interface StoryboardChapter {
   death_times_s: number[];
   in_hook: boolean;
   has_hook_window: boolean;
+  /** Its base window's rendered length in the hook; null without a window. */
+  hook_len_s: number | null;
 }
 
 export interface StoryboardGame {

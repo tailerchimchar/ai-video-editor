@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { HookPickView, HookView, Storyboard } from "@/types/narration";
 import {
+  addChapter,
   addToHook,
   applyTrim,
   changes,
@@ -11,6 +12,7 @@ import {
   lensOf,
   moveTo,
   optimisticView,
+  renderedWindow,
   seekTarget,
   settle,
   splitAt,
@@ -52,6 +54,9 @@ const pick = (
     limit_hi_rec_s: null,
     video_start_s: at,
     video_end_s: at + (re - rs),
+    // a pending pick was rendered from its base; an unchanged one with its offsets
+    rendered_rec_start_s: extra.pending ? rs : rs - start_s,
+    rendered_rec_end_s: extra.pending ? re : re + end_s,
     pending: false,
     beyond_chapter_s: 0,
     ...extra,
@@ -346,5 +351,61 @@ describe("optimisticView", () => {
     const v = view3();
     const z = { id: "z", chapter_id: "r1:z", at_s: 0, start_s: 0, end_s: 0 };
     expect(optimisticView(v, [z])).toBeNull();
+  });
+});
+
+describe("renderedWindow", () => {
+  it("uses the rendered window the map carries, not the base", () => {
+    // the last apply folded 1 s earlier into the map (base 98, rendered 97);
+    // the owner then pulled the start 2 s further: pending, but the mp4 still shows 97
+    const p = pick("a", "r1:a", 0, 98, 112, {
+      start_s: 3,
+      pending: true,
+      rendered_rec_start_s: 97,
+      rendered_rec_end_s: 112,
+      video_start_s: 0,
+      video_end_s: 15,
+    });
+    expect(renderedWindow(p)).toEqual({ recStart: 97, videoStart: 0, videoEnd: 15 });
+  });
+
+  it("is null for a piece the mp4 does not have yet", () => {
+    const p = pick("n", "r1:a", 0, 98, 112, {
+      pending: true,
+      rendered_rec_start_s: null,
+      rendered_rec_end_s: null,
+      video_start_s: null,
+      video_end_s: null,
+    });
+    expect(renderedWindow(p)).toBeNull();
+    expect(renderedWindow(undefined)).toBeNull();
+  });
+});
+
+describe("addChapter", () => {
+  it("puts a chapter outside the hook into the first empty space that fits its window", () => {
+    const v = view3(); // a: 0..5, empty 5..8, b: 8..12, c: 12..16
+    const out = addChapter(toClips(v), "r1:new", 3, v);
+    const added = out.find((c) => c.chapter_id === "r1:new");
+    expect(added).toMatchObject({ at_s: 5, start_s: 0, end_s: 0 });
+    expect(added?.id).toMatch(/^[0-9a-f]{8}$/);
+    expect(out).toHaveLength(4);
+  });
+
+  it("goes to the end of the track when no space fits", () => {
+    const v = view3();
+    const out = addChapter(toClips(v), "r1:new", 6, v);
+    expect(out.find((c) => c.chapter_id === "r1:new")?.at_s).toBe(16);
+  });
+});
+
+describe("optimisticView rendered window", () => {
+  it("a new piece of a chapter in the hook has no rendered window of its own", () => {
+    const v = view3();
+    const clips = [...toClips(v), { id: "n2", chapter_id: "r1:a", at_s: 20, start_s: 0, end_s: 0 }];
+    const next = optimisticView(v, clips)!;
+    const n2 = next.picks.find((p) => p.id === "n2")!;
+    expect(n2.rendered_rec_start_s).toBeNull();
+    expect(next.picks.find((p) => p.id === "a")!.rendered_rec_start_s).toBe(100);
   });
 });

@@ -219,6 +219,27 @@ export function addToHook(clips: TrackClip[], pick: TrackClip, lens: Lens): Trac
   return settle([...sorted, { ...pick, at_s: r1(at ?? end) }], lens);
 }
 
+/**
+ * "add to the hook" for a chapter the view may not know yet: `len` is its
+ * base window's rendered length (the storyboard's `hook_len_s`); the new
+ * clip gets a fresh id and the base window (offsets 0).
+ */
+export function addChapter(
+  clips: TrackClip[],
+  chapterId: string,
+  len: number,
+  view: HookView,
+  extra: HookPickView[] = [],
+): TrackClip[] {
+  const pick: TrackClip = { id: newPickId(), chapter_id: chapterId, at_s: 0, start_s: 0, end_s: 0 };
+  const known = lensOf(view, extra);
+  const lens: Lens = (c) =>
+    c.chapter_id === chapterId && !findBase(view, chapterId, extra)
+      ? len + c.start_s + c.end_s
+      : known(c);
+  return addToHook(clips, pick, lens);
+}
+
 /** Lay the clips back to back in `order` (default: track order). */
 function backToBack(order: TrackClip[], lens: Lens): TrackClip[] {
   let t = 0;
@@ -338,14 +359,15 @@ export function layout(
 }
 
 /**
- * Where the pick's rendered piece is: its recording start and its span in
- * the mp4. An edited pick is assumed rendered from its base window (the
- * view does not carry the rendered offsets).
+ * Where the pick's rendered piece is: its recording start (the map's base
+ * window with the offsets the last apply folded in) and its span in the mp4;
+ * null for a piece the mp4 does not have.
  */
-function renderedWindow(p: HookPickView | undefined) {
+export function renderedWindow(p: HookPickView | undefined) {
   if (!p || p.video_start_s === null || p.video_end_s === null) return null;
+  if (p.rendered_rec_start_s === null) return null;
   return {
-    recStart: p.pending ? p.base_rec_start_s : p.rec_start_s,
+    recStart: p.rendered_rec_start_s,
     videoStart: p.video_start_s,
     videoEnd: p.video_end_s,
   };
@@ -541,6 +563,8 @@ export function optimisticView(
       rec_end_s,
       video_start_s: prev?.video_start_s ?? null,
       video_end_s: prev?.video_end_s ?? null,
+      rendered_rec_start_s: prev?.rendered_rec_start_s ?? null,
+      rendered_rec_end_s: prev?.rendered_rec_end_s ?? null,
       pending: same ? prev.pending : true,
       beyond_chapter_s: Math.max(0, rec_end_s - b.chapter_rec_end_s),
     };

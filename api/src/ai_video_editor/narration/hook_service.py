@@ -14,6 +14,7 @@ from ..story.hook_edits import (
     HookEdits,
     HookView,
     base_digest,
+    base_len,
     chapter_bases,
     chapter_id_of,
     delete_edits,
@@ -96,6 +97,7 @@ class StoryboardChapter(BaseModel):
     death_times_s: list[float]
     in_hook: bool
     has_hook_window: bool
+    hook_len_s: float | None = None  # its base window's length in the hook (None = no window)
 
 
 class StoryboardGame(BaseModel):
@@ -138,6 +140,7 @@ def storyboard(target: NarrationTarget, key: str) -> Storyboard:
                     death_times_s=c.death_times_s,
                     in_hook=cid in in_hook,
                     has_hook_window=cid in bases,
+                    hook_len_s=round(base_len(bases[cid], view.mode), 3) if cid in bases else None,
                 )
                 for c in g.chapters
             ],

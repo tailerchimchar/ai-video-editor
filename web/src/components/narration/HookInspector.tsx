@@ -77,9 +77,9 @@ export function HookInspector({
   const recStart = base.base_rec_start_s - clip.start_s;
   const recEnd = base.base_rec_end_s + clip.end_s;
   const pending = !pick || pick.pending;
-  // An edited pick was rendered from its base window (the view has no rendered offsets).
-  const shownStart = pending ? base.base_rec_start_s : recStart;
-  const shownEnd = pending ? base.base_rec_end_s : recEnd;
+  // What the mp4 shows: the map's base window with the offsets the last apply folded in.
+  const shownStart = pick?.rendered_rec_start_s ?? null;
+  const shownEnd = pick?.rendered_rec_end_s ?? null;
   const beyond = Math.max(0, recEnd - base.chapter_rec_end_s);
 
   const trim = (edge: "start" | "end", s: number, e: number) =>
@@ -128,7 +128,9 @@ export function HookInspector({
         <div className="flex justify-between gap-2">
           <dt className="text-text-muted">as rendered</dt>
           <dd className="text-text-dim">
-            {clock(shownStart - off)} – {clock(shownEnd - off)}
+            {shownStart !== null && shownEnd !== null
+              ? `${clock(shownStart - off)} – ${clock(shownEnd - off)}`
+              : "not in the video yet"}
           </dd>
         </div>
       </dl>

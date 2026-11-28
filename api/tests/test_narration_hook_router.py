@@ -136,3 +136,14 @@ def test_corrupt_edits_file_is_422_on_get_hook_and_storyboard(client, joined_map
         r = client.get(BASE + path)
         assert r.status_code == 422, path
         assert "cannot read" in r.json()["detail"]
+
+
+def test_storyboard_gives_each_chapter_its_hook_length(client, joined_map):
+    from tests.test_story_hook_edits import _jm_with_extra_chapters
+
+    jm = _jm_with_extra_chapters()
+    jm.video = str(joined_map / "joined_t.mp4")
+    (joined_map / "joined_t.join.json").write_text(jm.model_dump_json(), encoding="utf-8")
+    chs = client.get(BASE + "/storyboard").json()["games"][0]["chapters"]
+    assert chs[2]["in_hook"] is False and chs[2]["hook_len_s"] == 10.0  # 205..215, play
+    assert chs[1]["has_hook_window"] is False and chs[1]["hook_len_s"] is None

@@ -1,13 +1,16 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/Button";
-import { newPickId, type TrackClip } from "@/lib/hookTrack";
-import type { HookView, Storyboard } from "@/types/narration";
+import { addChapter, newPickId, type TrackClip } from "@/lib/hookTrack";
+import { clock } from "@/lib/time";
+import type { HookPickView, HookView, Storyboard } from "@/types/narration";
 
 interface StoryboardPanelProps {
   storyboard: Storyboard | undefined;
   hook: HookView;
   clips: TrackClip[];
-  /** Save a written pick list; resolves to the error message, or null. */
+  /** Picks the view no longer has (deleted), for base windows. */
+  extra: HookPickView[];
+  /** Save a pick list; resolves to the error message, or null. */
   onApply: (clips: TrackClip[]) => Promise<string | null>;
 }
 
@@ -57,11 +60,19 @@ export function parseWritten(text: string): TrackClip[] | string {
  * default. "write" turns it into a text box; "apply" saves its
  * `hook.picks`.
  */
-export function StoryboardPanel({ storyboard, hook, clips, onApply }: StoryboardPanelProps) {
+export function StoryboardPanel({ storyboard, hook, clips, extra, onApply }: StoryboardPanelProps) {
   const [open, setOpen] = useState(false);
   const [writing, setWriting] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [applying, setApplying] = useState(false);
+
+  /** "add to the hook": first empty space that fits, else the end of the track. */
+  async function add(chapterId: string, len: number) {
+    setApplying(true);
+    const err = await onApply(addChapter(clips, chapterId, len, hook, extra));
+    setApplying(false);
+    setError(err);
+  }
 
   async function apply() {
     if (writing === null) return;
@@ -140,23 +151,75 @@ export function StoryboardPanel({ storyboard, hook, clips, onApply }: Storyboard
           {error && <p className="font-mono text-xs text-danger">{error}</p>}
         </>
       ) : (
-        open && (
-          <>
-            <p className="font-mono text-xs text-text-dim">
-              The whole video as data: the hook clips with their place on the track, every game and
-              chapter. Read-only until you press write. Click a hook clip on the timeline for its
-              own panel.
-            </p>
-            {storyboard ? (
-              <pre className="max-h-96 overflow-auto rounded bg-bg-base p-2 font-mono text-[10px] text-text-muted">
-                {shownJson(storyboard, hook, clips)}
-              </pre>
-            ) : (
-              <p className="font-mono text-xs text-text-dim">loading…</p>
-            )}
-          </>
-        )
+        <>
+          {storyboard && <ChapterList storyboard={storyboard} busy={applying} onAdd={add} />}
+          {error && <p className="font-mono text-xs text-danger">{error}</p>}
+          {open && (
+            <>
+              <p className="font-mono text-xs text-text-dim">
+                The whole video as data: the hook clips with their place on the track, every game
+                and chapter. Read-only until you press write. Click a hook clip on the timeline for
+                its own panel.
+              </p>
+              {storyboard ? (
+                <pre className="max-h-96 overflow-auto rounded bg-bg-base p-2 font-mono text-[10px] text-text-muted">
+                  {shownJson(storyboard, hook, clips)}
+                </pre>
+              ) : (
+                <p className="font-mono text-xs text-text-dim">loading…</p>
+              )}
+            </>
+          )}
+        </>
       )}
     </section>
+  );
+}
+
+/** Every game's chapters (game clock); a play chapter outside the hook can be added. */
+function ChapterList({
+  storyboard,
+  busy,
+  onAdd,
+}: {
+  storyboard: Storyboard;
+  busy: boolean;
+  onAdd: (chapterId: string, len: number) => void;
+}) {
+  return (
+    <div className="space-y-2">
+      {storyboard.games.map((g) => (
+        <div key={g.round}>
+          <p className="font-mono text-[10px] uppercase tracking-wider text-text-muted">
+            {g.label}
+          </p>
+          <ul className="space-y-0.5">
+            {g.chapters.map((c) => (
+              <li key={c.id} className="flex items-center gap-2 font-mono text-xs">
+                <span className="w-24 shrink-0 text-text-dim">
+                  {clock(c.game_start_s)}–{clock(c.game_end_s)}
+                </span>
+                <span className="truncate text-text-primary">{c.title}</span>
+                {c.in_hook ? (
+                  <span className="ml-auto shrink-0 text-text-dim">in the hook</span>
+                ) : (
+                  c.has_hook_window &&
+                  c.hook_len_s !== null && (
+                    <Button
+                      size="sm"
+                      className="ml-auto shrink-0"
+                      disabled={busy}
+                      onClick={() => onAdd(c.id, c.hook_len_s ?? 0)}
+                    >
+                      add to the hook
+                    </Button>
+                  )
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </div>
   );
 }
