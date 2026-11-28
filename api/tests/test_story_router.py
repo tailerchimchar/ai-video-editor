@@ -188,6 +188,10 @@ def test_join_apply_edits_runs_the_job(client, sandbox, monkeypatch):
     monkeypatch.setattr(story_router, "apply_edits", fake_apply)
     bad = client.post("/api/v1/story/join", json={"apply_edits": "j", "rounds": ["a"]})
     assert bad.status_code == 422
+    for extra in ({"hook": ["1:2"]}, {"title": "T"}, {"hook_title": "H"}, {"outro": True}):
+        bad = client.post("/api/v1/story/join", json={"apply_edits": "j", **extra})
+        assert bad.status_code == 422, extra
+        assert next(iter(extra)) in bad.json()["detail"]
     r = client.post("/api/v1/story/join", json={"apply_edits": "joined_x", "force_edits": True})
     assert r.status_code == 200
     job_id = r.json()["job_id"]

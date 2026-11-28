@@ -632,6 +632,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.apply_edits:
         if args.rounds:
             ap.error("--apply-edits takes no rounds")
+        # picks, mode and title come from the edits file, the options from the map
+        join_flags = ("out", "title", "hook", "hook_mode", "hook_title", "outro", "music")
+        join_flags += ("music_start", "subscribe_after")
+        given = [f for f in join_flags if getattr(args, f) != ap.get_default(f)]
+        if given:
+            flags = ", ".join("--" + f.replace("_", "-") for f in given)
+            ap.error(f"--apply-edits takes no {flags} (the edits file and the join map decide)")
         from .apply_edits import apply_edits
 
         try:

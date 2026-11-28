@@ -206,6 +206,17 @@ async def join(body: JoinBody) -> RankResponse:
     if body.apply_edits:
         if body.rounds:
             raise HTTPException(422, "apply_edits takes no rounds")
+        defaults = JoinBody()
+        given = [
+            f
+            for f in JoinBody.model_fields
+            if f not in ("apply_edits", "force_edits", "rounds")
+            and getattr(body, f) != getattr(defaults, f)
+        ]
+        if given:
+            raise HTTPException(
+                422, f"apply_edits takes no {', '.join(given)} (the edits file and map decide)"
+            )
         if not re.fullmatch(r"[A-Za-z0-9_-]+", body.apply_edits):
             raise HTTPException(422, "bad apply_edits stem")
         job_id = await _insert_job("story_join")

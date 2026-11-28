@@ -20,7 +20,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from ..config import settings
-from .bookends import HookPick
+from .bookends import HookPick, hook_window_rec
 from .hook_edits import (
     ChapterBase,
     EditPick,
@@ -69,6 +69,22 @@ def _managed(reqs, ch: Chapter, offset: float) -> list[Extend]:
         and r.source == CLIP_EDIT
         and ch.start_s <= game_clock_s(r.at) + offset <= ch.end_s
     ]
+
+
+def _rebased(
+    plan: StoryPlan, idx: int, mode: str, b: ChapterBase, p: EditPick
+) -> tuple[float, float]:
+    """The pick's offsets from the CURRENT plan's base window. The edits are
+    net from the map's base, and a re-render (an extended chapter) moves the
+    base, so the wanted window (map base +- offsets, clamped to the chapter's
+    footage) is re-expressed against the new base: the next map's base +-
+    offsets is then exactly what was rendered, and a second apply with the
+    same offsets asks for no further extend."""
+    ch = plan.chapters[idx]
+    base_s, base_e = hook_window_rec(plan, idx, mode)  # type: ignore[arg-type]
+    lo = max(b.rec_start_s - p.start_s, min(ch.start_s, base_s))
+    hi = min(b.rec_end_s + p.end_s, ch.end_s)
+    return round(base_s - lo, 3), round(hi - base_e, 3)
 
 
 def apply_edits(
@@ -152,7 +168,9 @@ def apply_edits(
             touched.append(rnd)
     for rnd in touched:
         say(f"re-rendering {rnd} for the extended clips")
-        render(asset_id=plans[rnd].asset_id, round=rnd)
+        # stories cut from plays keep their play ids only when re-rendered from plays
+        plays = True if any(c.play_id for c in plans[rnd].chapters) else None
+        render(asset_id=plans[rnd].asset_id, round=rnd, plays=plays)
         plans[rnd] = _load_plan(rnd)
 
     # the re-render can shift, merge or reorder chapters: resolve again
@@ -163,19 +181,25 @@ def apply_edits(
             say(f"skipped {p.chapter_id}: no such chapter in {b.round} any more")
             continue
         final.append((p, b.round, idx))
+    if edits.hook.picks and not final:  # never join an empty hook by accident
+        n = len(edits.hook.picks)
+        raise StoryRenderError(f"none of the {n} hook picks could be resolved; nothing re-joined")
 
-    picks = [
-        HookPick(
-            game=rounds.index(rnd) + 1,
-            chapter=idx + 1,
-            text=next((x.text for x in jm.hook.picks if x.id == p.id), ""),
-            mode=edits.hook.mode,  # type: ignore[arg-type]
-            start_s=p.start_s,
-            end_s=p.end_s,
-            id=p.id,
+    mode = edits.hook.mode
+    picks = []
+    for p, rnd, idx in final:
+        start_s, end_s = _rebased(plans[rnd], idx, mode, bases[p.chapter_id], p)
+        picks.append(
+            HookPick(
+                game=rounds.index(rnd) + 1,
+                chapter=idx + 1,
+                text=next((x.text for x in jm.hook.picks if x.id == p.id), ""),
+                mode=mode,  # type: ignore[arg-type]
+                start_s=start_s,
+                end_s=end_s,
+                id=p.id,
+            )
         )
-        for p, rnd, idx in final
-    ]
     out = join(
         rounds,
         default_out(rounds),

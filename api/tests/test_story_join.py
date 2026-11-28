@@ -340,3 +340,28 @@ def test_cli_apply_edits_needs_no_rounds(ws, monkeypatch):
     assert seen["force"] is True
     with pytest.raises(SystemExit):
         join.main(["--apply-edits", "joined_x", R1])
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        ["--out", "x.mp4"],
+        ["--title", "T"],
+        ["--hook", "1:2"],
+        ["--hook-mode", "play"],
+        ["--hook-title", "Hi"],
+        ["--outro"],
+        ["--music", "m.mp3"],
+        ["--music-start", "3"],
+        ["--subscribe-after", "2"],
+    ],
+)
+def test_cli_apply_edits_refuses_join_flags(ws, monkeypatch, extra, capsys):
+    from ai_video_editor.story import apply_edits as ae
+
+    called = []
+    monkeypatch.setattr(ae, "apply_edits", lambda *a, **k: called.append(a) or Path("o"))
+    with pytest.raises(SystemExit):
+        join.main(["--apply-edits", "joined_x", *extra])
+    assert called == []
+    assert extra[0] in capsys.readouterr().err
