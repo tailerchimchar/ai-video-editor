@@ -58,8 +58,8 @@ Each pick carries its track position `at_s` so the page reopens the same way; th
 { "schema_version": 1, "video": "joined_2026-11-26_xayah-kaisa-yunara",
   "base_digest": "sha256:1f3a9c…",      // over the map's hook pick ids + base windows, not the whole file
   "hook": { "mode": "play", "title": "Want to know the trick to laning?",
-            "picks": [ { "chapter_id": "…yunara…:p01", "at_s": 0.0,  "start_s": 0.0, "end_s": 2.0 },
-                       { "chapter_id": "…kaisa…:p01",  "at_s": 30.0, "start_s": 0.0, "end_s": 0.0 } ] } }
+            "picks": [ { "id": "3f9a1c2b", "chapter_id": "…yunara…:p01", "at_s": 0.0,  "start_s": 0.0, "end_s": 2.0 },
+                       { "id": "8d7e6f50", "chapter_id": "…kaisa…:p01",  "at_s": 30.0, "start_s": 0.0, "end_s": 0.0 } ] } }
 ```
 
 The list **is** the hook: sorted by `at_s` it is the montage order, a missing pick is removed, a new one is added. `start_s`/`end_s` are net offsets from the base window (D10), so the file is idempotent and a re-join can never apply them twice. `PUT` replaces the whole list.
@@ -104,7 +104,9 @@ The owner tested the ripple mock and asked for three changes (2026-11-28, late):
   - **trim**: the clip shrinks, nothing else moves, empty space appears;
   - **delete** (×, Delete/Backspace, the panel's button): the clip goes, the space stays;
   - **move** (body drag): the clip is lifted and dropped at the pointer, snapping to neighbour edges within 0.4 s; dropped onto another clip it lands before or after it depending on which half, and everything after is pushed; the space it left stays empty;
-  - "add to the hook" lands in the first empty space that fits, else at the end of the track; "close the empty spaces" compacts in track order.
+  - "add to the hook" lands in the first empty space that fits, else at the end of the track; "close the empty spaces" compacts in track order;
+  - **split** (`Ctrl+S`): the selected clip is cut at the playhead into two clips of the same chapter, each at least 2 s; the left piece keeps its id, the right piece gets a new one and sits right after it; both behave like any clip (delete one, move it, trim it);
+  - **undo / redo** (`Ctrl+Z`, `Ctrl+Shift+Z` or `Ctrl+Y`): the page keeps a history of the pick list (100 steps); each step is one PUT.
   Empty space is an editor thing: the laptop joins the clips back to back in track order, and the preview line shows both lengths ("intro 13.8 → 40.5 s (14.0 s of empty space here)").
 - **Storyboard JSON.** With nothing selected the right panel shows the whole video as JSON (`GET /narration/joined/{key}/storyboard`: the hook picks with `at_s`, every game and chapter with ids, windows, kill and death times and `in_hook`). A "write" button turns it into a textarea; "apply" parses it and takes `hook.picks` only in phase 1 (ids must exist and be play chapters; `at_s` is the place on the track, missing = right after the previous pick; offsets are clamped; the result is settled), "cancel" discards. Errors show inline, nothing is written until apply succeeds.
 
@@ -179,6 +181,8 @@ The edits file holds chapter ids and seconds; the map's hook block holds champio
 | D27 | Reorder and takes | Hook-region takes flagged when the order changes (intro delta is 0) | Editing review | 2026-11-28 |
 | D29 | A track, not slots | Clips sit at `at_s` on a track; extend eats empty space then pushes; trim and delete leave space; move snaps and pushes; the laptop joins in track order | Owner: "if I delete a clip, just leave an empty space … if I extend, push the other clips", then "if I extend into the empty space it should enter it … like an actual rendering software video model" | Interview | 2026-11-28 |
 | D30 | Storyboard JSON | Nothing selected → the whole video as JSON, read-only; "write" opens a textarea, apply takes `hook.picks` only in phase 1 | Owner: "see the json of the whole game … non-editable unless I click write" | Interview | 2026-11-28 |
+| D32 | Undo | Ctrl+Z undoes the last hook change, Ctrl+Shift+Z / Ctrl+Y redoes; history lives in the page | Owner: "also pls implement ctrl + z" | Interview | 2026-11-28 |
+| D33 | Split | Ctrl+S splits the selected hook clip at the playhead into two picks of the same chapter (each ≥ 2 s); either piece can be deleted, moved or trimmed; picks carry their own `id` | Owner: "ctrl + s for splitting a clip … so if I split a clip, I can delete one of the splits" | Interview | 2026-11-28 |
 | D31 | No arrow buttons | The four 1 s buttons are removed; offset fields stay | Owner: "I will just drag if I need"; "offset I'm iffy with but keep it" | Interview | 2026-11-28 |
 | D28 | Wording | "start / end", "starts 1 s earlier / ends 2 s later", fields labelled "offset (s)"; handles visible on hover, 12 px | UX review #4, #5, #7 | Interview | 2026-11-28 |
 

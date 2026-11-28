@@ -22,6 +22,7 @@
 - Join map `schema_version 2` when written with a hook block; a map without `hook` is v1 and the page shows markers only.
 - Docs in the same commit as the code they describe. `ruff check` / `ruff format` clean; `tsc -b` clean; vitest green.
 - Web copy: "start"/"end" never "head"/"tail"; "empty space" never "slot"/"gap" in UI text; the badge reads `N hook change(s) · laptop applies`.
+- Every pick has its own `id` (8 hex chars, `uuid4().hex[:8]`); the same `chapter_id` may appear in several picks (a split clip). Keyboard on the narrate page: `Delete`/`Backspace` delete the selected hook clip, `Ctrl+Z` undoes the last hook change, `Ctrl+Shift+Z` or `Ctrl+Y` redoes, `Ctrl+S` splits the selected hook clip at the playhead (always `preventDefault`); none of these fire while typing in an input or textarea or while recording.
 
 ## Review Focus
 
@@ -45,15 +46,15 @@
 - Produces in `join_map.py`:
   - `def chapter_id(round_name: str, chapter: Chapter) -> str`
   - `class JoinHookEvent(BaseModel): rec_s: float; kind: Literal["kill", "death"]`
-  - `class JoinHookPick(BaseModel): chapter_id: str; round: str; chapter_index: int; rec_start_s: float; rec_end_s: float; offset_s: float; start_s: float = 0.0; end_s: float = 0.0; at_s: float; video_start_s: float; video_end_s: float; events: list[JoinHookEvent] = []; chapter_rec_start_s: float; chapter_rec_end_s: float; text: str = ""`
+  - `class JoinHookPick(BaseModel): id: str; chapter_id: str; round: str; chapter_index: int; rec_start_s: float; rec_end_s: float; offset_s: float; start_s: float = 0.0; end_s: float = 0.0; at_s: float; video_start_s: float; video_end_s: float; events: list[JoinHookEvent] = []; chapter_rec_start_s: float; chapter_rec_end_s: float; text: str = ""`
   - `class JoinHook(BaseModel): mode: Literal["tease", "play"] = "tease"; title: str | None = None; picks: list[JoinHookPick] = []`
   - `class JoinOptions(BaseModel): subscribe_after: int | None = 1; outro: bool = False; music_start_s: float = 0.0`
   - `JoinChapter` gains `kill_times_s: list[float] = []` and `death_times_s: list[float] = []` (game clock, rounded to 0.1)
   - `JoinMap` gains `schema_version: int = 1`, `hook: JoinHook | None = None`, `options: JoinOptions = JoinOptions()`
   - `build_join_map(..., hook: JoinHook | None = None, options: JoinOptions | None = None)` sets `schema_version=2` whenever `hook` is given
-  - `def hook_block(rounds, plans, picks: list[HookPick], clips: list[HookClip], starts_s: list[float], durations_s: list[float], offsets_s: list[float], *, mode, title) -> JoinHook` (pure; `at_s` = cumulative clip lengths without the swipe; `video_start_s = starts_s[i]`, `video_end_s = starts_s[i] + durations_s[i]`; events = the chapter's kill/death times inside the chapter)
+  - `def hook_block(rounds, plans, picks: list[HookPick], clips: list[HookClip], starts_s: list[float], durations_s: list[float], offsets_s: list[float], *, mode, title) -> JoinHook` (pure; `id` = `uuid4().hex[:8]` per pick, or the pick's own id when `HookPick.id` is set; `at_s` = cumulative clip lengths without the swipe; `video_start_s = starts_s[i]`, `video_end_s = starts_s[i] + durations_s[i]`; events = the chapter's kill/death times inside the chapter)
 - Produces in `bookends.py`:
-  - `HookPick` gains `start_s: float = 0.0`, `end_s: float = 0.0`
+  - `HookPick` gains `start_s: float = 0.0`, `end_s: float = 0.0`, `id: str | None = None`
   - `def hook_window_rec(plan: StoryPlan, chapter_index: int, mode: HookMode = "tease") -> tuple[float, float]` (recording seconds; the existing `hook_window` becomes a wrapper that converts both ends with `video_second`)
   - `HookClip` gains `rec_start_s: float` and `rec_end_s: float`
 - Produces in `join.py`: `hook_clips(rounds, picks)` applies `p.start_s`/`p.end_s` to the recording window (clamped to the chapter's `[start_s, end_s]`, minimum `HOOK_MIN_S`), `join_stories(..., music_start_s, subscribe_after, ...)` passes `hook_block(...)` and `JoinOptions(...)` to `write_join_files(..., hook=, options=)`.
@@ -68,10 +69,10 @@ def test_chapter_id_uses_play_id_or_kind_and_start():
 
 def test_map_v2_carries_hook_block_and_event_times():
     jm = _map(hook=JoinHook(mode="play", title="t", picks=[JoinHookPick(
-        chapter_id="r1:p01", round="r1", chapter_index=1, rec_start_s=300.0, rec_end_s=312.0,
+        id="a1b2c3d4", chapter_id="r1:p01", round="r1", chapter_index=1, rec_start_s=300.0, rec_end_s=312.0,
         offset_s=-10.0, at_s=0.0, video_start_s=0.0, video_end_s=12.0,
         events=[JoinHookEvent(rec_s=310.0, kind="death")], chapter_rec_start_s=300.0, chapter_rec_end_s=330.0)]))
-    assert jm.schema_version == 2 and jm.hook.picks[0].chapter_id == "r1:p01"
+    assert jm.schema_version == 2 and jm.hook.picks[0].chapter_id == "r1:p01" and len(jm.hook.picks[0].id) == 8
     assert jm.games[0].chapters[0].kill_times_s == [110.0]   # rec 100 - offset -10
     assert JoinMap.model_validate_json(jm.model_dump_json()).hook == jm.hook
 
@@ -127,7 +128,7 @@ def test_join_writes_hook_block_and_options(ws, fakes, tmp_path, monkeypatch):
 - Consumes: `JoinMap`, `JoinHook`, `JoinHookPick` (Task 1), `HOOK_MIN_S` from `bookends`.
 - Produces:
   - `NEIGHBOUR_GAP_S = 0.5`, `EDITS_SUFFIX = ".edits.json"`
-  - `class EditPick(BaseModel): chapter_id: str; at_s: float = 0.0; start_s: float = 0.0; end_s: float = 0.0`
+  - `class EditPick(BaseModel): id: str = Field(default_factory=lambda: uuid4().hex[:8]); chapter_id: str; at_s: float = 0.0; start_s: float = 0.0; end_s: float = 0.0`
   - `class EditHook(BaseModel): mode: str = "play"; title: str | None = None; picks: list[EditPick] = []`
   - `class HookEdits(BaseModel): schema_version: int = 1; video: str; base_digest: str; hook: EditHook`
   - `def base_digest(hook: JoinHook) -> str`
@@ -137,7 +138,8 @@ def test_join_writes_hook_block_and_options(ws, fakes, tmp_path, monkeypatch):
   - `def limits(jm: JoinMap, p: JoinHookPick) -> tuple[float, float]` (recording seconds the window may reach: previous chapter end + 0.5 .. next chapter start − 0.5, from `jm.games[].chapters` and `p.offset_s`; 0 / +inf at the ends)
   - `def clamp_offsets(jm: JoinMap, p: JoinHookPick, start_s: float, end_s: float, keep: Literal["start", "end"]) -> tuple[float, float]` (window within `limits`, length ≥ `HOOK_MIN_S`; `keep="start"` moves the end when too short)
   - `def settle(picks: list[EditPick], lengths: dict[str, float]) -> list[EditPick]` (sorted by `at_s`; each pick pushed to the previous one's end when overlapping; `at_s ≥ 0`; rounded to 0.1)
-  - `def validate_picks(jm: JoinMap, picks: list[EditPick]) -> list[EditPick]` (unknown id → `ValueError("unknown chapter_id: …")`, duplicate id → `ValueError`, offsets clamped, then settled)
+  - `def validate_picks(jm: JoinMap, picks: list[EditPick]) -> list[EditPick]` (unknown chapter → `ValueError("unknown chapter_id: …")`, duplicate pick `id` → `ValueError`; the same chapter in several picks is allowed (a split); offsets clamped, then settled)
+  - `def split_pick(jm: JoinMap, picks: list[EditPick], pick_id: str, at_track_s: float) -> list[EditPick]` (the pick that holds `at_track_s` becomes two picks of the same chapter: left keeps `id`, `at_s`, `start_s` and gets `end_s = (rec_t − base_rec_end)`; right gets a new id, `at_s = left.at_s + left_len`, `start_s = (base_rec_start − rec_t)`, the old `end_s`; `rec_t = rec_start_of_pick + (at_track_s − at_s)`; both pieces ≥ `HOOK_MIN_S` else `ValueError("too close to the edge to split")`)
   - `class HookPickView(BaseModel): chapter_id, round, chapter_index, label: str (chapter title up to the first comma), at_s, start_s, end_s, len_s, rec_start_s, rec_end_s, base_rec_start_s, base_rec_end_s, offset_s, events, chapter_rec_start_s, chapter_rec_end_s, limit_lo_rec_s, limit_hi_rec_s (from `limits()`), video_start_s: float | None, video_end_s: float | None, pending: bool, beyond_chapter_s: float`
   - `class HookView(BaseModel): mode: str; title: str | None; rendered_intro_s: float; track_end_s: float; intro_after_s: float (Σ len − n·SWIPE_S); picks: list[HookPickView]; base_digest: str; edits_digest: str | None; stale_edits: bool; dirty: bool; empty_space_s: float; laptop_command: str; edits_file: str`
   - `def hook_view(jm: JoinMap, video_stem: str, edits: HookEdits | None) -> HookView` (edits None → the rendered picks at their `at_s`, `dirty False`)
@@ -157,7 +159,15 @@ def test_clamp_offsets_stops_at_neighbours():
     assert clamp_offsets(jm, p, 0.0, 40.0, "start") == (0.0, 29.5)   # 130 + 29.5 = 159.5
     assert clamp_offsets(jm, p, 30.0, 0.0, "end") == (14.0, 0.0)     # cannot start before 100
 def test_clamp_offsets_keeps_min_length(): ...   # end_s = -20 with keep="start" → window 114..116
-def test_validate_picks_rejects_unknown_and_duplicate_ids(): ...  # message contains the id
+def test_validate_picks_rejects_unknown_chapter_and_duplicate_pick_ids(): ...  # message contains the id; the same chapter twice with different ids passes
+def test_split_pick_makes_two_pieces_of_the_same_chapter():
+    jm = _jm(); p = jm.hook.picks[0]              # base window 114-130 at at_s 0
+    out = split_pick(jm, fresh_edits(jm, "joined_x").hook.picks, p.id, 6.0)
+    left, right = out[0], out[1]
+    assert (left.id, left.at_s, left.start_s, left.end_s) == (p.id, 0.0, 0.0, -10.0)      # 114..120
+    assert (right.chapter_id, right.at_s, right.start_s, right.end_s) == (p.chapter_id, 6.0, -6.0, 0.0)  # 120..130
+    assert right.id != left.id and len(right.id) == 8
+def test_split_pick_too_close_to_an_edge_raises(): ...   # at 1.0 s → ValueError
 def test_hook_view_marks_pending_and_sums_the_track():
     v = hook_view(_jm(), "joined_x", HookEdits(video="joined_x", base_digest=base_digest(_jm().hook), hook=EditHook(picks=[EditPick(chapter_id="r1:p00", at_s=0, end_s=2.0), EditPick(chapter_id="r1:p02", at_s=30)])))
     assert v.picks[0].pending and v.picks[0].len_s == 18.0 and v.picks[1].at_s == 30.0
@@ -193,7 +203,7 @@ def test_edits_round_trip_on_disk(tmp_path, monkeypatch): ...  # save, load, del
   - `class StoryboardGame(BaseModel): round, label, chapters`
   - `class Storyboard(BaseModel): schema_version, video, title, rendered_intro_s, intro_after_s, outro_s, hook: HookView, games: list[StoryboardGame]`
   - `def storyboard(target, key) -> Storyboard`
-- Routes (all under `/api/v1/narration/{kind}/{key}`): `GET /hook` → `HookView` (404 "no hook data for this video" on `HookUnavailable`), `PUT /hook` body `{"picks": [EditPick…], "mode"?: str, "title"?: str}` → `HookView` (422 on `ValueError`, 409 on `StaleEdits`), `DELETE /hook` → `HookView`, `GET /storyboard` → `Storyboard` (404 as above).
+- Routes (all under `/api/v1/narration/{kind}/{key}`): `GET /hook` → `HookView` (404 "no hook data for this video" on `HookUnavailable`), `PUT /hook` body `{"picks": [EditPick…], "mode"?: str, "title"?: str}` → `HookView` (422 on `ValueError`, 409 on `StaleEdits`), `DELETE /hook` → `HookView`, `GET /storyboard` → `Storyboard` (404 as above). A split is a `PUT` of the new list (the web computes it with `split_pick`'s mirror); no split endpoint.
 - MCP tools: `hook_picks_get(key)`, `hook_picks_set(key, picks: list[dict], mode: str | None = None, title: str | None = None)`, `hook_picks_reset(key)`, `storyboard_get(key)` — all `kind="joined"`; docstrings explain `at_s`, `start_s`/`end_s` signs, empty space, and that the laptop applies with `story-join --apply-edits`.
 - Registry: the four names in `_PLUMBING_TOOLS`.
 
@@ -208,6 +218,7 @@ def test_put_overlapping_picks_is_settled(client, joined_map):
     assert (ws / "story" / "joined_t.edits.json").is_file()
 def test_put_unknown_chapter_422(client, joined_map): r = client.put(..., json={"picks": [{"chapter_id": "r1:nope"}]}); assert r.status_code == 422 and "r1:nope" in r.json()["detail"]
 def test_put_stale_edits_409_and_delete_clears(client, joined_map): ...  # write an edits file with digest "sha256:000000000000", PUT → 409; DELETE → 200, dirty False; PUT → 200
+def test_put_accepts_the_same_chapter_twice_after_a_split(client, joined_map): ...  # two picks, same chapter_id, different ids → 200, two picks back
 def test_storyboard_lists_games_and_in_hook(client, joined_map): sb = client.get(BASE + "/storyboard").json(); assert sb["games"][0]["chapters"][0]["in_hook"] is True and sb["hook"]["picks"]
 ```
 - [ ] **Step 2: Run** → FAIL (404 routes).
@@ -222,7 +233,7 @@ def test_storyboard_lists_games_and_in_hook(client, joined_map): sb = client.get
 ### Task 4: Web — HookLane track, inspector, storyboard panel, badge
 
 **Files:**
-- Create: `web/src/lib/hookTrack.ts`, `web/src/lib/__tests__/hookTrack.test.ts`
+- Create: `web/src/lib/hookTrack.ts`, `web/src/lib/__tests__/hookTrack.test.ts`, `web/src/lib/history.ts`, `web/src/lib/__tests__/history.test.ts`
 - Create: `web/src/hooks/useHookPicks.ts`, `web/src/hooks/useStoryboard.ts`
 - Create: `web/src/components/narration/timeline/HookLane.tsx`, `web/src/components/narration/HookInspector.tsx`, `web/src/components/narration/StoryboardPanel.tsx`, `web/src/components/narration/HookChangesBadge.tsx`
 - Modify: `web/src/types/narration.ts` (mirror `HookView`, `HookPickView`, `EditPick`, `Storyboard*`), `web/src/api/narration.ts` (`getHook`, `putHook`, `resetHook`, `getStoryboard`), `web/src/components/narration/timeline/lane.ts` (`LANE_HEIGHT.hook = 56`), `web/src/components/narration/timeline/Timeline.tsx` (optional hook lane between frames and markers; `shiftS` for markers after the rendered intro and for the frame strip), `web/src/components/narration/timeline/FrameStripLane.tsx` and `MarkersLane.tsx` (`shiftS?: number`), `web/src/pages/NarrationPage.tsx` (wiring; the right column shows `StoryboardPanel` when nothing is selected, `HookInspector` for a hook clip, `TakeInspector` for a take)
@@ -230,7 +241,9 @@ def test_storyboard_lists_games_and_in_hook(client, joined_map): sb = client.get
 **Interfaces:**
 - Consumes: the API of Task 3.
 - Produces (`lib/hookTrack.ts`, pure, mirrors `hook_edits.py` and the mock):
-  - `interface TrackClip { chapter_id: string; at_s: number; start_s: number; end_s: number }`
+  - `interface TrackClip { id: string; chapter_id: string; at_s: number; start_s: number; end_s: number }` (a new id is `crypto.randomUUID().replace(/-/g, "").slice(0, 8)`)
+  - `splitAt(clips, clip, tTrack, view): TrackClip[]` (mirror of `split_pick`: left keeps the id, right gets a new one; throws when a piece would be shorter than 2.0 s)
+  - `lib/history.ts`: `createHistory<T>(limit = 100)` with `push(state)`, `undo(): T | null`, `redo(): T | null`, `canUndo`, `canRedo` (pure, tested: push/undo/redo order, redo cleared by a new push, limit)
   - `settle(clips: TrackClip[], lens: (c: TrackClip) => number): TrackClip[]`
   - `clampOffsets(p: HookPickView, start_s: number, end_s: number, keep: "start" | "end"): { start_s; end_s }` (limits = the view's `limit_lo_rec_s`/`limit_hi_rec_s`)
   - `applyTrim(clips, clip, edge: "start" | "end", start_s, end_s, view): TrackClip[]` (end: in place then settle; start: `at_s` moves left into empty space, stops at the previous clip's end)
@@ -241,10 +254,10 @@ def test_storyboard_lists_games_and_in_hook(client, joined_map): sb = client.get
   - `seekTarget(t: number, lay, view, storyboard?): number | null` (hook seconds inside a clip's rendered window → that pick's `video_start_s + (t − vs)`; gained seconds → the chapter's `video_start_s + (rec − chapter_rec_start_s)` when the storyboard is loaded, else null; after the track → `t − shift`)
   - `changes(view): { text: string; undo: (clips) => TrackClip[] }[]` (trim lines, deleted, added, re-ordered, empty spaces)
 
-- [ ] **Step 1: Failing vitest** `hookTrack.test.ts` with cases: settle pushes overlaps; extend end eats empty space then pushes the next clip; extend start stops at the previous clip and grows right; trim leaves space; dropAt snaps to a neighbour edge, lands before/after a clip by half; addToHook fills the first fitting space; closeGaps; layout shift; seekTarget for the three regions. Run `cd web && bun run test` (or `./node_modules/.bin/vitest run`) → FAIL.
+- [ ] **Step 1: Failing vitest** `hookTrack.test.ts` with cases: settle pushes overlaps; extend end eats empty space then pushes the next clip; extend start stops at the previous clip and grows right; trim leaves space; dropAt snaps to a neighbour edge, lands before/after a clip by half; addToHook fills the first fitting space; closeGaps; splitAt makes two pieces of one chapter and refuses near an edge; layout shift; seekTarget for the three regions. `history.test.ts`: push/undo/redo, redo cleared by a new push, limit. Run `cd web && bun run test` (or `./node_modules/.bin/vitest run`) → FAIL.
 - [ ] **Step 2: Implement `hookTrack.ts`** → tests PASS.
 - [ ] **Step 3: Types + API + hooks**: `useHookPicks(target)` = query `["narration", kind, key, "hook"]` (`retry: false`; a 404 leaves `data` undefined and `isHookless` true) + mutations `setPicks(picks)` (optimistic via `settle` + `layout`, 409 → error line "the laptop re-joined since these changes: discard or re-apply") and `reset()`; `useStoryboard(target)` query `["narration", kind, key, "storyboard"]`.
-- [ ] **Step 4: `HookLane.tsx`**: canvas-free DOM lane like the mock: clip spans (number, champion, numbers from the label), kill/death ticks, orange outline when `pending`, 12 px edge handles (pointer listeners on `window`, draft until release, one `setPicks` on release), body drag with ghost + snap, × when selected, Delete/Backspace + Escape; empty spaces drawn dashed; click = select (`onSelectHook(chapter_id)`) and seek through `seekTarget`. Disabled while recording.
+- [ ] **Step 4: `HookLane.tsx`**: canvas-free DOM lane like the mock: clip spans (number, champion, numbers from the label), kill/death ticks, orange outline when `pending`, 12 px edge handles (pointer listeners on `window`, draft until release, one `setPicks` on release), body drag with ghost + snap, × when selected, Delete/Backspace + Escape; `Ctrl+Z` undo, `Ctrl+Shift+Z`/`Ctrl+Y` redo (history of pick lists kept in `useHookPicks`, every undo/redo is a `setPicks`), `Ctrl+S` split at the playhead (`preventDefault` always; only when a hook clip is selected and the playhead is inside it; the error line shows the "too close" message); empty spaces drawn dashed; a split chapter's pieces are labelled "part 1", "part 2" in track order; click = select (`onSelectHook(chapter_id)`) and seek through `seekTarget`. Disabled while recording.
 - [ ] **Step 5: `HookInspector.tsx`** (name, game label, place on the track, shows/as rendered in game clock via `offset_s`, diff sentence, offset fields "offset (s)", reset, delete (leave space), the beyond-chapter note, a "storyboard" button, details with the edits JSON), `StoryboardPanel.tsx` (read-only `<pre>` of the storyboard; "write" → textarea; "apply" parses, takes `hook.picks` only, errors inline; "cancel"), `HookChangesBadge.tsx` (count, popover with `changes()` + undo, "close the empty spaces", "discard all changes", `laptop_command` and `edits_file` as text; a warning line when takes exist with `start_s < rendered_intro_s` and the hook is dirty).
 - [ ] **Step 6: Wire `Timeline`/`NarrationPage`**: hook lane only when `hook.data`; `shiftS` to markers (those with `at_s ≥ rendered_intro_s`) and the frame strip; the page's preview line above the timeline: `intro 13.8 → 40.5 s (14.0 s of empty space here) · video … → …`; selecting a take clears the hook selection and vice versa.
 - [ ] **Step 7: Verify** `cd web && ./node_modules/.bin/tsc -b && ./node_modules/.bin/vitest run` clean; open `http://localhost:5173/narrate/joined/<key>` against a v1 map (markers only, no errors) — a v2 map smoke needs Task 5's output or a hand-made map in the workspace: write one from Task 2's `_jm()` shape next to the real mp4 under a test key `joined_t` with the mp4 copied, and check: four spans, drag end +2 s, badge "1 hook change", edits file written, reload keeps it.
@@ -278,6 +291,7 @@ def test_apply_edits_reorders_and_passes_offsets(ws): ...  # picks at_s [30, 0] 
 def test_apply_edits_extends_the_chapter_once_and_renders_that_round(ws): ...  # end_s past the chapter → one Extend(source="clip_edit") in requests.json, replaced on a second run, render called once with that round
 def test_apply_edits_skips_unknown_chapters_and_says_so(ws): ...
 def test_apply_edits_deletes_the_file_after_the_join(ws): ...
+def test_apply_edits_passes_both_pieces_of_a_split_chapter(ws): ...  # two picks of one chapter → two HookPicks for the same (game, chapter) with their own offsets, in track order
 # tests/test_story_requests.py
 def test_extend_keeps_source_tag_round_trip(): ...
 # tests/test_story_join.py
