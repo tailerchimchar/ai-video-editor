@@ -26,6 +26,7 @@ MAX_TILES = 240
 PEAKS_RATE_HZ = 10
 PEAKS_SAMPLE_RATE = 8000
 LOCK_WAIT_S = 60.0
+STALE_LOCK_S = 600.0
 _POLL_S = 0.2
 
 Run = Callable[[list[str]], tuple[bool, str | None]]
@@ -135,18 +136,24 @@ def _locked_render(out: Path, cache_dir: Path, fp: str, render: Callable[[Path],
         return
     cache_dir.mkdir(parents=True, exist_ok=True)
     lock = cache_dir / f".lock-{fp}"
-    try:
-        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError:
-        deadline = time.monotonic() + LOCK_WAIT_S
-        while time.monotonic() < deadline:
-            if out.is_file():
-                return
-            time.sleep(_POLL_S)
+    deadline = time.monotonic() + LOCK_WAIT_S
+    while True:
         if out.is_file():
             return
-        raise RuntimeError(f"timed out waiting for {out.name}") from None
-    os.close(fd)
+        try:
+            os.close(os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+            break
+        except FileExistsError:
+            pass
+        try:
+            if time.time() - lock.stat().st_mtime > STALE_LOCK_S:
+                lock.unlink(missing_ok=True)  # a killed renderer left it behind
+                continue
+        except OSError:
+            continue  # lock vanished; retry the open
+        if time.monotonic() >= deadline:
+            raise RuntimeError(f"timed out waiting for {out.name}")
+        time.sleep(_POLL_S)
     part = out.with_name(out.name + ".part")
     try:
         if out.is_file():  # finished by another process between check and lock

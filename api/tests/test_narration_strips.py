@@ -120,3 +120,59 @@ def test_lock_wait_times_out(tmp_path, monkeypatch):
     monkeypatch.setattr(strips, "LOCK_WAIT_S", 0.0)
     with pytest.raises(RuntimeError, match="timed out"):
         strips.ensure_peaks(Path("v.mp4"), cache, "fp", run_capture=lambda c: b"")
+
+
+def test_failed_render_leaves_nothing_and_retry_renders(tmp_path):
+    cache = tmp_path / "cache"
+    calls = []
+
+    def cap(cmd):
+        calls.append(cmd)
+        if len(calls) == 1:
+            raise OSError("boom")
+        return _pcm([500] * 800)
+
+    with pytest.raises(OSError):
+        strips.ensure_peaks(Path("v.mp4"), cache, "fp", run_capture=cap)
+    assert sorted(p.name for p in cache.iterdir()) == []
+    got = strips.ensure_peaks(Path("v.mp4"), cache, "fp", run_capture=cap)
+    assert len(calls) == 2 and got.peaks == [1.0]
+    assert (cache / "peaks-fp.json").is_file()
+
+
+def test_failed_frames_leave_no_part_or_meta(tmp_path):
+    cache = tmp_path / "cache"
+    with pytest.raises(RuntimeError):
+        strips.ensure_frames(
+            Path("v.mp4"),
+            cache,
+            "fp",
+            duration_s=10,
+            run=lambda c: (Path(c[-1]).write_bytes(b"x") and False, "boom"),
+            probe_size=lambda p: (1, 1),
+        )
+    assert list(cache.iterdir()) == []
+
+
+def test_stale_lock_does_not_block(tmp_path):
+    import os
+    import time
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    lock = cache / ".lock-fp"
+    lock.write_text("")
+    old = time.time() - 700
+    os.utime(lock, (old, old))
+    got = strips.ensure_peaks(Path("v.mp4"), cache, "fp", run_capture=lambda c: _pcm([5] * 800))
+    assert got.peaks == [1.0] and not lock.exists()
+
+
+def test_waiter_takes_over_when_lock_released(tmp_path, monkeypatch):
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    lock = cache / ".lock-fp"
+    lock.write_text("")
+    monkeypatch.setattr(strips.time, "sleep", lambda s: lock.unlink())
+    got = strips.ensure_peaks(Path("v.mp4"), cache, "fp", run_capture=lambda c: _pcm([5] * 800))
+    assert got.peaks == [1.0]
