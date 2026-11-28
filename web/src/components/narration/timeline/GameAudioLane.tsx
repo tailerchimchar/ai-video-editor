@@ -17,6 +17,10 @@ interface GameAudioLaneProps {
   mix: AudioMix;
   onRegionsChange: (regions: GameAudioRegion[]) => void;
   onSeek: (s: number) => void;
+  /** Something else on the timeline got selected: drop the region selection. */
+  deselect?: boolean;
+  /** A region got selected. */
+  onSelectRegion?: () => void;
 }
 
 type DragKind = "create" | "head" | "tail" | "press";
@@ -70,6 +74,16 @@ export const GameAudioLane = memo(function GameAudioLane(props: GameAudioLanePro
   const [draft, setDraft] = useState<GameAudioRegion[] | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const shown = draft ?? regions;
+  // One selection on the timeline: something else selected clears ours, and
+  // selecting a region tells the timeline (so one Delete removes one thing).
+  const { deselect, onSelectRegion } = props;
+  useEffect(() => {
+    if (deselect) setSelectedId(null);
+  }, [deselect]);
+  const selectRegion = (id: string) => {
+    setSelectedId(id);
+    onSelectRegion?.();
+  };
 
   // The API's peaks are absolute; scale so the loudest moment fills the lane.
   const normalised = useMemo(() => {
@@ -170,7 +184,7 @@ export const GameAudioLane = memo(function GameAudioLane(props: GameAudioLanePro
       const created = draftAt(d, laneX(e, e.currentTarget)).find((r) => r.id === DRAFT_ID);
       if (created && created.end_s - created.start_s >= MIN_REGION_S) {
         const id = newRegionId();
-        setSelectedId(id);
+        selectRegion(id);
         commit([...regions, { ...created, id }]);
       } else {
         setDraft(null);
@@ -186,7 +200,7 @@ export const GameAudioLane = memo(function GameAudioLane(props: GameAudioLanePro
       props.onSeek(d.anchorS);
       return;
     }
-    setSelectedId(d.regionId);
+    selectRegion(d.regionId);
     commit(regions.map((r) => (r.id === d.regionId ? { ...r, level: nextLevel(r.level) } : r)));
   }
 

@@ -247,7 +247,15 @@ describe("layout", () => {
     expect(lay.gaps).toEqual([{ vs: 5, ve: 8 }]);
     expect(lay.trackEnd).toBe(16);
     expect(lay.introAfter).toBeCloseTo(13 - 1.5);
-    expect(lay.shift).toBe(16 - 20);
+    expect(lay.shift).toBeCloseTo(16 - 3 * 0.5 - 20);
+  });
+
+  it("does not slide anything for an unchanged hook (the swipes overlap)", () => {
+    // rendered: 5 s + 4 s, each piece overlapped by a 0.5 s swipe (the last one into game 1) → 8 s
+    const v = hook([pick("a", "r1:a", 0, 100, 105), pick("b", "r1:b", 5, 200, 204)], {
+      rendered_intro_s: 8,
+    });
+    expect(layout(toClips(v), v).shift).toBe(0);
   });
 
   it("labels the pieces of a split chapter part 1, part 2 in track order", () => {
@@ -294,7 +302,9 @@ describe("seekTarget / trackTimeOf", () => {
 
   it("after the track, the mp4 slid by the shift", () => {
     expect(lay.trackEnd).toBe(11);
+    expect(lay.shift).toBeCloseTo(11 - 1 - 20);
     expect(seekTarget(30, lay, v)).toBe(30 - lay.shift);
+    expect(trackTimeOf(seekTarget(30, lay, v)!, lay, v)).toBeCloseTo(30);
     expect(trackTimeOf(30 - lay.shift, lay, v)).toBeCloseTo(30);
     expect(trackTimeOf(2, lay, v)).toBeCloseTo(2);
   });

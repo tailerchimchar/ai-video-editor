@@ -82,7 +82,8 @@ const FOLLOW_AT = 0.9;
 export function Timeline(props: TimelineProps) {
   const { hook } = props;
   // The hook lane is in track seconds: the video after the rendered intro
-  // (frames, markers) slides by `shift` = track end - rendered intro.
+  // (frames, markers) slides by `shift` = (track end - n swipes) - rendered
+  // intro, 0 for an unchanged hook (lib/hookTrack.ts `layout`).
   const hookClips = hook?.clips;
   const hookView = hook?.hook;
   const hookExtra = hook?.extra;
@@ -186,7 +187,7 @@ export function Timeline(props: TimelineProps) {
       <header className="flex items-center gap-3 font-mono text-xs text-text-muted">
         <span>takes · {props.takes.length}</span>
         <span className="text-text-dim">
-          {mmss(playheadS)} / {mmss(durationS)}
+          {mmss(playheadS)} / {mmss(props.durationS)}
         </span>
         <span className="ml-auto hidden text-text-dim md:inline">
           wheel = pan · ctrl+wheel = zoom
@@ -237,7 +238,7 @@ export function Timeline(props: TimelineProps) {
         >
           {view ? (
             <>
-              <Ruler view={view} durationS={durationS} onSeek={props.onSeek} />
+              <Ruler view={view} durationS={durationS} shiftS={shiftS} onSeek={props.onSeek} />
               <FrameStripLane
                 view={view}
                 frames={props.frames}
@@ -273,6 +274,8 @@ export function Timeline(props: TimelineProps) {
                 mix={props.mix}
                 onRegionsChange={props.onRegionsChange}
                 onSeek={props.onSeek}
+                deselect={!!hook?.selectedId}
+                onSelectRegion={() => hook?.onSelect(null)}
               />
               {gameMarkers.map((m) => {
                 const x = sToPx(view, m.at_s);

@@ -290,7 +290,12 @@ export interface TrackLayout {
   trackEnd: number;
   /** The intro length after the re-join (the swipes overlap, the empty spaces close). */
   introAfter: number;
-  /** How far the video after the hook slides: `trackEnd − rendered_intro_s`. */
+  /**
+   * How far the picture after the hook slides: `(trackEnd − n·SWIPE_S) −
+   * rendered_intro_s` (n = clips on the track; the swipes overlap). Exactly 0
+   * for an unchanged hook; the owner's empty space stays in it (the laptop
+   * closes it, `introAfter` is the length it will have).
+   */
   shift: number;
   /** Seconds of empty space on the track. */
   emptyS: number;
@@ -327,7 +332,7 @@ export function layout(
     gaps,
     trackEnd: end,
     introAfter: hooks.length ? total - hooks.length * SWIPE_S : 0,
-    shift: end - view.rendered_intro_s,
+    shift: end - hooks.length * SWIPE_S - view.rendered_intro_s,
     emptyS: gaps.reduce((s, g) => s + g.ve - g.vs, 0),
   };
 }

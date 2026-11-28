@@ -85,8 +85,9 @@ export function useHookPicks(target: TargetRef) {
     }
   }
 
-  function step(picks: TrackClip[] | null) {
-    if (picks) save.mutate(picks);
+  /** Save the step the history moved to; on a refusal move the history back. */
+  function step(picks: TrackClip[] | null, back: () => void) {
+    if (picks) save.mutate(picks, { onError: back });
   }
 
   const failure = save.error ?? discard.error;
@@ -101,8 +102,8 @@ export function useHookPicks(target: TargetRef) {
     extra,
     rendered,
     setPicks,
-    undo: () => step(historyRef.current.undo()),
-    redo: () => step(historyRef.current.redo()),
+    undo: () => step(historyRef.current.undo(), () => historyRef.current.redo()),
+    redo: () => step(historyRef.current.redo(), () => historyRef.current.undo()),
     reset: () => discard.mutate(),
     saving: save.isPending || discard.isPending,
     error,

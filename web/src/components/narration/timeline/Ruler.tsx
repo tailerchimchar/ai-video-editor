@@ -6,11 +6,13 @@ import { LANE_HEIGHT, laneX } from "./lane";
 interface RulerProps {
   view: Viewport;
   durationS: number;
+  /** The picture slid this much (hook edits): a click seeks back by it. */
+  shiftS?: number;
   onSeek: (s: number) => void;
 }
 
 /** Time ruler: a labelled tick every `tickEvery` seconds, minor ticks between. Drag to scrub. */
-export const Ruler = memo(function Ruler({ view, durationS, onSeek }: RulerProps) {
+export const Ruler = memo(function Ruler({ view, durationS, shiftS = 0, onSeek }: RulerProps) {
   const scrubbing = useRef(false);
   const step = tickEvery(view.pxPerS);
   const minor = step / (step % 5 === 0 ? 5 : 2);
@@ -22,7 +24,9 @@ export const Ruler = memo(function Ruler({ view, durationS, onSeek }: RulerProps
   }
 
   const seekAt = (e: PointerEvent<HTMLDivElement>) =>
-    onSeek(Math.min(durationS, Math.max(0, pxToS(view, laneX(e, e.currentTarget)))));
+    onSeek(
+      Math.min(durationS - shiftS, Math.max(0, pxToS(view, laneX(e, e.currentTarget)) - shiftS)),
+    );
   const stop = () => {
     scrubbing.current = false;
   };
