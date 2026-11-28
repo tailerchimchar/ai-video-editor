@@ -19,6 +19,8 @@ from ai_video_editor.narration.export import (
 )
 from ai_video_editor.narration.models import (
     CameraBox,
+    CameraRegion,
+    GameAudioRegion,
     NarrationSession,
     PixelBox,
     Take,
@@ -170,6 +172,43 @@ def test_stale_video_is_refused(tmp_path):
 def test_force_exports_a_stale_video(tmp_path):
     out, run = _export(tmp_path, _session(_take(1, 1.0), fp="fp-old"), fp="fp-new", force=True)
     assert len(run.cmds) == 1 and out.exists()
+
+
+def _fc(run) -> str:
+    return run.cmds[0][run.cmds[0].index("-filter_complex") + 1]
+
+
+def test_export_passes_effective_start_and_skips_muted(tmp_path):
+    shifted = _take(1, 4.0).model_copy(update={"offset_s": 1.5, "media_in_s": 0.5, "gain": 0.7})
+    muted = _take(2, 1.0).model_copy(update={"muted": True})
+    _, run = _export(tmp_path, _session(shifted, muted))
+    cmd = run.cmds[0]
+    inputs = [cmd[i + 1] for i, a in enumerate(cmd) if a == "-i"]
+    assert len(inputs) == 2 and inputs[1].endswith("t1.webm")
+    assert "atrim=start=0.5:duration=1.0,asetpts=PTS-STARTPTS,volume=0.7," in _fc(run)
+    assert "adelay=5500|5500" in _fc(run)
+
+
+def test_all_takes_muted_is_no_takes(tmp_path):
+    muted = _take(1, 1.0).model_copy(update={"muted": True})
+    with pytest.raises(ValueError, match="no takes"):
+        _export(tmp_path, _session(muted))
+
+
+def test_game_regions_reach_the_mix(tmp_path):
+    region = GameAudioRegion(id="g", start_s=2, end_s=3, level=0.2)
+    session = _session(_take(1, 1.0)).model_copy(update={"game_regions": [region]})
+    _, run = _export(tmp_path, session)
+    assert "volume=0.2:enable='between(t,2.0,3.0)'" in _fc(run)
+
+
+def test_camera_region_enables_windows_even_when_default_is_off(tmp_path):
+    region = CameraRegion(id="c", start_s=0.2, end_s=0.6, box=CameraBox(enabled=True))
+    session = _session(_take(1, 0.0, cam=True)).model_copy(update={"camera_regions": [region]})
+    calls = []
+    _, run = _export(tmp_path, session, box_calls=calls)
+    assert _fc(run).count("overlay=100:60:") == 1 and "between(t,0.2,0.6)" in _fc(run)
+    assert calls == [(region.box, "league", 1920, 1080)]
 
 
 def test_camera_disabled_uses_no_box_and_never_probes(tmp_path):

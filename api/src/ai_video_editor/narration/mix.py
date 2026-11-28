@@ -12,11 +12,16 @@ The graph has two independent halves:
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ..config import settings
-from .models import AudioMix, PixelBox
+from .models import AudioMix, GameAudioRegion
+
+if TYPE_CHECKING:
+    from .camera_windows import CameraWindow
 
 # Rounded-corner radius as a fraction of the camera box height.
 CORNER_RADIUS_FRAC = 0.08
@@ -29,6 +34,8 @@ class TakeInput:
     start_s: float
     duration_s: float
     has_camera: bool
+    media_in_s: float = 0.0
+    gain: float = 1.0
 
 
 def export_cmd(
@@ -37,20 +44,20 @@ def export_cmd(
     out: Path,
     *,
     mix: AudioMix,
-    camera_box: PixelBox | None,
+    game_regions: Sequence[GameAudioRegion] = (),
+    camera_windows: Sequence[CameraWindow] = (),
     rounded: bool = True,
 ) -> list[str]:
-    """argv mixing `takes` over `video` (ducked original audio; camera
-    overlay at `camera_box` for takes with camera when the box is given;
-    video stream copied when nothing is overlaid). `rounded` masks the
-    camera's corners."""
+    """argv mixing `takes` over `video` (game audio scaled by `mix.game_gain`
+    and per-region levels, then ducked under the voice; one camera overlay per
+    window; video stream copied when there are no windows). `rounded` masks
+    the camera's corners."""
     if not takes:
         raise ValueError("no takes to mix")
     inputs = [arg for p in (video, *(t.path for t in takes)) for arg in ("-i", p.as_posix())]
-    graph = [*_audio_graph(takes, mix)]
-    camera = [(k + 1, t) for k, t in enumerate(takes) if t.has_camera]
-    if camera_box is not None and camera:
-        graph += _camera_graph(camera, camera_box, rounded)
+    graph = [*_audio_graph(takes, mix, game_regions)]
+    if camera_windows:
+        graph += _camera_graph(camera_windows, rounded)
         video_out = ["-map", "[vout]", "-map", "[aout]", *_video_encode_opts()]
     else:
         video_out = ["-map", "0:v:0", "-map", "[aout]", "-c:v", "copy"]
@@ -70,23 +77,35 @@ def export_cmd(
     ]
 
 
-def _audio_graph(takes: list[TakeInput], mix: AudioMix) -> list[str]:
+def _audio_graph(
+    takes: list[TakeInput], mix: AudioMix, game_regions: Sequence[GameAudioRegion]
+) -> list[str]:
     """Takes → [narr] (the voice) and [key] (the ducking sidechain);
-    original [0:a] ducked by [key] and summed with [narr] → [aout]."""
+    game audio [0:a] → [game] (gain, region levels), ducked by [key]
+    and summed with [narr] → [aout]."""
     chains = []
     for k, take in enumerate(takes, start=1):
         ms = round(take.start_s * 1000)
-        chains.append(f"[{k}:a]aformat=channel_layouts=stereo,adelay={ms}|{ms}[t{k}]")
+        chains.append(
+            f"[{k}:a]atrim=start={take.media_in_s}:duration={take.duration_s},"
+            f"asetpts=PTS-STARTPTS,volume={take.gain},"
+            f"aformat=channel_layouts=stereo,adelay={ms}|{ms}[t{k}]"
+        )
     labels = "".join(f"[t{k}]" for k in range(1, len(takes) + 1))
     chains.append(
         f"{labels}amix=inputs={len(takes)}:normalize=0:duration=longest,"
         f"volume={mix.narration_gain},asplit=2[narr][key]"
     )
+    levels = "".join(
+        f",volume={r.level}:enable='between(t,{r.start_s},{r.end_s})'"
+        for r in sorted(game_regions, key=lambda r: r.start_s)
+    )
+    chains.append(f"[0:a]volume={mix.game_gain}{levels}[game]")
     # apad keeps the key alive after the last take so the ducked original
     # is not cut short when the narration ends before the video does.
     chains.append(
         "[key]apad[keyp];"
-        "[0:a][keyp]sidechaincompress="
+        "[game][keyp]sidechaincompress="
         f"threshold={mix.duck_threshold}:ratio={mix.duck_ratio}:"
         f"attack={mix.duck_attack_ms}:release={mix.duck_release_ms}[ducked]"
     )
@@ -94,24 +113,26 @@ def _audio_graph(takes: list[TakeInput], mix: AudioMix) -> list[str]:
     return chains
 
 
-def _camera_graph(camera: list[tuple[int, TakeInput]], box: PixelBox, rounded: bool) -> list[str]:
-    """Each camera take shifted to its second, fitted to the box, optionally
-    rounded, then overlaid on the running video only during its window."""
+def _camera_graph(windows: Sequence[CameraWindow], rounded: bool) -> list[str]:
+    """Each window: the take's slice, shifted to its timeline second, fitted
+    to the window's box, optionally rounded, overlaid only while it lasts."""
     chains = []
     prev = "[0:v]"
-    for n, (k, take) in enumerate(camera, start=1):
+    for n, win in enumerate(windows, start=1):
+        a, b, box, take = win.start_s, win.end_s, win.box, win.take
+        t0 = a - take.start_s + take.media_in_s
+        t1 = b - take.start_s + take.media_in_s
         fit = (
-            f"[{k}:v]setpts=PTS-STARTPTS+{take.start_s}/TB,"
+            f"[{win.input_index}:v]trim=start={t0}:end={t1},setpts=PTS-STARTPTS+{a}/TB,"
             f"scale={box.w}:{box.h}:force_original_aspect_ratio=increase,crop={box.w}:{box.h}"
         )
         if rounded:
             fit += f",{_rounded_mask(box.h)}"
         chains.append(f"{fit}[cam{n}]")
-        out = "[vout]" if n == len(camera) else f"[v{n}]"
-        end = take.start_s + take.duration_s
+        out = "[vout]" if n == len(windows) else f"[v{n}]"
         chains.append(
             f"{prev}[cam{n}]overlay={box.x}:{box.y}:"
-            f"enable='between(t,{take.start_s},{end})':eof_action=pass{out}"
+            f"enable='between(t,{a},{b})':eof_action=pass{out}"
         )
         prev = out
     return chains
