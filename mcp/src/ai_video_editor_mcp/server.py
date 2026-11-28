@@ -2502,7 +2502,7 @@ def story_apply_suggestions(round: str) -> dict:
 
 @mcp.tool()
 def narration_status(kind: str, key: str) -> dict:
-    """Show a video's narration: takes (id, start_s, duration_s, has_camera),
+    """Older alias of `narration_session` (prefer that). Show a video's narration: takes (id, start_s, duration_s, has_camera),
     camera box, `stale` (the video changed after the takes were recorded) and
     the video URL. `kind` is the narratable type ("story"); `key` is its id
     (for a story, the round folder name). Creates an empty session on first call.
@@ -2538,7 +2538,8 @@ def narration_set_camera(
 
 @mcp.tool()
 def narration_remove_take(kind: str, key: str, take_id: str) -> dict:
-    """Delete one recorded take by `take_id` (see `narration_status`).
+    """Older alias of `narration_delete_take` (prefer that). Delete one recorded
+    take by `take_id` (see `narration_session`).
     Returns the updated session."""
     with _client() as c:
         return c.delete(f"{API}/narration/{kind}/{key}/takes/{take_id}").json()

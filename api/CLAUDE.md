@@ -121,9 +121,12 @@ time** (~1 GB free with the owner's apps open), each with a memory audit under
    early game keep is owner policy: `knowledge/rules/Early fight start.md` and
    `knowledge/rules/Skip quiet laning, keep heavy trades.md` (the vault wins).
 6a. Optional, before narrating: `story_suggest_edits` → owner ticks → `story_apply_suggestions` (Jev, no Anthropic; `docs/story-suggestions.md`).
-6b. Narrate in the web page (`/narrate/story/<round>`); export → `narrated.mp4`.
+6b. Narrate in the web page (`/narrate/story/<round>`): record in pieces (record-over
+    replaces what it covers), trim/split/nudge/mute/gain takes on the timeline,
+    game-audio regions + one duck knob; export → `narrated.mp4`. `docs/narration.md`.
 6c. Several games of one series → `story-join` (MCP `story_join`): hook, swipes,
-    outro; narrate at `/narrate/joined/<stem>`. How and why:
+    outro (`--hook-mode play` = montage hook, played through); narrate at
+    `/narrate/joined/<stem>`. How and why:
     `knowledge/series/Story-join.md`.
 7. Owner watches the story; fixes are recorded with `mentor_record_correction`.
 8. Drive, only when the owner asks: `grokbot-publish-round <round> --game league --asset-id <id>

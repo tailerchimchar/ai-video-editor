@@ -558,8 +558,9 @@ def main(argv: list[str] | None = None) -> int:
         action="append",
         default=[],
         metavar="GAME:CHAPTER[:TEXT]",
-        help="a cold-open clip: game n's chapter m (1-based), cut before its outcome; "
-        "optional TEXT pops on the frozen frame. Repeat for more clips.",
+        help="a cold-open clip: game n's chapter m (1-based). Tease mode (default) cuts "
+        "before the outcome and freezes (optional TEXT pops on the frozen frame); "
+        "--hook-mode play plays through it. Repeat for more clips.",
     )
     ap.add_argument(
         "--hook-mode",

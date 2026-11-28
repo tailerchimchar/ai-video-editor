@@ -8,6 +8,9 @@ carries the opening line ("Want to know the trick to laning?"). Each clip is
 its own mp4, so story-join swipes (with the whoosh) between hook clips and
 into game 1 like between games.
 
+Play mode (`--hook-mode play`) instead runs each clip through its outcome with
+no freeze, blur or teaser text.
+
 Outro: the last game's final frame, blurred and darkened, with "thanks for
 watching" and the like & subscribe animation large in the centre, over the
 owner's outro music when WORKSPACE/music/outro.* exists (the owner supplies
