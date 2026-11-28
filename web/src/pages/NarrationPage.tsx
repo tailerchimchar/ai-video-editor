@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { narratedVideoUrl, takeMediaUrl } from "@/api/narration";
+import { narratedVideoUrl } from "@/api/narration";
 import { CameraBoxEditor } from "@/components/narration/CameraBoxEditor";
 import { CameraSettings } from "@/components/narration/CameraSettings";
 import { ExportPanel } from "@/components/narration/ExportPanel";
@@ -21,11 +21,11 @@ import { useFrameStrip } from "@/hooks/useFrameStrip";
 import { useJob } from "@/hooks/useJob";
 import { useMediaDevices } from "@/hooks/useMediaDevices";
 import { useMediaStream } from "@/hooks/useMediaStream";
+import { useMixPreview } from "@/hooks/useMixPreview";
 import { useNarrationSession } from "@/hooks/useNarrationSession";
 import { usePeaks } from "@/hooks/usePeaks";
 import { useTakeBuffers } from "@/hooks/useTakeBuffers";
 import { useTakeCapture } from "@/hooks/useTakeCapture";
-import { useTakePlayback } from "@/hooks/useTakePlayback";
 import { useVideoDuration } from "@/hooks/useVideoDuration";
 import { clampRegions } from "@/lib/regions";
 import { effectiveStart } from "@/lib/takeEdits";
@@ -78,13 +78,14 @@ function NarrationWorkspace({ target }: { target: TargetRef }) {
     stream: media.stream,
     onTake: (take) => narration.addTake.mutate(take),
   });
-  const playTake = useTakePlayback(video);
 
   // Timeline data: frames + game peaks from the API, take waveforms decoded here.
   const frames = useFrameStrip(target);
   const peaks = usePeaks(target);
   const audio = useAudioContext();
   const { buffers, waveforms } = useTakeBuffers(view, audio.ctx);
+  // The full mix (game audio + every take, ducked) plays through Web Audio.
+  useMixPreview({ video, session: view?.session, buffers, enabled: !capture.recording, audio });
   const [selectedTakeId, setSelectedTakeId] = useState<string | null>(null);
   // Regions never reach past the video's end (a shift-relock or a shorter
   // re-render can leave them there): drawn clamped, saved clamped.
@@ -208,7 +209,9 @@ function NarrationWorkspace({ target }: { target: TargetRef }) {
             onSelectTake={setSelectedTakeId}
             onPlayTake={(take) => {
               audio.ensure();
-              playTake(effectiveStart(take), takeMediaUrl(view, take));
+              if (!video) return;
+              video.currentTime = effectiveStart(take);
+              void video.play();
             }}
             onTakeEdit={(takeId, edit) => narration.editTake.mutate({ takeId, edit })}
             buffers={buffers}
