@@ -5,7 +5,8 @@ import { useDebouncedCallback } from "./useDebouncedCallback";
  * A local copy of a server value for a slider: changes show at once and are
  * committed `delayMs` after the last one. The server value replaces the
  * draft only when nothing is waiting to be saved, so a save landing mid-drag
- * does not yank the slider back.
+ * does not yank the slider back. A change still waiting on unmount (e.g. the
+ * take inspector switching takes) is saved then, not lost.
  */
 export function useDebouncedDraft<T>(
   value: T,
@@ -14,10 +15,14 @@ export function useDebouncedDraft<T>(
 ): [T, (v: T) => void] {
   const [draft, setDraft] = useState(value);
   const dirty = useRef(false);
-  const save = useDebouncedCallback((v: T) => {
-    dirty.current = false;
-    commit(v);
-  }, delayMs);
+  const save = useDebouncedCallback(
+    (v: T) => {
+      dirty.current = false;
+      commit(v);
+    },
+    delayMs,
+    { flushOnUnmount: true },
+  );
 
   useEffect(() => {
     if (!dirty.current) setDraft(value);

@@ -31,8 +31,8 @@ game       ▁▂▃▅▆▅▃▂▁▂▃▅ with dips under the takes, [25%]
   lanes.
 - **−** / **+** zoom around the playhead (or the middle when it is out of
   view); **fit** shows the whole video and follows the panel width.
-- While the video plays, the view pages forward once the playhead passes 90%
-  of the width.
+- While the video plays and you are zoomed in, the view pages forward once
+  the playhead passes 90% of the width (fit mode stays fit).
 - Zoom range: whole video … 400 px per second.
 
 ## Takes
@@ -62,6 +62,18 @@ game       ▁▂▃▅▆▅▃▂▁▂▃▅ with dips under the takes, [25%]
 - **Delete / Backspace** removes the selected region (not while typing in a
   field).
 - Every change sends the whole list (`PUT .../game-regions`), optimistic.
+- Regions are clamped to the video's end, both as drawn and when saved;
+  any left shorter than 0.2 s are dropped (`lib/regions.ts`). A positive
+  shift-relock or a shorter re-render can otherwise leave them past the end.
+
+## Rendering
+
+Only `Timeline` (and the playhead) re-renders every frame while the video
+plays: it reads the playhead itself (`usePlayhead`), the page does not. The
+viewport is memoised and every lane is `React.memo`, so the canvases redraw
+only when the viewport or their data changes (a page flip while following
+the playhead is one redraw). The take panel reads the playhead on its own
+for "split at playhead".
 
 ## Data sources
 

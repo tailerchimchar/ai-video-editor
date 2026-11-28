@@ -1,6 +1,7 @@
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { useDebouncedDraft } from "@/hooks/useDebouncedDraft";
+import { usePlayhead } from "@/hooks/usePlayhead";
 import { MIN_TAKE_S, effectiveEnd, effectiveStart } from "@/lib/takeEdits";
 import { mmss } from "@/lib/time";
 import type { Take, TakeEdit } from "@/types/narration";
@@ -8,7 +9,8 @@ import { SliderRow } from "./SliderRow";
 
 interface TakeInspectorProps {
   take: Take;
-  playheadS: number;
+  /** The playhead is read here (every frame while playing), not in the page. */
+  video: HTMLVideoElement | null;
   onEdit: (edit: TakeEdit) => void;
   onSplit: (atS: number) => void;
   onDelete: () => void;
@@ -29,12 +31,13 @@ const decibels = (gain: number) => {
  */
 export function TakeInspector({
   take,
-  playheadS,
+  video,
   onEdit,
   onSplit,
   onDelete,
   busy,
 }: TakeInspectorProps) {
+  const playheadS = usePlayhead(video);
   const [gain, setGain] = useDebouncedDraft(
     take.gain,
     (g) => onEdit({ gain: g }),

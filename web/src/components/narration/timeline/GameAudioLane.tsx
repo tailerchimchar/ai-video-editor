@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { cn } from "@/lib/cn";
 import { isVoiceAt, regionLevelAt } from "@/lib/mixSchedule";
+import { MIN_REGION_S } from "@/lib/regions";
 import { pxToS, sToPx, type Viewport } from "@/lib/timeline";
 import { columnPeaks } from "@/lib/waveform";
 import type { AudioMix, GameAudioRegion, Peaks, Take } from "@/types/narration";
@@ -33,7 +34,6 @@ interface Drag {
 
 const LEVELS = [1, 0.5, 0.25, 0];
 const NEW_LEVEL = 0.5;
-const MIN_REGION_S = 0.2;
 const DRAG_THRESHOLD_PX = 3;
 const DRAFT_ID = "draft";
 
@@ -62,7 +62,7 @@ const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v
  * Drag the empty lane = new region; drag a region edge = resize; click a
  * region = next level; Delete removes the selected region.
  */
-export function GameAudioLane(props: GameAudioLaneProps) {
+export const GameAudioLane = memo(function GameAudioLane(props: GameAudioLaneProps) {
   const { view, durationS, peaks, regions, takes, mix } = props;
   const height = LANE_HEIGHT.game;
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -247,4 +247,4 @@ export function GameAudioLane(props: GameAudioLaneProps) {
       })}
     </div>
   );
-}
+});

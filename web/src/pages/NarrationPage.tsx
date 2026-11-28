@@ -23,11 +23,11 @@ import { useMediaDevices } from "@/hooks/useMediaDevices";
 import { useMediaStream } from "@/hooks/useMediaStream";
 import { useNarrationSession } from "@/hooks/useNarrationSession";
 import { usePeaks } from "@/hooks/usePeaks";
-import { usePlayhead } from "@/hooks/usePlayhead";
 import { useTakeBuffers } from "@/hooks/useTakeBuffers";
 import { useTakeCapture } from "@/hooks/useTakeCapture";
 import { useTakePlayback } from "@/hooks/useTakePlayback";
-import { useVideoClock } from "@/hooks/useVideoClock";
+import { useVideoDuration } from "@/hooks/useVideoDuration";
+import { clampRegions } from "@/lib/regions";
 import { effectiveStart } from "@/lib/takeEdits";
 import type { TargetRef } from "@/types/narration";
 
@@ -70,14 +70,15 @@ function NarrationWorkspace({ target }: { target: TargetRef }) {
 
   // Video + takes
   const [video, setVideo] = useState<HTMLVideoElement | null>(null);
-  const clock = useVideoClock(video);
+  // Only the length: the playhead is read inside the timeline and the take
+  // panel, so this page does not re-render while the video plays.
+  const durationS = useVideoDuration(video);
   const capture = useTakeCapture({
     video,
     stream: media.stream,
     onTake: (take) => narration.addTake.mutate(take),
   });
   const playTake = useTakePlayback(video);
-  const playheadS = usePlayhead(video);
 
   // Timeline data: frames + game peaks from the API, take waveforms decoded here.
   const frames = useFrameStrip(target);
@@ -85,6 +86,13 @@ function NarrationWorkspace({ target }: { target: TargetRef }) {
   const audio = useAudioContext();
   const { buffers, waveforms } = useTakeBuffers(view, audio.ctx);
   const [selectedTakeId, setSelectedTakeId] = useState<string | null>(null);
+  // Regions never reach past the video's end (a shift-relock or a shorter
+  // re-render can leave them there): drawn clamped, saved clamped.
+  const gameRegions = view?.session.game_regions;
+  const regions = useMemo(
+    () => clampRegions(gameRegions ?? [], durationS),
+    [gameRegions, durationS],
+  );
   const seek = (s: number) => {
     if (video) video.currentTime = s;
   };
@@ -191,9 +199,8 @@ function NarrationWorkspace({ target }: { target: TargetRef }) {
           </div>
 
           <Timeline
-            durationS={clock.duration}
-            playheadS={playheadS}
-            playing={clock.playing}
+            durationS={durationS}
+            video={video}
             disabled={busy}
             onSeek={seek}
             takes={session.takes}
@@ -209,9 +216,11 @@ function NarrationWorkspace({ target }: { target: TargetRef }) {
             frames={frames.data}
             peaks={peaks.data}
             markers={view.markers}
-            regions={session.game_regions}
+            regions={regions}
             mix={session.mix}
-            onRegionsChange={(regions) => narration.saveGameRegions.mutate(regions)}
+            onRegionsChange={(next) =>
+              narration.saveGameRegions.mutate(clampRegions(next, durationS))
+            }
           />
         </div>
 
@@ -245,7 +254,7 @@ function NarrationWorkspace({ target }: { target: TargetRef }) {
             <TakeInspector
               key={selectedTake.id}
               take={selectedTake}
-              playheadS={playheadS}
+              video={video}
               busy={busy || narration.splitTake.isPending || narration.removeTake.isPending}
               onEdit={(edit) => narration.editTake.mutate({ takeId: selectedTake.id, edit })}
               onSplit={(atS) => narration.splitTake.mutate({ takeId: selectedTake.id, atS })}

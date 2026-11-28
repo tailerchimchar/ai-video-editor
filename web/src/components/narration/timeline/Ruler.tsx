@@ -1,4 +1,4 @@
-import { useRef, type PointerEvent } from "react";
+import { memo, useRef, type PointerEvent } from "react";
 import { mmss } from "@/lib/time";
 import { pxToS, sToPx, tickEvery, type Viewport } from "@/lib/timeline";
 import { LANE_HEIGHT, laneX } from "./lane";
@@ -10,7 +10,7 @@ interface RulerProps {
 }
 
 /** Time ruler: a labelled tick every `tickEvery` seconds, minor ticks between. Drag to scrub. */
-export function Ruler({ view, durationS, onSeek }: RulerProps) {
+export const Ruler = memo(function Ruler({ view, durationS, onSeek }: RulerProps) {
   const scrubbing = useRef(false);
   const step = tickEvery(view.pxPerS);
   const minor = step / (step % 5 === 0 ? 5 : 2);
@@ -61,4 +61,4 @@ export function Ruler({ view, durationS, onSeek }: RulerProps) {
       ))}
     </div>
   );
-}
+});

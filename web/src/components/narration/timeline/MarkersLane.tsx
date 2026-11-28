@@ -1,3 +1,4 @@
+import { memo, useMemo } from "react";
 import { cn } from "@/lib/cn";
 import { mmss } from "@/lib/time";
 import { pxToS, sToPx, type Viewport } from "@/lib/timeline";
@@ -47,11 +48,14 @@ function groups(markers: Marker[]): Group[] {
  * label is cut where the next one in its row starts (full text in the
  * tooltip). Click a marker or the lane = seek.
  */
-export function MarkersLane({ view, markers, onSeek }: MarkersLaneProps) {
-  const rows = [
-    groups(markers.filter((m) => m.kind !== "cue")),
-    groups(markers.filter((m) => m.kind === "cue")),
-  ];
+export const MarkersLane = memo(function MarkersLane({ view, markers, onSeek }: MarkersLaneProps) {
+  const rows = useMemo(
+    () => [
+      groups(markers.filter((m) => m.kind !== "cue")),
+      groups(markers.filter((m) => m.kind === "cue")),
+    ],
+    [markers],
+  );
   const rowH = LANE_HEIGHT.markers / 2;
 
   return (
@@ -94,4 +98,4 @@ export function MarkersLane({ view, markers, onSeek }: MarkersLaneProps) {
       )}
     </div>
   );
-}
+});

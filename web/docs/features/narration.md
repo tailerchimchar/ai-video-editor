@@ -96,11 +96,13 @@ Supabase or any other service.
 | `src/lib/takeEdits.ts`                       | pure trim / split / nudge / punch-in, mirroring the API                                  |
 | `src/lib/waveform.ts`                        | pure peaks: envelope of a decoded take, peaks per pixel column                           |
 | `src/lib/mixSchedule.ts`                     | pure: which takes play when, region level at a time                                      |
+| `src/lib/regions.ts`                         | pure: clamp game-audio regions to the video's end                                        |
 | `src/hooks/useMediaStream.ts`                | `getUserMedia` (mic + optional camera)                                                   |
 | `src/hooks/useMediaDevices.ts`               | microphone / camera lists                                                                |
 | `src/hooks/useMediaRecorder.ts`              | `MediaRecorder` start / stop → WebM `Blob`                                               |
 | `src/hooks/useAudioLevel.ts`                 | mic level for the meter                                                                  |
 | `src/hooks/useVideoClock.ts`                 | video time / duration / playing                                                          |
+| `src/hooks/useVideoDuration.ts`              | video length only (the page does not re-render while playing)                            |
 | `src/hooks/usePlayhead.ts`                   | rAF video time for the playhead                                                          |
 | `src/hooks/useTakeCapture.ts`                | the record/stop sync rule with the video                                                 |
 | `src/hooks/useTakePlayback.ts`               | play a take in sync with the video                                                       |

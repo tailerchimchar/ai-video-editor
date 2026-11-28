@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { pxToS, sToPx, type Viewport } from "@/lib/timeline";
 import type { FrameStrip } from "@/types/narration";
 import { LANE_HEIGHT, laneX } from "./lane";
@@ -13,7 +14,11 @@ interface FrameStripLaneProps {
  * frame is drawn so each keeps its width; zoomed in, a frame repeats
  * across the span it covers. Only the frames in view are rendered.
  */
-export function FrameStripLane({ view, frames, onSeek }: FrameStripLaneProps) {
+export const FrameStripLane = memo(function FrameStripLane({
+  view,
+  frames,
+  onSeek,
+}: FrameStripLaneProps) {
   const height = LANE_HEIGHT.frames;
   if (!frames || frames.count === 0) {
     return (
@@ -67,4 +72,4 @@ export function FrameStripLane({ view, frames, onSeek }: FrameStripLaneProps) {
       ))}
     </div>
   );
-}
+});

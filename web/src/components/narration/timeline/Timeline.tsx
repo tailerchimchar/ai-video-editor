@@ -1,5 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/Button";
+import { usePlayhead } from "@/hooks/usePlayhead";
+import { useVideoClock } from "@/hooks/useVideoClock";
 import { cn } from "@/lib/cn";
 import { mmss } from "@/lib/time";
 import { clampScroll, fit, sToPx, zoomAround, type Viewport } from "@/lib/timeline";
@@ -23,8 +25,8 @@ import { TakesLane } from "./TakesLane";
 interface TimelineProps {
   /** Video length; nothing is drawn until it is known. */
   durationS: number;
-  playheadS: number;
-  playing: boolean;
+  /** The video the playhead follows (read every frame here, not in the page). */
+  video: HTMLVideoElement | null;
   /** While recording: lanes ignore the pointer. */
   disabled?: boolean;
   onSeek: (s: number) => void;
@@ -64,22 +66,26 @@ const FOLLOW_AT = 0.9;
  * one zoomable time axis, with the playhead through all of them. Owns the
  * viewport (`null` zoom = fit the whole video); the lanes only draw it.
  * Wheel = pan, ctrl/⌘+wheel = zoom around the cursor.
+ *
+ * The playhead is read here every frame, so only this component and the
+ * playhead re-render while playing: the lanes are memoised and their
+ * canvases redraw only when the viewport or their data changes.
  */
 export function Timeline(props: TimelineProps) {
-  const { durationS, playheadS, playing } = props;
+  const { durationS } = props;
+  const playheadS = usePlayhead(props.video);
+  const { playing } = useVideoClock(props.video);
   const areaRef = useRef<HTMLDivElement>(null);
   const [widthPx, setWidthPx] = useState(0);
   const [zoom, setZoom] = useState<{ pxPerS: number; scrollS: number } | null>(null);
 
-  const view: Viewport | null =
-    widthPx > 0 && durationS > 0
-      ? zoom
-        ? clampScroll(
-            { pxPerS: Math.max(zoom.pxPerS, widthPx / durationS), scrollS: zoom.scrollS, widthPx },
-            durationS,
-          )
-        : fit(widthPx, durationS)
-      : null;
+  // Memoised: a new object here would redraw every lane's canvas.
+  const view: Viewport | null = useMemo(() => {
+    if (widthPx <= 0 || durationS <= 0) return null;
+    if (!zoom) return fit(widthPx, durationS);
+    const pxPerS = Math.max(zoom.pxPerS, widthPx / durationS);
+    return clampScroll({ pxPerS, scrollS: zoom.scrollS, widthPx }, durationS);
+  }, [widthPx, durationS, zoom]);
   const viewRef = useRef(view);
   viewRef.current = view;
   const setView = (v: Viewport) => setZoom({ pxPerS: v.pxPerS, scrollS: v.scrollS });
@@ -115,13 +121,18 @@ export function Timeline(props: TimelineProps) {
     return () => el.removeEventListener("wheel", onWheel);
   }, [durationS]);
 
-  // Keep the playhead in view while playing.
+  // Keep the playhead in view while playing (fit mode already shows it all).
   useEffect(() => {
-    if (!playing || !view) return;
+    if (!playing || !view || !zoom) return;
     const x = sToPx(view, playheadS);
     if (x >= 0 && x <= view.widthPx * FOLLOW_AT) return;
     const visibleS = view.widthPx / view.pxPerS;
-    setView(clampScroll({ ...view, scrollS: playheadS - visibleS * (1 - FOLLOW_AT) }, durationS));
+    const next = clampScroll(
+      { ...view, scrollS: playheadS - visibleS * (1 - FOLLOW_AT) },
+      durationS,
+    );
+    // Near the end the scroll is clamped: do not set the same view every frame.
+    if (Math.abs(next.scrollS - view.scrollS) > 1e-6) setView(next);
     // Only the playhead moving should scroll; zoom / pan by the user must not.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playheadS, playing]);
@@ -134,7 +145,10 @@ export function Timeline(props: TimelineProps) {
     setView(zoomAround(view, factor, anchor, durationS));
   }
 
-  const gameMarkers = props.markers.filter((m) => m.kind === "game");
+  const gameMarkers = useMemo(
+    () => props.markers.filter((m) => m.kind === "game"),
+    [props.markers],
+  );
 
   return (
     <section className="surface-elevated space-y-3 rounded-lg p-4">

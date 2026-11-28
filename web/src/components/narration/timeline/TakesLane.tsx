@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import { pxToS, type Viewport } from "@/lib/timeline";
 import { envelope } from "@/lib/waveform";
 import type { Take, TakeEdit } from "@/types/narration";
@@ -34,7 +34,7 @@ function waveFor(channel: Float32Array, buffer: AudioBuffer): TakeWave {
 }
 
 /** The takes as blocks; click the empty lane = deselect + seek. */
-export function TakesLane(props: TakesLaneProps) {
+export const TakesLane = memo(function TakesLane(props: TakesLaneProps) {
   const { view, takes, selectedId, buffers, waveforms } = props;
 
   const waves = useMemo(() => {
@@ -74,4 +74,4 @@ export function TakesLane(props: TakesLaneProps) {
       ))}
     </div>
   );
-}
+});
