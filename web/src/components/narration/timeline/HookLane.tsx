@@ -45,6 +45,7 @@ interface HookLaneProps extends HookTrackProps {
   onSeek: (s: number) => void;
 }
 
+/** Edge handles sit inside the clip, so two touching clips never share one. */
 const EDGE_PX = 12;
 const DRAG_THRESHOLD_PX = 5;
 const PAD_Y = 4;
@@ -306,14 +307,14 @@ export const HookLane = memo(function HookLane(props: HookLaneProps) {
             </div>
             <div
               className="absolute z-20 cursor-ew-resize touch-none"
-              style={{ left: left - EDGE_PX / 2, width: EDGE_PX, top: PAD_Y, height: spanH }}
+              style={{ left, width: Math.min(EDGE_PX, width / 3), top: PAD_Y, height: spanH }}
               onPointerDown={(e) => startTrim(e, h, "start")}
             />
             <div
               className="absolute z-20 cursor-ew-resize touch-none"
               style={{
-                left: left + width - EDGE_PX / 2,
-                width: EDGE_PX,
+                left: left + width - Math.min(EDGE_PX, width / 3),
+                width: Math.min(EDGE_PX, width / 3),
                 top: PAD_Y,
                 height: spanH,
               }}
