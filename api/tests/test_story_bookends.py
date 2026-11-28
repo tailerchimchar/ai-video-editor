@@ -96,6 +96,7 @@ def test_outro_with_and_without_music():
     g = full[full.index("-filter_complex") + 1]
     assert "eof_action=repeat" in g and f"trim=end={bookends.OUTRO_SUB_HOLD_S}" in g
     assert "[2:a]" in g and "afade=t=out" in g
+    assert "loudnorm=I=-16" in g  # levelled like the stories
     i = full.index("m.mp3")
     assert full[i - 5 : i] == ["-ss", "12.5", "-t", f"{bookends.OUTRO_S}", "-i"]
 

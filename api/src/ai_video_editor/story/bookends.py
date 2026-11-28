@@ -22,7 +22,15 @@ from pathlib import Path
 from ..config import settings
 from ..edits import _escape_drawtext, _escape_fontfile_path
 from .planner import StoryPlan
-from .render import FPS, HEIGHT, WIDTH, StoryRenderError, _encode_opts, _run_ffmpeg
+from .render import (
+    FPS,
+    HEIGHT,
+    LOUDNORM_FILTER,
+    WIDTH,
+    StoryRenderError,
+    _encode_opts,
+    _run_ffmpeg,
+)
 from .suggest.placement import video_second
 
 HOOK_LEAD_S = 6.0  # footage before the outcome
@@ -198,7 +206,10 @@ def outro_cmd(
     if music is not None:
         inputs += ["-ss", f"{music_start_s}", "-t", f"{OUTRO_S}", "-i", music.as_posix()]
         g.append(
-            f"[{n}:a]aresample=48000,aformat=channel_layouts=stereo,afade=t=in:d=0.4,"
+            # Same loudness as the stories (render.LOUDNORM_FILTER): released
+            # tracks are mastered far louder than a levelled game mix.
+            f"[{n}:a]aresample=48000,aformat=channel_layouts=stereo,{LOUDNORM_FILTER},"
+            "aresample=48000,afade=t=in:d=0.4,"
             f"afade=t=out:st={OUTRO_S - 1.5}:d=1.5,apad=whole_dur={OUTRO_S}[a]"
         )
     else:
