@@ -23,6 +23,23 @@ export interface Take {
   has_camera: boolean;
   /** ISO-8601 UTC. */
   created_at: string;
+  /** Where in the recorded media this take's audio starts. */
+  media_in_s: number;
+  /** Alignment nudge, -3..3 s. */
+  offset_s: number;
+  /** Take gain, (0, 4]. */
+  gain: number;
+  muted: boolean;
+}
+
+/** A partial edit of a take (all fields optional). */
+export interface TakeEdit {
+  start_s?: number;
+  duration_s?: number;
+  media_in_s?: number;
+  offset_s?: number;
+  gain?: number;
+  muted?: boolean;
 }
 
 /**
@@ -40,11 +57,51 @@ export interface CameraBox {
 
 /** How the original audio ducks under the owner's voice. */
 export interface AudioMix {
+  game_gain: number;
   narration_gain: number;
   duck_threshold: number;
   duck_ratio: number;
   duck_attack_ms: number;
   duck_release_ms: number;
+}
+
+/** A span where the game audio is scaled by `level`. */
+export interface GameAudioRegion {
+  id: string;
+  start_s: number;
+  end_s: number;
+  level: number;
+}
+
+/** A span where the camera box is overridden. */
+export interface CameraRegion {
+  id: string;
+  start_s: number;
+  end_s: number;
+  box: CameraBox;
+}
+
+/** A labelled point on the timeline. */
+export interface Marker {
+  at_s: number;
+  label: string;
+  kind: "chapter" | "game" | "cue" | "insert";
+}
+
+/** A sprite sheet of video frames. */
+export interface FrameStrip {
+  sprite_url: string;
+  every_s: number;
+  tile_w: number;
+  tile_h: number;
+  cols: number;
+  count: number;
+}
+
+/** Waveform peaks for a take or the game audio. */
+export interface Peaks {
+  rate_hz: number;
+  peaks: number[];
 }
 
 /** Everything stored for one narrated video. */
@@ -55,6 +112,9 @@ export interface NarrationSession {
   takes: Take[];
   camera: CameraBox;
   mix: AudioMix;
+  game_regions: GameAudioRegion[];
+  camera_regions: CameraRegion[];
+  pinned_intro_s: number | null;
 }
 
 /** A resolved box in output pixels. */
@@ -89,6 +149,8 @@ export interface SessionView {
   narration_url?: string | null;
   /** URL of an existing `narrated.mp4`, or null before the first export. */
   export_url: string | null;
+  suggested_shift_s: number | null;
+  markers: Marker[];
 }
 
 export interface UploadTakeArgs {
