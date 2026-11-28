@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { narratedVideoUrl, takeMediaUrl } from "@/api/narration";
+import { narratedVideoUrl } from "@/api/narration";
 import { CameraBoxEditor } from "@/components/narration/CameraBoxEditor";
 import { CameraSettings } from "@/components/narration/CameraSettings";
 import { ExportPanel } from "@/components/narration/ExportPanel";
@@ -13,13 +13,15 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { PageShell } from "@/components/ui/PageShell";
+import { useAudioContext } from "@/hooks/useAudioContext";
 import { useAudioLevel } from "@/hooks/useAudioLevel";
 import { useJob } from "@/hooks/useJob";
 import { useMediaDevices } from "@/hooks/useMediaDevices";
 import { useMediaStream } from "@/hooks/useMediaStream";
+import { useMixPreview } from "@/hooks/useMixPreview";
 import { useNarrationSession } from "@/hooks/useNarrationSession";
+import { useTakeBuffers } from "@/hooks/useTakeBuffers";
 import { useTakeCapture } from "@/hooks/useTakeCapture";
-import { useTakePlayback } from "@/hooks/useTakePlayback";
 import { useVideoClock } from "@/hooks/useVideoClock";
 import type { TargetRef } from "@/types/narration";
 
@@ -66,7 +68,9 @@ function NarrationWorkspace({ target }: { target: TargetRef }) {
     stream: media.stream,
     onTake: (take) => narration.addTake.mutate(take),
   });
-  const playTake = useTakePlayback(video);
+  const audio = useAudioContext();
+  const { buffers } = useTakeBuffers(view, audio.ctx);
+  useMixPreview({ video, session: view?.session, buffers, enabled: !capture.recording, audio });
 
   // Record = arm the devices, start the take once the stream is live; the
   // devices are released when the take ends (or permission is refused).
@@ -176,7 +180,11 @@ function NarrationWorkspace({ target }: { target: TargetRef }) {
             deletingId={
               narration.removeTake.isPending ? (narration.removeTake.variables ?? null) : null
             }
-            onPlay={(take) => playTake(take.start_s, takeMediaUrl(view, take))}
+            onPlay={(take) => {
+              if (!video) return;
+              video.currentTime = take.start_s;
+              void video.play();
+            }}
             onDelete={(takeId) => narration.removeTake.mutate(takeId)}
             onSeek={(s) => {
               if (video) video.currentTime = s;

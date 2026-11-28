@@ -62,6 +62,15 @@ Takes (voice and camera) are uploaded only to the local API on this PC and
 stored next to the video under `narration/takes/`. Nothing is sent to Drive,
 Supabase or any other service.
 
+## Preview
+
+Playing the video plays the whole mix in the browser (Web Audio): the video's
+own audio through the game gain and region levels, plus every unmuted take
+scheduled at its place, with the game ducked while narration is loud. It
+re-schedules on seek, rate change and edits, and the takes are silent while
+recording. The browser duck is an approximation; the export is the reference.
+`window.__mixPreview` exposes `{scheduled, duck}` for debugging.
+
 ## Code map (one job per file)
 
 | File                               | Job                                                                                         |
@@ -75,7 +84,8 @@ Supabase or any other service.
 | `src/hooks/useAudioLevel.ts`       | mic level for the meter                                                                     |
 | `src/hooks/useVideoClock.ts`       | video time / duration / playing                                                             |
 | `src/hooks/useTakeCapture.ts`      | the record/stop sync rule with the video                                                    |
-| `src/hooks/useTakePlayback.ts`     | play a take in sync with the video                                                          |
+| `src/hooks/useMixPreview.ts`       | Web Audio preview: game audio + every take, ducking and regions                             |
+| `src/hooks/useAudioContext.ts`     | lazily created shared `AudioContext`                                                        |
 | `src/hooks/useNarrationSession.ts` | TanStack query + mutations                                                                  |
 | `src/hooks/useJob.ts`              | export job polling                                                                          |
 | `src/components/narration/*`       | RecordControls, TakeTimeline, CameraBoxEditor, CameraSettings, ExportPanel, LiveStreamVideo |
