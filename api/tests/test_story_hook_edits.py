@@ -399,3 +399,26 @@ def test_edits_path_rejects_path_tricks_and_save_is_atomic(tmp_path, monkeypatch
             he.edits_path(bad)
     he.save_edits(fresh_edits(_jm(), "j"))
     assert [p.name for p in (tmp_path / "story").iterdir()] == ["j.edits.json"]
+
+
+def test_hook_view_carries_the_rendered_window_with_the_folded_offsets():
+    jm = _jm()
+    r0 = jm.hook.picks[0]
+    jm.hook.picks[0] = r0.model_copy(update={"start_s": 1.0, "end_s": -2.0})
+    v = hook_view(
+        jm,
+        "j",
+        _edits(
+            jm,
+            [
+                EditPick(id=r0.id, chapter_id=r0.chapter_id, at_s=0, start_s=3.0, end_s=-2.0),
+                EditPick(id="new00000", chapter_id=r0.chapter_id, at_s=40),
+            ],
+        ),
+    )
+    p, new = v.picks
+    # as rendered: the map's base window with the folded offsets, not the base
+    assert p.rendered_rec_start_s == r0.rec_start_s - 1.0
+    assert p.rendered_rec_end_s == r0.rec_end_s - 2.0
+    assert p.rec_start_s == r0.rec_start_s - 3.0  # what the edits want
+    assert new.rendered_rec_start_s is None and new.rendered_rec_end_s is None

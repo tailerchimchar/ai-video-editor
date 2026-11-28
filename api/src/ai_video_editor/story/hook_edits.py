@@ -333,6 +333,9 @@ class HookPickView(BaseModel):
     limit_hi_rec_s: float | None  # None = no upper limit (JSON has no inf)
     video_start_s: float | None
     video_end_s: float | None
+    # the recording window in the mp4: the map's base +- its folded offsets (None = new piece)
+    rendered_rec_start_s: float | None = None
+    rendered_rec_end_s: float | None = None
     pending: bool
     beyond_chapter_s: float
 
@@ -429,6 +432,8 @@ def hook_view(jm: JoinMap, video_stem: str, edits: HookEdits | None) -> HookView
                 limit_hi_rec_s=None if math.isinf(hi) else hi,
                 video_start_s=r.video_start_s if r else None,
                 video_end_s=r.video_end_s if r else None,
+                rendered_rec_start_s=round(r.rec_start_s - r.start_s, 3) if r else None,
+                rendered_rec_end_s=round(r.rec_end_s + r.end_s, 3) if r else None,
                 pending=r is None or not _same(p, r),
                 beyond_chapter_s=round(max(0.0, rec_end - b.chapter_rec_end_s), 3),
             )

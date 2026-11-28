@@ -409,6 +409,8 @@ async def get_hook(ref: RefDep, target: TargetDep) -> HookView:
         return hook_service.get_hook(target, ref.key)
     except hook_service.HookUnavailable as exc:
         raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:  # an unreadable edits file
+        raise HTTPException(422, str(exc)) from exc
 
 
 @router.put("/{kind}/{key}/hook", response_model=HookView)
@@ -439,3 +441,5 @@ async def get_storyboard(ref: RefDep, target: TargetDep) -> hook_service.Storybo
         return hook_service.storyboard(target, ref.key)
     except hook_service.HookUnavailable as exc:
         raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:  # an unreadable edits file
+        raise HTTPException(422, str(exc)) from exc

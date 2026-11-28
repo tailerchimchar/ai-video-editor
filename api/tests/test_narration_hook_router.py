@@ -128,3 +128,11 @@ def test_storyboard_404_for_v1_map(client, joined_map_v1):
 
 def test_digest_helper_matches():
     assert base_digest(_jm().hook).startswith("sha256:")
+
+
+def test_corrupt_edits_file_is_422_on_get_hook_and_storyboard(client, joined_map):
+    (joined_map / "joined_t.edits.json").write_text("{not json", encoding="utf-8")
+    for path in ("/hook", "/storyboard"):
+        r = client.get(BASE + path)
+        assert r.status_code == 422, path
+        assert "cannot read" in r.json()["detail"]
