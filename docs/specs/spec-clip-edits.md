@@ -1,6 +1,6 @@
 # Spec: clip edits from the narration timeline
 
-**Status:** decided 2026-11-28 (interview + red team) · **Baseline:** `feat/narration-v2` @ 24f4004 · **Preview:** https://claude.ai/artifact/SXy8VfwPw2cMd8X91mmQm9 · **Builds on:** [`spec-narration-v2.md`](./spec-narration-v2.md), [`spec-narration.md`](./spec-narration.md)
+**Status:** decided 2026-11-28 (interview + red team) · **Baseline:** `feat/narration-v2` @ 24f4004 · **Preview:** https://claude.ai/artifact/SXy8VfwPw2cMd8X91mmQm9 · **Playground (drag it):** https://claude.ai/artifact/M46eiu7XEc5XmSrAKYy6C3 · **Builds on:** [`spec-narration-v2.md`](./spec-narration-v2.md), [`spec-narration.md`](./spec-narration.md)
 
 ## 1. Problem
 
@@ -42,7 +42,7 @@ The map is rewritten by every join; the edits file never is. `base_map_digest` (
 
 ### 4.2 Stable ids (D13, D14)
 
-- `chapter_id = "<round>:<play_id>"` for play chapters; `"<round>:early"`, `"<round>:close"`, `"<round>:request:<at_s>"` for the others (`Chapter.play_id` exists; `early`/`close` are singletons; request chapters carry their `at`).
+- `chapter_id = "<round>:<play_id>"` for play chapters; `"<round>:<kind>@<game_start_s>"` for the others, e.g. `…:early@50.0`, `…:early@273.1`, `…:close@934.5`, `…:request@1205.0` (`Chapter.play_id` exists; the kind alone is not unique: the opening and the recall are both `early`, which the playground mock caught).
 - Hook clip id: `"hook:<chapter_id>"`. Chapter clip id = `chapter_id`.
 - Hook picks are stored as `{chapter_id, text}` plus the clip's deltas; `parse_pick("3:2")` still works on the CLI and is resolved to a `chapter_id` at join time. Story.mp4 seconds for the hook window are computed at join time from the (edited) chapter, so a re-rendered round cannot move the hook's footage.
 
@@ -183,7 +183,7 @@ Manual. The popover shows the edits file path and `story-join --apply-edits <ste
 | D11 | Requests | New absolute `set_window` request, one managed entry per chapter, pinned against the budget | `extend` only grows, `trim` only shrinks, both keyed by game clock | Red Team | 2026-11-28 |
 | D12 | Overlap | Clamp at the neighbour (0.5 s gap); never merge from a drag | The renderer merges overlapping chapters and ids would break | Red Team (owner chose) | 2026-11-28 |
 | D13 | Hook anchor | Picks keyed by chapter id in game-clock terms; story seconds computed at join time | story.mp4 seconds move when an earlier chapter changes | Red Team | 2026-11-28 |
-| D14 | Chapter id | `round:play_id`, `:early`, `:close`, `:request:at` | Titles change; indexes shift when the budget drops a play | Red Team | 2026-11-28 |
+| D14 | Chapter id | `round:play_id` for plays; `round:kind@game_start_s` for the rest | Titles change; indexes shift when the budget drops a play; a game has two `early` chapters, so the kind alone collides | Red Team (fixed after the playground mock) | 2026-11-28 |
 | D15 | Version skew | `schema_version` on the map; apply refuses unversioned maps; edits in a separate file | A laptop on master would silently drop unknown fields | Red Team | 2026-11-28 |
 | D16 | Two truths | Join map = laptop output, edits file = PC intent; base digest ties them | One file edited by both machines would be overwritten | Red Team | 2026-11-28 |
 | D17 | Rating time and place | PC rates right after the drag from facts the map carries; description is a template; Jev failure never blocks | Owner: "shouldn't PC also be able to use Jev? let's make it easy"; the laptop writes the facts so the PC has honest inputs | Red Team | 2026-11-28 |
