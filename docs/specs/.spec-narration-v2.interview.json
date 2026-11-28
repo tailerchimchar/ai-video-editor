@@ -1,0 +1,54 @@
+{
+  "specName": "spec-narration-v2",
+  "timestamp": "2026-11-27T19:40:00-06:00",
+  "status": "approved-by-default (owner: 'no more questions. build what you need')",
+  "capturedAtCommit": "bc5b421",
+  "sourceIssue": null,
+  "previewUrl": null,
+  "feedbackRounds": [],
+  "redTeamStatus": "skipped",
+  "redTeamFindings": null,
+  "coverageMap": {
+    "Scope": "done",
+    "Hook": "done",
+    "Take editing": "done",
+    "Timeline UI": "done",
+    "Audio mix": "done",
+    "Camera over time": "done",
+    "Timeline effects": "done (Claude default)",
+    "Re-render + staleness": "done (Claude default)",
+    "Testing": "done (Claude default)"
+  },
+  "qaLog": [
+    {"area": "Pre-analysis", "question": "Analyze the codebase before interviewing?", "answer": "Yes, analyze codebase"},
+    {"area": "Scope", "question": "What is v2's finish line before you narrate THIS video?", "answer": "Narrate this video soon: fixed hook, takes you can stop/trim/redo in pieces, per-take volume, a visible timeline; filmstrip/waveforms, camera over time and timeline effects after", "options": ["Narrate this video soon", "Build the full editor first", "Minimum: hook + pieces only"]},
+    {"area": "Hook", "question": "What should the opening be?", "answer": "Montage + voice, outcomes shown (3-4 best plays played through, swipes, voice carries the 10/0 stat and one credential sentence)", "options": ["Montage + voice, outcomes shown", "Keep the tease, play the best one through", "Current hook + op.gg screenshot card", "Play both current clips to outcome"]},
+    {"area": "Hook", "question": "What text pops over the montage?", "answer": "Opening line only", "options": ["Opening line + one stat pop", "Opening line only", "Per-clip teasers too", "No text at all"]},
+    {"area": "Take editing", "question": "How should fixing a take work?", "answer": "Punch-in: pieces + trim + record-over replaces overlapped takes; no pause button", "options": ["Punch-in: pieces + trim + record-over", "Real pause/resume inside one take", "Pieces + trim, overlaps both play"]},
+    {"area": "Take editing", "question": "Which extra take edits?", "answer": "Split at the playhead; nudge (drag, capped ±3 s, offset shown); mute instead of delete", "options": ["Split at the playhead", "Nudge", "Mute instead of delete", "None of these"]},
+    {"area": "Timeline UI", "question": "Which lanes does the finished timeline have?", "answer": "Frame strip; narration lane with waveforms; game audio lane; markers lane (chapters + cue sheet)", "options": ["Frame strip", "Narration lane with waveforms", "Game audio lane", "Markers lane"]},
+    {"area": "Timeline UI", "question": "What should playback in the page sound like before export?", "answer": "Full mix in the browser (Web Audio: gains, trims, mutes, nudges, ducking)", "options": ["Full mix in the browser", "Takes + gains, no ducking", "One take at a time (today)"]},
+    {"area": "Audio mix", "question": "How do you want to control the game audio under your voice?", "answer": "Regions on the game lane with a level each + one global duck slider", "options": ["Regions + duck knob", "Global game level + duck knob only", "Per-take game level"]},
+    {"area": "Camera over time", "question": "How should the camera box change over time?", "answer": "Camera regions, hard switch; default box outside regions", "options": ["Camera regions, hard switch", "Per-take box", "Keyframes with smooth animation"]},
+    {"area": "Timeline effects", "question": "(not asked; owner left) Where are timeline effects applied?", "answer": "Claude default: length-preserving effects + SFX in the narration export on the PC, stored in the session in joined-video seconds; length-changing edits stay story requests on the laptop; phase 3"},
+    {"area": "Re-render + staleness", "question": "(not asked) How does a longer hook affect recorded takes?", "answer": "Claude default: pin intro_s; offer 'shift takes by Δ and relock'"},
+    {"area": "Testing", "question": "(not asked) Web test strategy?", "answer": "Claude default: vitest for pure libs only; tsc -b stays the gate; pytest pure + router tests for the API"}
+  ],
+  "baseline": {
+    "derivedFrom": "Explore agent brief, master bc5b421, 2026-11-27",
+    "capturedAtCommit": "bc5b421",
+    "claims": [
+      {"area": "Take editing", "claim": "Take has no media_in/gain/mute/offset fields", "evidence": "api/src/ai_video_editor/narration/models.py:20-32"},
+      {"area": "Audio mix", "claim": "AudioMix is one global level; no PUT /mix route", "evidence": "api/src/ai_video_editor/narration/models.py:47-54; routers/narration.py"},
+      {"area": "Audio mix", "claim": "mix.py places takes with adelay and one global volume; one sidechaincompress", "evidence": "api/src/ai_video_editor/narration/mix.py:73-94"},
+      {"area": "Camera over time", "claim": "One static PixelBox for the whole export", "evidence": "api/src/ai_video_editor/narration/export.py:119-131; mix.py:97-117"},
+      {"area": "Timeline UI", "claim": "TakeTimeline is a single 40 px track; no filmstrip/waveform/canvas in web", "evidence": "web/src/components/narration/TakeTimeline.tsx:24-108"},
+      {"area": "Timeline UI", "claim": "useTakePlayback plays one take via a single Audio element", "evidence": "web/src/hooks/useTakePlayback.ts"},
+      {"area": "Hook", "claim": "hook_window ends 0.25 s before the first owner kill/death; no play-through mode", "evidence": "api/src/ai_video_editor/story/bookends.py:76-96"},
+      {"area": "Re-render + staleness", "claim": "Fingerprint is size-mtime_ns; relock never shifts takes", "evidence": "api/src/ai_video_editor/narration/targets.py:72-75; service.py:157-162"},
+      {"area": "Timeline effects", "claim": "Story effects are game-clock requests rendered on the laptop; SFX automatic only", "evidence": "api/src/ai_video_editor/story/requests.py; story/render.py:598-630"},
+      {"area": "Testing", "claim": "No web test runner; API narration tests are pure argv + router with fakes", "evidence": "web/package.json; api/tests/test_narration_*.py"}
+    ]
+  },
+  "driftLedger": []
+}
