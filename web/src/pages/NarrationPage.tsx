@@ -231,7 +231,7 @@ function NarrationWorkspace({ target }: { target: TargetRef }) {
           <ExportPanel
             stale={view.stale}
             takeCount={session.takes.length}
-            onRelock={() => narration.relockTakes.mutate()}
+            onRelock={() => narration.relockTakes.mutate(0)}
             onDeleteAllTakes={() => narration.removeAllTakes.mutate(session.takes.map((t) => t.id))}
             resolvingStale={narration.relockTakes.isPending || narration.removeAllTakes.isPending}
             onExport={() =>

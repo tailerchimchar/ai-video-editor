@@ -4,13 +4,19 @@
  * effective span is shifted by its `offset_s`.
  */
 
-import type { Take } from "@/types/narration";
+import type { Take, TakeEdit } from "@/types/narration";
 
 export const MIN_TAKE_S = 0.3;
 const MAX_OFFSET_S = 3;
 
 export const effectiveStart = (t: Take): number => t.start_s + t.offset_s;
 export const effectiveEnd = (t: Take): number => t.start_s + t.offset_s + t.duration_s;
+
+/** Apply a partial edit: every defined field overwrites the take's. */
+export function applyTakeEdit(t: Take, edit: TakeEdit): Take {
+  const defined = Object.fromEntries(Object.entries(edit).filter(([, v]) => v !== undefined));
+  return { ...t, ...defined };
+}
 
 /** Cut the head so the take starts (effectively) at `newStartS`. */
 export function trimHead(t: Take, newStartS: number): Take {

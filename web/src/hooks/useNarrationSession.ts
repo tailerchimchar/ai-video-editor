@@ -2,12 +2,27 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   deleteTake,
   getSession,
+  patchTake,
   putCamera,
+  putCameraRegions,
+  putGameRegions,
+  putMix,
   relock,
+  splitTake,
   startExport,
   uploadTake,
 } from "@/api/narration";
-import type { CameraBox, SessionView, TargetRef, UploadTakeArgs } from "@/types/narration";
+import { applyTakeEdit } from "@/lib/takeEdits";
+import type {
+  AudioMix,
+  CameraBox,
+  CameraRegion,
+  GameAudioRegion,
+  SessionView,
+  TakeEdit,
+  TargetRef,
+  UploadTakeArgs,
+} from "@/types/narration";
 
 /**
  * Server state for one narration target: the `SessionView` query plus
@@ -22,7 +37,7 @@ export function useNarrationSession(target: TargetRef) {
   const session = useQuery({ queryKey, queryFn: () => getSession(target) });
 
   const setView = (view: SessionView) => qc.setQueryData(queryKey, view);
-  const refetch = () => qc.invalidateQueries({ queryKey });
+  const refetch = () => qc.invalidateQueries({ queryKey, exact: true });
 
   const addTake = useMutation({
     mutationFn: (args: UploadTakeArgs) => uploadTake(target, args),
@@ -48,7 +63,54 @@ export function useNarrationSession(target: TargetRef) {
   });
 
   const relockTakes = useMutation({
-    mutationFn: () => relock(target),
+    mutationFn: (shiftS: number) => relock(target, shiftS),
+    onSuccess: setView,
+  });
+
+  /** Optimistic: the edit shows immediately; rolled back if the server refuses it. */
+  const editTake = useMutation({
+    mutationFn: ({ takeId, edit }: { takeId: string; edit: TakeEdit }) =>
+      patchTake(target, takeId, edit),
+    onMutate: async ({ takeId, edit }) => {
+      await qc.cancelQueries({ queryKey, exact: true });
+      const previous = qc.getQueryData<SessionView>(queryKey);
+      if (previous) {
+        setView({
+          ...previous,
+          session: {
+            ...previous.session,
+            takes: previous.session.takes.map((t) =>
+              t.id === takeId ? applyTakeEdit(t, edit) : t,
+            ),
+          },
+        });
+      }
+      return { previous };
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.previous) qc.setQueryData(queryKey, context.previous);
+    },
+    onSuccess: setView,
+  });
+
+  const splitTakeAt = useMutation({
+    mutationFn: ({ takeId, atS }: { takeId: string; atS: number }) =>
+      splitTake(target, takeId, atS),
+    onSuccess: setView,
+  });
+
+  const saveMix = useMutation({
+    mutationFn: (mix: AudioMix) => putMix(target, mix),
+    onSuccess: setView,
+  });
+
+  const saveGameRegions = useMutation({
+    mutationFn: (regions: GameAudioRegion[]) => putGameRegions(target, regions),
+    onSuccess: setView,
+  });
+
+  const saveCameraRegions = useMutation({
+    mutationFn: (regions: CameraRegion[]) => putCameraRegions(target, regions),
     onSuccess: setView,
   });
 
@@ -56,5 +118,18 @@ export function useNarrationSession(target: TargetRef) {
     mutationFn: (force: boolean = false) => startExport(target, force),
   });
 
-  return { session, addTake, removeTake, removeAllTakes, saveCamera, relockTakes, exportVideo };
+  return {
+    session,
+    addTake,
+    removeTake,
+    removeAllTakes,
+    saveCamera,
+    relockTakes,
+    editTake,
+    splitTake: splitTakeAt,
+    saveMix,
+    saveGameRegions,
+    saveCameraRegions,
+    exportVideo,
+  };
 }
