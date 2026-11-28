@@ -61,6 +61,9 @@ usually say what kind of video; later you should suggest the format yourself
 - No destructive actions without asking.
 - When Tailer teaches a rule, write it to `knowledge/` the same day.
 - Update docs in the same commit as the feature change.
+- Code changes go on a branch (`feat/…`, `fix/…`, `docs/…`), never straight to
+  `master`. Push the branch; merge to `master` only when Tailer says so. Two
+  machines work at once: pull before branching.
 
 ## Testing
 
