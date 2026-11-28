@@ -230,13 +230,14 @@ def hook_block(
 ) -> JoinHook:
     """The hook block: one entry per pick with its base window (recording
     seconds, before the owner's offsets), events, chapter bounds and its
-    place on the hook track. `rounds`, `plans` and `offsets_s` are per game;
+    place on the hook track (`at_s` = cumulative rendered piece lengths,
+    freeze included, without the swipe). `rounds`, `plans` and `offsets_s` are per game;
     `clips`, `starts_s` (in the joined video) and `durations_s` are per pick."""
     from .bookends import hook_window_rec
 
     out: list[JoinHookPick] = []
     at = 0.0
-    for i, (p, clip) in enumerate(zip(picks, clips, strict=True)):
+    for i, p in enumerate(picks):
         plan = plans[p.game - 1]
         ch = plan.chapters[p.chapter - 1]
         rec_start, rec_end = hook_window_rec(plan, p.chapter - 1, p.mode)
@@ -265,7 +266,7 @@ def hook_block(
                 text=p.text,
             )
         )
-        at += clip.end_s - clip.start_s
+        at += durations_s[i]
     return JoinHook(mode=mode, title=title, picks=out)
 
 

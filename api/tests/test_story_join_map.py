@@ -191,3 +191,23 @@ def test_map_v2_carries_hook_block_and_event_times():
 def test_map_without_hook_is_v1():
     assert _map().schema_version == 1 and _map().hook is None
     assert _map().options.subscribe_after == 1
+
+
+def test_hook_block_at_s_follows_rendered_lengths_with_the_freeze():
+    from ai_video_editor.story.bookends import HookClip, HookPick
+    from ai_video_editor.story.join_map import hook_block
+
+    plan = _plan(_ch("c", 100, 140, kills=[120]))
+    clips = [HookClip(Path("s.mp4"), 0.0, 10.0, ""), HookClip(Path("s.mp4"), 0.0, 10.0, "")]
+    hook = hook_block(
+        ["r1"],
+        [plan],
+        [HookPick(1, 1), HookPick(1, 1)],
+        clips,
+        [0.0, 10.9],
+        [11.4, 9.0],
+        [0.0],
+        mode="tease",
+        title=None,
+    )
+    assert [p.at_s for p in hook.picks] == [0.0, 11.4]

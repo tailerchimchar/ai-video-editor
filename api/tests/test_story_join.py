@@ -316,7 +316,7 @@ def test_join_writes_hook_block_and_options(ws, fakes, tmp_path, monkeypatch):
     picks = [HookPick(1, 2, "", id="keep0001"), HookPick(2, 2)]
     join.join_stories([R1, R2], tmp_path / "j.mp4", hook=picks, hook_title="t", outro=True)
     hook, options = fakes["map"]
-    assert [p.at_s for p in hook.picks] == [0.0, 10.0]
+    assert [p.at_s for p in hook.picks] == [0.0, 100.0]  # rendered piece lengths
     assert hook.picks[0].id == "keep0001" and len(hook.picks[1].id) == 8
     assert hook.picks[0].chapter_id == f"{R1}:p00" and hook.picks[0].offset_s == 5.0
     assert [e.rec_s for e in hook.picks[0].events] == [120, 128]
