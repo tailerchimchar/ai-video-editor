@@ -6,6 +6,7 @@
 export const LANE_HEIGHT = {
   ruler: 24,
   frames: 48,
+  hook: 56,
   markers: 32,
   takes: 56,
   game: 56,

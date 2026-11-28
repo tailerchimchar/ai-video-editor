@@ -551,3 +551,15 @@ export function optimisticView(
     dirty: changed || view.dirty,
   };
 }
+
+/**
+ * A short name for a clip: the game's first word (the champion for League,
+ * from the storyboard) and the fight size from the label ("2v3"), else the
+ * label.
+ */
+export function shortName(p: HookPickView, storyboard?: Storyboard): string {
+  const who = storyboard?.games.find((g) => g.round === p.round)?.label.split(" ")[0];
+  const size = /^\d+v\d+/.exec(p.label)?.[0];
+  if (who && size) return `${who} ${size}`;
+  return who ? `${who} · ${p.label}` : p.label;
+}

@@ -6,6 +6,8 @@ import { LANE_HEIGHT, laneX } from "./lane";
 interface FrameStripLaneProps {
   view: Viewport;
   frames: FrameStrip | undefined;
+  /** Draw every frame this much later (the video after a re-planned hook slides). */
+  shiftS?: number;
   onSeek: (s: number) => void;
 }
 
@@ -17,6 +19,7 @@ interface FrameStripLaneProps {
 export const FrameStripLane = memo(function FrameStripLane({
   view,
   frames,
+  shiftS = 0,
   onSeek,
 }: FrameStripLaneProps) {
   const height = LANE_HEIGHT.frames;
@@ -35,8 +38,11 @@ export const FrameStripLane = memo(function FrameStripLane({
   const slotW = frames.every_s * view.pxPerS;
   const stride = Math.max(1, Math.ceil(tileW / slotW));
   const rows = Math.ceil(frames.count / frames.cols);
-  const first = Math.floor(view.scrollS / frames.every_s / stride) * stride;
-  const last = Math.min(frames.count - 1, Math.ceil(pxToS(view, view.widthPx) / frames.every_s));
+  const first = Math.floor((view.scrollS - shiftS) / frames.every_s / stride) * stride;
+  const last = Math.min(
+    frames.count - 1,
+    Math.ceil((pxToS(view, view.widthPx) - shiftS) / frames.every_s),
+  );
   // Zoomed in, a frame repeats across its span instead of leaving a gap.
   const copies = Math.max(1, Math.ceil((stride * slotW) / tileW));
   const tiles: number[] = [];
@@ -46,13 +52,13 @@ export const FrameStripLane = memo(function FrameStripLane({
     <div
       className="relative cursor-pointer overflow-hidden bg-bg-base"
       style={{ height }}
-      onPointerDown={(e) => onSeek(pxToS(view, laneX(e, e.currentTarget)))}
+      onPointerDown={(e) => onSeek(Math.max(0, pxToS(view, laneX(e, e.currentTarget)) - shiftS))}
     >
       {tiles.map((i) => (
         <div
           key={i}
           className="absolute top-0 overflow-hidden border-r border-bg-base"
-          style={{ left: sToPx(view, i * frames.every_s), width: stride * slotW, height }}
+          style={{ left: sToPx(view, i * frames.every_s + shiftS), width: stride * slotW, height }}
         >
           {Array.from({ length: copies }, (_, c) => (
             <div

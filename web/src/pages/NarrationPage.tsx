@@ -4,8 +4,11 @@ import { narratedVideoUrl } from "@/api/narration";
 import { CameraBoxEditor } from "@/components/narration/CameraBoxEditor";
 import { CameraSettings } from "@/components/narration/CameraSettings";
 import { ExportPanel } from "@/components/narration/ExportPanel";
+import { HookChangesBadge } from "@/components/narration/HookChangesBadge";
+import { HookInspector } from "@/components/narration/HookInspector";
 import { MixPanel } from "@/components/narration/MixPanel";
 import { RecordControls } from "@/components/narration/RecordControls";
+import { StoryboardPanel } from "@/components/narration/StoryboardPanel";
 import { SuggestionsPanel } from "@/components/narration/SuggestionsPanel";
 import { TakeInspector } from "@/components/narration/TakeInspector";
 import { Timeline } from "@/components/narration/timeline/Timeline";
@@ -18,15 +21,18 @@ import { PageShell } from "@/components/ui/PageShell";
 import { useAudioContext } from "@/hooks/useAudioContext";
 import { useAudioLevel } from "@/hooks/useAudioLevel";
 import { useFrameStrip } from "@/hooks/useFrameStrip";
+import { useHookPicks } from "@/hooks/useHookPicks";
 import { useJob } from "@/hooks/useJob";
 import { useMediaDevices } from "@/hooks/useMediaDevices";
 import { useMediaStream } from "@/hooks/useMediaStream";
 import { useMixPreview } from "@/hooks/useMixPreview";
 import { useNarrationSession } from "@/hooks/useNarrationSession";
 import { usePeaks } from "@/hooks/usePeaks";
+import { useStoryboard } from "@/hooks/useStoryboard";
 import { useTakeBuffers } from "@/hooks/useTakeBuffers";
 import { useTakeCapture } from "@/hooks/useTakeCapture";
 import { useVideoDuration } from "@/hooks/useVideoDuration";
+import { layout, toClips, type TrackClip } from "@/lib/hookTrack";
 import { clampRegions } from "@/lib/regions";
 import { effectiveStart } from "@/lib/takeEdits";
 import type { TargetRef } from "@/types/narration";
@@ -87,6 +93,28 @@ function NarrationWorkspace({ target }: { target: TargetRef }) {
   // The full mix (game audio + every take, ducked) plays through Web Audio.
   useMixPreview({ video, session: view?.session, buffers, enabled: !capture.recording, audio });
   const [selectedTakeId, setSelectedTakeId] = useState<string | null>(null);
+
+  // The hook track (joined videos whose map has a hook block); one selection
+  // on the timeline: a take or a hook clip.
+  const hookPicks = useHookPicks(target);
+  const hookView = hookPicks.view;
+  const storyboard = useStoryboard(target, !!hookView);
+  const [selectedHookId, setSelectedHookId] = useState<string | null>(null);
+  const [hookNote, setHookNote] = useState<string | null>(null);
+  const hookClips = useMemo(() => (hookView ? toClips(hookView) : []), [hookView]);
+  const hookLay = useMemo(
+    () => (hookView ? layout(hookClips, hookView, hookPicks.extra) : null),
+    [hookClips, hookView, hookPicks.extra],
+  );
+  const selectTake = (takeId: string | null) => {
+    setSelectedTakeId(takeId);
+    if (takeId) setSelectedHookId(null);
+  };
+  const selectHook = (pickId: string | null) => {
+    setSelectedHookId(pickId);
+    if (pickId) setSelectedTakeId(null);
+  };
+  const changeHook = (clips: TrackClip[]) => void hookPicks.setPicks(clips);
   // Regions never reach past the video's end (a shift-relock or a shorter
   // re-render can leave them there): drawn clamped, saved clamped.
   const gameRegions = view?.session.game_regions;
@@ -181,6 +209,7 @@ function NarrationWorkspace({ target }: { target: TargetRef }) {
   const failure = failed.find((m) => m.error)?.error;
   const editError = failure ? (failure as Error).message : null;
   const selectedTake = session.takes.find((t) => t.id === selectedTakeId);
+  const selectedHook = hookLay?.hooks.find((h) => h.clip.id === selectedHookId);
 
   return (
     <PageShell>
@@ -191,6 +220,17 @@ function NarrationWorkspace({ target }: { target: TargetRef }) {
           <>
             <Badge tone="muted">{view.game}</Badge>
             {view.stale && <Badge tone="danger">stale</Badge>}
+            {hookView && (
+              <HookChangesBadge
+                hook={hookView}
+                clips={hookClips}
+                rendered={hookPicks.rendered}
+                storyboard={storyboard.data}
+                takes={session.takes}
+                onChange={changeHook}
+                onDiscard={hookPicks.reset}
+              />
+            )}
             {backLink}
           </>
         }
@@ -215,7 +255,7 @@ function NarrationWorkspace({ target }: { target: TargetRef }) {
             onSeek={seek}
             takes={session.takes}
             selectedTakeId={selectedTakeId}
-            onSelectTake={setSelectedTakeId}
+            onSelectTake={selectTake}
             onTakeEdit={(takeId, edit) => narration.editTake.mutate({ takeId, edit })}
             buffers={buffers}
             waveforms={waveforms}
@@ -227,8 +267,32 @@ function NarrationWorkspace({ target }: { target: TargetRef }) {
             onRegionsChange={(next) =>
               narration.saveGameRegions.mutate(clampRegions(next, durationS))
             }
+            hook={
+              hookView && {
+                hook: hookView,
+                clips: hookClips,
+                extra: hookPicks.extra,
+                storyboard: storyboard.data,
+                selectedId: selectedHookId,
+                onSelect: selectHook,
+                onChange: changeHook,
+                onUndo: hookPicks.undo,
+                onRedo: hookPicks.redo,
+                onNote: setHookNote,
+              }
+            }
           />
           {editError && <p className="font-mono text-xs text-danger">{editError}</p>}
+          {(hookPicks.error || hookNote) && (
+            <p className="flex items-center gap-2 font-mono text-xs text-danger">
+              {hookPicks.error ?? hookNote}
+              {hookPicks.stale && (
+                <Button size="sm" variant="danger" onClick={hookPicks.reset}>
+                  discard
+                </Button>
+              )}
+            </p>
+          )}
         </div>
 
         <aside className="space-y-6 lg:col-span-4">
@@ -256,6 +320,29 @@ function NarrationWorkspace({ target }: { target: TargetRef }) {
             uploading={narration.addTake.isPending}
             uploadError={narration.addTake.error?.message ?? null}
           />
+
+          {hookView && selectedHook && (
+            <HookInspector
+              key={`${selectedHook.clip.id}:${selectedHook.clip.start_s}:${selectedHook.clip.end_s}`}
+              span={selectedHook}
+              total={hookLay?.hooks.length ?? 0}
+              hook={hookView}
+              clips={hookClips}
+              extra={hookPicks.extra}
+              storyboard={storyboard.data}
+              videoKey={target.key}
+              onChange={changeHook}
+              onClose={() => selectHook(null)}
+            />
+          )}
+          {hookView && !selectedHook && !selectedTake && (
+            <StoryboardPanel
+              storyboard={storyboard.data}
+              hook={hookView}
+              clips={hookClips}
+              onApply={hookPicks.setPicks}
+            />
+          )}
 
           {selectedTake && (
             <TakeInspector

@@ -61,3 +61,11 @@ export function relativeTime(iso: string): string {
   if (abs < 86400 * 365) return rtf.format(Math.round(diffSec / (86400 * 30)), "month");
   return rtf.format(Math.round(diffSec / (86400 * 365)), "year");
 }
+
+/** Format seconds as `M:SS.s` (tenths), e.g. the game clock of a hook clip. */
+export function clock(totalSeconds: number): string {
+  const t = Math.max(0, Math.round(totalSeconds * 10) / 10);
+  const m = Math.floor(t / 60);
+  const s = t - m * 60;
+  return `${m}:${s.toFixed(1).padStart(4, "0")}`;
+}

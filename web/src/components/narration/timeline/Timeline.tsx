@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/Button";
 import { usePlayhead } from "@/hooks/usePlayhead";
 import { useVideoClock } from "@/hooks/useVideoClock";
 import { cn } from "@/lib/cn";
+import { layout, trackTimeOf } from "@/lib/hookTrack";
 import { mmss } from "@/lib/time";
 import { clampScroll, fit, sToPx, zoomAround, type Viewport } from "@/lib/timeline";
 import type {
@@ -16,6 +17,8 @@ import type {
 } from "@/types/narration";
 import { FrameStripLane } from "./FrameStripLane";
 import { GameAudioLane } from "./GameAudioLane";
+import { HookLane, type HookTrackProps } from "./HookLane";
+import { HookPreviewLine } from "./HookPreviewLine";
 import { LANE_HEIGHT } from "./lane";
 import { MarkersLane } from "./MarkersLane";
 import { Playhead } from "./Playhead";
@@ -44,15 +47,21 @@ interface TimelineProps {
   regions: GameAudioRegion[];
   mix: AudioMix;
   onRegionsChange: (regions: GameAudioRegion[]) => void;
+
+  /** A joined video with a hook block: the hook lane, and the video after it slides. */
+  hook?: HookTrackProps;
 }
 
-const LANES: { label: string; height: number }[] = [
-  { label: "", height: LANE_HEIGHT.ruler },
-  { label: "frames", height: LANE_HEIGHT.frames },
-  { label: "markers", height: LANE_HEIGHT.markers },
-  { label: "takes", height: LANE_HEIGHT.takes },
-  { label: "game", height: LANE_HEIGHT.game },
-];
+function lanesOf(withHook: boolean): { label: string; height: number }[] {
+  return [
+    { label: "", height: LANE_HEIGHT.ruler },
+    { label: "frames", height: LANE_HEIGHT.frames },
+    ...(withHook ? [{ label: "hook", height: LANE_HEIGHT.hook }] : []),
+    { label: "markers", height: LANE_HEIGHT.markers },
+    { label: "takes", height: LANE_HEIGHT.takes },
+    { label: "game", height: LANE_HEIGHT.game },
+  ];
+}
 const ZOOM_STEP = 1.5;
 /** Ctrl+wheel: zoom factor per pixel of wheel delta. */
 const WHEEL_ZOOM = 0.0015;
@@ -71,7 +80,20 @@ const FOLLOW_AT = 0.9;
  * canvases redraw only when the viewport or their data changes.
  */
 export function Timeline(props: TimelineProps) {
-  const { durationS } = props;
+  const { hook } = props;
+  // The hook lane is in track seconds: the video after the rendered intro
+  // (frames, markers) slides by `shift` = track end - rendered intro.
+  const hookClips = hook?.clips;
+  const hookView = hook?.hook;
+  const hookExtra = hook?.extra;
+  const hookLay = useMemo(
+    () => (hookClips && hookView ? layout(hookClips, hookView, hookExtra) : null),
+    [hookClips, hookView, hookExtra],
+  );
+  const shiftS = hookLay?.shift ?? 0;
+  const introS = hookView?.rendered_intro_s ?? 0;
+  const durationS = props.durationS > 0 ? props.durationS + Math.max(0, shiftS) : 0;
+  const lanes = lanesOf(!!hook);
   const playheadS = usePlayhead(props.video);
   const { playing } = useVideoClock(props.video);
   const areaRef = useRef<HTMLDivElement>(null);
@@ -144,10 +166,20 @@ export function Timeline(props: TimelineProps) {
     setView(zoomAround(view, factor, anchor, durationS));
   }
 
-  const gameMarkers = useMemo(
-    () => props.markers.filter((m) => m.kind === "game"),
-    [props.markers],
+  // With the hook lane, a marker inside the rendered intro is replaced by the
+  // lane; the others slide with the video.
+  const withHook = !!hook;
+  const markers = useMemo(
+    () =>
+      withHook
+        ? props.markers
+            .filter((m) => m.at_s >= introS)
+            .map((m) => ({ ...m, at_s: m.at_s + shiftS }))
+        : props.markers,
+    [props.markers, withHook, introS, shiftS],
   );
+  const gameMarkers = useMemo(() => markers.filter((m) => m.kind === "game"), [markers]);
+  const hookPlayheadS = hookView && hookLay ? trackTimeOf(playheadS, hookLay, hookView) : null;
 
   return (
     <section className="surface-elevated space-y-3 rounded-lg p-4">
@@ -176,10 +208,20 @@ export function Timeline(props: TimelineProps) {
           </Button>
         </div>
       </header>
+      {hookView && hookLay && (
+        <HookPreviewLine
+          lay={hookLay}
+          hook={hookView}
+          extra={hookExtra ?? []}
+          videoS={props.durationS}
+          playheadS={playheadS}
+          trackS={hookPlayheadS}
+        />
+      )}
 
       <div className="flex">
         <div className="w-16 shrink-0 font-mono text-[10px] uppercase tracking-wider text-text-dim">
-          {LANES.map((lane, i) => (
+          {lanes.map((lane, i) => (
             <div key={i} className="flex items-center" style={{ height: lane.height }}>
               {lane.label}
             </div>
@@ -196,8 +238,22 @@ export function Timeline(props: TimelineProps) {
           {view ? (
             <>
               <Ruler view={view} durationS={durationS} onSeek={props.onSeek} />
-              <FrameStripLane view={view} frames={props.frames} onSeek={props.onSeek} />
-              <MarkersLane view={view} markers={props.markers} onSeek={props.onSeek} />
+              <FrameStripLane
+                view={view}
+                frames={props.frames}
+                shiftS={shiftS}
+                onSeek={props.onSeek}
+              />
+              {hook && (
+                <HookLane
+                  {...hook}
+                  view={view}
+                  video={props.video}
+                  disabled={!!props.disabled}
+                  onSeek={props.onSeek}
+                />
+              )}
+              <MarkersLane view={view} markers={markers} shiftS={shiftS} onSeek={props.onSeek} />
               <TakesLane
                 view={view}
                 takes={props.takes}
@@ -229,12 +285,23 @@ export function Timeline(props: TimelineProps) {
                   />
                 );
               })}
+              {hookPlayheadS !== null && Math.abs(hookPlayheadS - playheadS) > 0.05 && (
+                <div
+                  className="pointer-events-none absolute z-20 w-px bg-text-primary opacity-60"
+                  title="the playhead on the hook track"
+                  style={{
+                    left: sToPx(view, hookPlayheadS),
+                    top: LANE_HEIGHT.ruler + LANE_HEIGHT.frames,
+                    height: LANE_HEIGHT.hook,
+                  }}
+                />
+              )}
               <Playhead view={view} atS={playheadS} />
             </>
           ) : (
             <p
               className="flex items-center px-3 font-mono text-xs text-text-dim"
-              style={{ height: LANES.reduce((h, l) => h + l.height, 0) }}
+              style={{ height: lanes.reduce((h, l) => h + l.height, 0) }}
             >
               loading video…
             </p>

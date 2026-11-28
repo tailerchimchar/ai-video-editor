@@ -7,7 +7,9 @@ import { LANE_HEIGHT, laneX } from "./lane";
 
 interface MarkersLaneProps {
   view: Viewport;
+  /** Already placed on the timeline; `shiftS` is how far they slid (a click seeks back by it). */
   markers: Marker[];
+  shiftS?: number;
   onSeek: (s: number) => void;
 }
 
@@ -48,7 +50,12 @@ function groups(markers: Marker[]): Group[] {
  * label is cut where the next one in its row starts (full text in the
  * tooltip). Click a marker or the lane = seek.
  */
-export const MarkersLane = memo(function MarkersLane({ view, markers, onSeek }: MarkersLaneProps) {
+export const MarkersLane = memo(function MarkersLane({
+  view,
+  markers,
+  shiftS = 0,
+  onSeek,
+}: MarkersLaneProps) {
   const rows = useMemo(
     () => [
       groups(markers.filter((m) => m.kind !== "cue")),
@@ -62,7 +69,7 @@ export const MarkersLane = memo(function MarkersLane({ view, markers, onSeek }: 
     <div
       className="relative cursor-pointer overflow-hidden border-b border-border"
       style={{ height: LANE_HEIGHT.markers }}
-      onPointerDown={(e) => onSeek(pxToS(view, laneX(e, e.currentTarget)))}
+      onPointerDown={(e) => onSeek(Math.max(0, pxToS(view, laneX(e, e.currentTarget)) - shiftS))}
     >
       {rows.map((row, r) =>
         row.map((g, i) => {
@@ -74,7 +81,7 @@ export const MarkersLane = memo(function MarkersLane({ view, markers, onSeek }: 
             <button
               key={`${r}-${g.atS}`}
               type="button"
-              title={`${mmss(g.atS)} · ${g.labels.join(" · ")}`}
+              title={`${mmss(g.atS - shiftS)} · ${g.labels.join(" · ")}`}
               className={cn(
                 "absolute truncate border-l pl-1 text-left font-mono text-[10px] hover:text-text-primary",
                 KIND_STYLE[g.kind],
@@ -88,7 +95,7 @@ export const MarkersLane = memo(function MarkersLane({ view, markers, onSeek }: 
               }}
               onPointerDown={(e) => {
                 e.stopPropagation();
-                onSeek(g.atS);
+                onSeek(g.atS - shiftS);
               }}
             >
               {g.labels.join(" · ")}
