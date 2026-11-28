@@ -4,28 +4,38 @@ import { narratedVideoUrl, takeMediaUrl } from "@/api/narration";
 import { CameraBoxEditor } from "@/components/narration/CameraBoxEditor";
 import { CameraSettings } from "@/components/narration/CameraSettings";
 import { ExportPanel } from "@/components/narration/ExportPanel";
+import { MixPanel } from "@/components/narration/MixPanel";
 import { RecordControls } from "@/components/narration/RecordControls";
 import { SuggestionsPanel } from "@/components/narration/SuggestionsPanel";
-import { TakeTimeline } from "@/components/narration/TakeTimeline";
+import { TakeInspector } from "@/components/narration/TakeInspector";
+import { Timeline } from "@/components/narration/timeline/Timeline";
 import { VideoPlayer } from "@/components/VideoPlayer";
 import { VideoSwitcher } from "@/components/VideoSwitcher";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { PageShell } from "@/components/ui/PageShell";
+import { useAudioContext } from "@/hooks/useAudioContext";
 import { useAudioLevel } from "@/hooks/useAudioLevel";
+import { useFrameStrip } from "@/hooks/useFrameStrip";
 import { useJob } from "@/hooks/useJob";
 import { useMediaDevices } from "@/hooks/useMediaDevices";
 import { useMediaStream } from "@/hooks/useMediaStream";
 import { useNarrationSession } from "@/hooks/useNarrationSession";
+import { usePeaks } from "@/hooks/usePeaks";
+import { useTakeBuffers } from "@/hooks/useTakeBuffers";
 import { useTakeCapture } from "@/hooks/useTakeCapture";
 import { useTakePlayback } from "@/hooks/useTakePlayback";
-import { useVideoClock } from "@/hooks/useVideoClock";
+import { useVideoDuration } from "@/hooks/useVideoDuration";
+import { clampRegions } from "@/lib/regions";
+import { effectiveStart } from "@/lib/takeEdits";
 import type { TargetRef } from "@/types/narration";
 
 /**
  * `/narrate/:kind/:key` — record voice (and optionally camera) takes over
- * a finished video, place the camera box, export `narrated.mp4`.
+ * a finished video, edit them on the timeline (trim, nudge, split, mute,
+ * gain), shape the game audio (regions, mix), place the camera box, export
+ * `narrated.mp4`.
  *
  * Nothing here knows about a game or a kind: the target comes from the
  * route, the video URL and camera layout from the API.
@@ -60,13 +70,32 @@ function NarrationWorkspace({ target }: { target: TargetRef }) {
 
   // Video + takes
   const [video, setVideo] = useState<HTMLVideoElement | null>(null);
-  const clock = useVideoClock(video);
+  // Only the length: the playhead is read inside the timeline and the take
+  // panel, so this page does not re-render while the video plays.
+  const durationS = useVideoDuration(video);
   const capture = useTakeCapture({
     video,
     stream: media.stream,
     onTake: (take) => narration.addTake.mutate(take),
   });
   const playTake = useTakePlayback(video);
+
+  // Timeline data: frames + game peaks from the API, take waveforms decoded here.
+  const frames = useFrameStrip(target);
+  const peaks = usePeaks(target);
+  const audio = useAudioContext();
+  const { buffers, waveforms } = useTakeBuffers(view, audio.ctx);
+  const [selectedTakeId, setSelectedTakeId] = useState<string | null>(null);
+  // Regions never reach past the video's end (a shift-relock or a shorter
+  // re-render can leave them there): drawn clamped, saved clamped.
+  const gameRegions = view?.session.game_regions;
+  const regions = useMemo(
+    () => clampRegions(gameRegions ?? [], durationS),
+    [gameRegions, durationS],
+  );
+  const seek = (s: number) => {
+    if (video) video.currentTime = s;
+  };
 
   // Record = arm the devices, start the take once the stream is live; the
   // devices are released when the take ends (or permission is refused).
@@ -141,6 +170,7 @@ function NarrationWorkspace({ target }: { target: TargetRef }) {
 
   const { session } = view;
   const busy = capture.recording;
+  const selectedTake = session.takes.find((t) => t.id === selectedTakeId);
 
   return (
     <PageShell>
@@ -168,19 +198,29 @@ function NarrationWorkspace({ target }: { target: TargetRef }) {
             />
           </div>
 
-          <TakeTimeline
-            takes={session.takes}
-            durationS={clock.duration}
-            currentTimeS={clock.currentTime}
+          <Timeline
+            durationS={durationS}
+            video={video}
             disabled={busy}
-            deletingId={
-              narration.removeTake.isPending ? (narration.removeTake.variables ?? null) : null
-            }
-            onPlay={(take) => playTake(take.start_s, takeMediaUrl(view, take))}
-            onDelete={(takeId) => narration.removeTake.mutate(takeId)}
-            onSeek={(s) => {
-              if (video) video.currentTime = s;
+            onSeek={seek}
+            takes={session.takes}
+            selectedTakeId={selectedTakeId}
+            onSelectTake={setSelectedTakeId}
+            onPlayTake={(take) => {
+              audio.ensure();
+              playTake(effectiveStart(take), takeMediaUrl(view, take));
             }}
+            onTakeEdit={(takeId, edit) => narration.editTake.mutate({ takeId, edit })}
+            buffers={buffers}
+            waveforms={waveforms}
+            frames={frames.data}
+            peaks={peaks.data}
+            markers={view.markers}
+            regions={regions}
+            mix={session.mix}
+            onRegionsChange={(next) =>
+              narration.saveGameRegions.mutate(clampRegions(next, durationS))
+            }
           />
         </div>
 
@@ -189,7 +229,10 @@ function NarrationWorkspace({ target }: { target: TargetRef }) {
             recording={capture.recording}
             starting={armed && !capture.recording}
             canRecord={!!video && !armed}
-            onRecord={() => setArmed(true)}
+            onRecord={() => {
+              audio.ensure();
+              setArmed(true);
+            }}
             checkingMic={checkingMic}
             onCheckMic={setCheckingMic}
             onStop={capture.stop}
@@ -207,6 +250,20 @@ function NarrationWorkspace({ target }: { target: TargetRef }) {
             uploadError={narration.addTake.error?.message ?? null}
           />
 
+          {selectedTake && (
+            <TakeInspector
+              key={selectedTake.id}
+              take={selectedTake}
+              video={video}
+              busy={busy || narration.splitTake.isPending || narration.removeTake.isPending}
+              onEdit={(edit) => narration.editTake.mutate({ takeId: selectedTake.id, edit })}
+              onSplit={(atS) => narration.splitTake.mutate({ takeId: selectedTake.id, atS })}
+              onDelete={() => narration.removeTake.mutate(selectedTake.id)}
+            />
+          )}
+
+          <MixPanel mix={session.mix} onSave={(mix) => narration.saveMix.mutate(mix)} />
+
           <section className="surface-elevated space-y-3 rounded-lg p-4">
             <h2 className="font-mono text-xs uppercase tracking-wider text-text-muted">
               camera box
@@ -221,17 +278,14 @@ function NarrationWorkspace({ target }: { target: TargetRef }) {
             />
           </section>
 
-          <SuggestionsPanel
-            target={target}
-            onSeek={(s) => {
-              if (video) video.currentTime = s;
-            }}
-          />
+          <SuggestionsPanel target={target} onSeek={seek} />
 
           <ExportPanel
             stale={view.stale}
             takeCount={session.takes.length}
             onRelock={() => narration.relockTakes.mutate(0)}
+            suggestedShiftS={view.suggested_shift_s}
+            onShiftRelock={(s) => narration.relockTakes.mutate(s)}
             onDeleteAllTakes={() => narration.removeAllTakes.mutate(session.takes.map((t) => t.id))}
             resolvingStale={narration.relockTakes.isPending || narration.removeAllTakes.isPending}
             onExport={() =>

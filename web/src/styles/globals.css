@@ -1,10 +1,13 @@
+/*
+ * Tokens first — Tailwind layers reference them via var(). `@import` must
+ * come before every other statement, or the browser drops it.
+ */
+@import "./tokens.css";
+@import "./fonts.css";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-
-/* Tokens first — Tailwind layers reference them via var(). */
-@import "./tokens.css";
-@import "./fonts.css";
 
 /*
  * Base resets.

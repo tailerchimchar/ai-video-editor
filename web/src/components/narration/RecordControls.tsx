@@ -115,6 +115,10 @@ export function RecordControls(props: RecordControlsProps) {
       )}
 
       <p className="font-mono text-xs text-text-dim">
+        Record-over replaces what it covers: a new take trims or splits the takes under it.
+      </p>
+
+      <p className="font-mono text-xs text-text-dim">
         Use headphones: the video's sound plays while you record, and speakers would bleed into your
         mic.
       </p>

@@ -5,6 +5,10 @@ interface ExportPanelProps {
   stale: boolean;
   takeCount: number;
   onRelock: () => void;
+  /** How much longer the video got before the games since recording (`SessionView.suggested_shift_s`). */
+  suggestedShiftS: number | null;
+  /** Shift every take, region and camera region by `s`, then relock. */
+  onShiftRelock: (s: number) => void;
   onDeleteAllTakes: () => void;
   /** Relock or delete-all in flight. */
   resolvingStale: boolean;
@@ -19,11 +23,12 @@ interface ExportPanelProps {
 }
 
 /**
- * Stale warning (Relock / Delete takes), the Export button, the export
+ * Stale warning (shift and relock / relock / delete takes), the Export button, the export
  * job's status and the link to the result.
  */
 export function ExportPanel(props: ExportPanelProps) {
   const { stale, takeCount, job } = props;
+  const shift = props.suggestedShiftS;
   const running = job?.status === "pending" || job?.status === "running";
   const canExport = !stale && takeCount > 0 && !props.starting && !running;
 
@@ -37,10 +42,28 @@ export function ExportPanel(props: ExportPanelProps) {
             The video changed after these takes were recorded, so they may no longer line up. Keep
             them as they are, or delete them and record again.
           </p>
+          {shift !== null && (
+            <div className="space-y-2 border-t border-danger pt-3">
+              <p>
+                The video got {Math.abs(shift).toFixed(1)} s {shift > 0 ? "longer" : "shorter"}{" "}
+                before the games (a new hook?). Shifting the takes by that much puts them back where
+                they were.
+              </p>
+              <Button
+                size="sm"
+                variant="primary"
+                disabled={props.resolvingStale}
+                onClick={() => props.onShiftRelock(shift)}
+              >
+                shift takes by {shift > 0 ? "+" : "−"}
+                {Math.abs(shift).toFixed(1)} s and relock
+              </Button>
+            </div>
+          )}
           <div className="flex gap-2">
             <Button
               size="sm"
-              variant="primary"
+              variant={shift === null ? "primary" : "ghost"}
               disabled={props.resolvingStale}
               onClick={props.onRelock}
             >

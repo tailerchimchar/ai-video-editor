@@ -44,6 +44,27 @@ describe("takeEdits", () => {
     expect(trimTail(t, 5).duration_s).toBe(5);
     expect(trimTail(t, 50, 12).duration_s).toBe(10);
   });
+  it("trimHead earlier brings back trimmed audio, never before the media start or 0:00", () => {
+    const t = take("a", 10, 5, { media_in_s: 2 });
+    const back = trimHead(t, 9);
+    expect(back.start_s).toBe(9);
+    expect(back.media_in_s).toBe(1);
+    expect(back.duration_s).toBe(6);
+    expect(trimHead(t, 0).media_in_s).toBe(0);
+    expect(trimHead(t, 0).start_s).toBe(8);
+    const nearZero = trimHead(take("b", 1, 5, { media_in_s: 4 }), -5);
+    expect(nearZero.start_s).toBe(0);
+    expect(nearZero.media_in_s).toBe(3);
+    const nudgedLater = trimHead(take("c", 1, 5, { media_in_s: 4, offset_s: 2 }), 0);
+    expect(nudgedLater.start_s).toBe(0);
+    expect(nudgedLater.media_in_s).toBe(3);
+  });
+  it("trimTail grows back only up to the media end, and only when it is known", () => {
+    const t = take("a", 0, 4, { media_in_s: 2 });
+    expect(trimTail(t, 9, 10).duration_s).toBe(8);
+    expect(trimTail(t, 6, 10).duration_s).toBe(6);
+    expect(trimTail(t, 9).duration_s).toBe(4);
+  });
   it("splitAt", () => {
     const [a, b] = splitAt(take("a", 0, 10, { media_in_s: 1 }), 4, () => "b");
     expect(a.duration_s).toBe(4);

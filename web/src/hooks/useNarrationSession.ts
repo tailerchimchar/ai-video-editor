@@ -18,6 +18,7 @@ import type {
   CameraBox,
   CameraRegion,
   GameAudioRegion,
+  NarrationSession,
   SessionView,
   TakeEdit,
   TargetRef,
@@ -67,29 +68,30 @@ export function useNarrationSession(target: TargetRef) {
     onSuccess: setView,
   });
 
+  /**
+   * Show `patch(session)` in the cache at once; returns the previous view so
+   * `rollback` can restore it if the server refuses the change.
+   */
+  const optimistic = async (patch: (s: NarrationSession) => NarrationSession) => {
+    await qc.cancelQueries({ queryKey, exact: true });
+    const previous = qc.getQueryData<SessionView>(queryKey);
+    if (previous) setView({ ...previous, session: patch(previous.session) });
+    return { previous };
+  };
+  const rollback = (_err: unknown, _vars: unknown, context?: { previous?: SessionView }) => {
+    if (context?.previous) qc.setQueryData(queryKey, context.previous);
+  };
+
   /** Optimistic: the edit shows immediately; rolled back if the server refuses it. */
   const editTake = useMutation({
     mutationFn: ({ takeId, edit }: { takeId: string; edit: TakeEdit }) =>
       patchTake(target, takeId, edit),
-    onMutate: async ({ takeId, edit }) => {
-      await qc.cancelQueries({ queryKey, exact: true });
-      const previous = qc.getQueryData<SessionView>(queryKey);
-      if (previous) {
-        setView({
-          ...previous,
-          session: {
-            ...previous.session,
-            takes: previous.session.takes.map((t) =>
-              t.id === takeId ? applyTakeEdit(t, edit) : t,
-            ),
-          },
-        });
-      }
-      return { previous };
-    },
-    onError: (_err, _vars, context) => {
-      if (context?.previous) qc.setQueryData(queryKey, context.previous);
-    },
+    onMutate: ({ takeId, edit }) =>
+      optimistic((s) => ({
+        ...s,
+        takes: s.takes.map((t) => (t.id === takeId ? applyTakeEdit(t, edit) : t)),
+      })),
+    onError: rollback,
     onSuccess: setView,
   });
 
@@ -104,8 +106,11 @@ export function useNarrationSession(target: TargetRef) {
     onSuccess: setView,
   });
 
+  /** Optimistic, like `editTake`: a drawn region stays put while it saves. */
   const saveGameRegions = useMutation({
     mutationFn: (regions: GameAudioRegion[]) => putGameRegions(target, regions),
+    onMutate: (regions) => optimistic((s) => ({ ...s, game_regions: regions })),
+    onError: rollback,
     onSuccess: setView,
   });
 

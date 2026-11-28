@@ -55,6 +55,8 @@ Defined as CSS variables in `src/styles/tokens.css`:
   /* Status */
   --danger:  #ef4444;
   --success: #22c55e;
+  --warn:    #f59e0b;          /* game-audio level regions (narration timeline) */
+  --warn-glow: rgba(245, 158, 11, 0.16);
 }
 ```
 
